@@ -20,4 +20,4 @@ class DeepDiveNode(PipelineNode):
             except Exception as e:
                 print(f"[深潜] 深潜失败: {e}")
                 pass
-        return NodeResult(next="style_review", context=ctx)
+        return NodeResult(next="format_check", context=ctx)

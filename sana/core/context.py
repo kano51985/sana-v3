@@ -18,5 +18,10 @@ class Context:
     tool_triggered: bool = False
     tool_target_batch: str = ""
     chat_buffer: list = field(default_factory=list)
+    behavioral_insight: dict = field(default_factory=dict)
+    persona_layer: str = ""
+    persona_directive: str = ""
+    emotional_directive: str = ""
+    emotional_trajectory: list = field(default_factory=list)
     consolidation_pending: bool = False
     working_memory: list = field(default_factory=list)

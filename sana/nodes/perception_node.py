@@ -14,4 +14,4 @@ class PerceptionNode(PipelineNode):
             if len(recent) >= 5:
                 break
         ctx.perception_data = self.perception.analyze(ctx.user_input, recent)
-        return NodeResult(next="alma", context=ctx)
+        return NodeResult(next="behavioral_reasoner", context=ctx)

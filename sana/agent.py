@@ -22,6 +22,11 @@ from sana.nodes.deep_dive_node import DeepDiveNode
 from sana.nodes.response_parser_node import ResponseParserNode
 from sana.nodes.memory_update_node import MemoryUpdateNode
 from sana.nodes.consolidation_node import ConsolidationNode
+from sana.nodes.format_check_node import FormatCheckerNode
+from sana.nodes.directive_node import DirectiveNode
+from sana.services.emotional_directive import EmotionalDirective
+from sana.services.behavioral_reasoner import BehavioralReasoner
+from sana.nodes.behavioral_reasoner_node import BehavioralReasonerNode
 import json, os, sys
 
 class SanaAgent:
@@ -31,6 +36,8 @@ class SanaAgent:
 
         # Services
         self.alma = ALMAEngine()
+        self.directive = EmotionalDirective()
+        self.reasoner = BehavioralReasoner()
         self.perception = PerceptionLayer()
         self.memory = MemoryManager()
         self.raw_db = RawMemoryDB()
@@ -46,7 +53,10 @@ class SanaAgent:
             PipelineEngine()
             .register("input", InputNode())
             .register("perception", PerceptionNode(self.perception))
+            .register("behavioral_reasoner", BehavioralReasonerNode(self.reasoner, alma=self.alma))
             .register("alma", ALMANode(self.alma))
+            .register("directive", DirectiveNode(self.alma, self.directive))
+            .register("style_review", StyleReviewNode())
             .register("memory_recall", MemoryRecallNode(self.memory))
             .register("profile_load", ProfileLoadNode(self.profile_mgr))
             .register("working_memory", WorkingMemoryNode(self.working_memory))
@@ -54,8 +64,8 @@ class SanaAgent:
             .register("llm_call", LLMCallNode())
             .register("tool_intercept", ToolInterceptNode(self.raw_db))
             .register("deep_dive", DeepDiveNode())
-            .register("style_review", StyleReviewNode())
-            .register("compliance_review", ComplianceReviewNode(self.alma))
+            .register("format_check", FormatCheckerNode())
+            .register("compliance_review", ComplianceReviewNode())
             .register("response_parser", ResponseParserNode())
             .register("memory_update", MemoryUpdateNode(self.working_memory, self.chat_buffer))
             .register("consolidation", ConsolidationNode(
