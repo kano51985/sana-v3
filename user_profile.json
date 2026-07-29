@@ -1,0 +1,28 @@
+{
+  "name": "白日",
+  "gaming_preferences": {},
+  "general_preferences": {},
+  "model_config": {
+    "perception": {
+      "backend_name": "deepseek",
+      "model_id": "deepseek-v4-flash",
+      "params": {
+        "temperature": 0.1
+      }
+    },
+    "chat": {
+      "backend_name": "deepseek",
+      "model_id": "deepseek-v4-flash",
+      "params": {
+        "temperature": 0.8
+      }
+    },
+    "summarize": {
+      "backend_name": "deepseek",
+      "model_id": "deepseek-v4-flash",
+      "params": {
+        "temperature": 0.3
+      }
+    }
+  }
+}

@@ -216,3 +216,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project specific
+sana_memory_db/
+sana_memory_db/**/*
+chroma.sqlite3
+
+# Temp test scripts
+_fix_*.py
+_run_tests.py
+
+# Test artifacts
+test_write.txt
