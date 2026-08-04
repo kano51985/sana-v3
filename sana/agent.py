@@ -15,6 +15,7 @@ from sana.nodes.profile_load_node import ProfileLoadNode
 from sana.nodes.working_memory_node import WorkingMemoryNode
 from sana.nodes.prompt_builder_node import PromptBuilderNode
 from sana.nodes.style_review_node import StyleReviewNode
+from sana.nodes.persona_selection_node import PersonaSelectionNode
 from sana.nodes.compliance_review_node import ComplianceReviewNode
 from sana.nodes.llm_call_node import LLMCallNode
 from sana.nodes.tool_intercept_node import ToolInterceptNode
@@ -56,7 +57,7 @@ class SanaAgent:
             .register("behavioral_reasoner", BehavioralReasonerNode(self.reasoner, alma=self.alma))
             .register("alma", ALMANode(self.alma))
             .register("directive", DirectiveNode(self.alma, self.directive))
-            .register("style_review", StyleReviewNode())
+            .register("persona_selection", PersonaSelectionNode())
             .register("memory_recall", MemoryRecallNode(self.memory))
             .register("profile_load", ProfileLoadNode(self.profile_mgr))
             .register("working_memory", WorkingMemoryNode(self.working_memory))
@@ -65,6 +66,7 @@ class SanaAgent:
             .register("tool_intercept", ToolInterceptNode(self.raw_db))
             .register("deep_dive", DeepDiveNode())
             .register("format_check", FormatCheckerNode())
+            .register("style_review", StyleReviewNode())
             .register("compliance_review", ComplianceReviewNode())
             .register("response_parser", ResponseParserNode())
             .register("memory_update", MemoryUpdateNode(self.working_memory, self.chat_buffer))

@@ -15,4 +15,4 @@ class ToolInterceptNode(PipelineNode):
             ctx.tool_target_batch = m.group(1)
             return NodeResult(next="deep_dive", context=ctx)
         print(f"[工具拦截] 未检测到工具调用")
-        return NodeResult(next="style_review", context=ctx)
+        return NodeResult(next="format_check", context=ctx)

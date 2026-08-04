@@ -10,9 +10,28 @@ class ResponseParserNode(PipelineNode):
             ctx.thinking = ""
             print("[Parser] Empty response")
             return NodeResult(next="memory_update", context=ctx)
-        tm = re.findall(r"<thinking>(.*?)</thinking>", raw, re.DOTALL)
-        cm = re.findall(r"<chat>(.*?)</chat>", raw, re.DOTALL)
+        tm = self._extract_tag(raw, "thinking")
+        cm = self._extract_tag(raw, "chat")
         ctx.thinking = "\n".join(t.strip() for t in tm) if tm else ""
-        ctx.chat = " ".join(c.strip() for c in cm) if cm else raw.split("\n")[-1].strip()
+        chat_parts = [self._clean_tag_fragment(c.strip()) for c in cm if c.strip()]
+        ctx.chat = " ".join(chat_parts) if chat_parts else self._fallback_chat(raw)
         print(f"[Parser] chat={ctx.chat[:60]}...")
         return NodeResult(next="memory_update", context=ctx)
+
+    @staticmethod
+    def _extract_tag(raw: str, tag: str):
+        if tag == "chat":
+            pattern = r"<chat>(.*?)(?:</chat>|</thinking>|\Z)"
+        else:
+            pattern = r"<thinking>(.*?)</thinking>"
+        return re.findall(pattern, raw, re.DOTALL | re.IGNORECASE)
+
+    @staticmethod
+    def _clean_tag_fragment(text: str):
+        return re.sub(r"</?(?:thinking|chat)>\s*$", "", text, flags=re.IGNORECASE).strip()
+
+    @staticmethod
+    def _fallback_chat(raw: str):
+        cleaned = re.sub(r"</?(?:thinking|chat)>", "", raw, flags=re.IGNORECASE)
+        lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+        return lines[-1] if lines else ""

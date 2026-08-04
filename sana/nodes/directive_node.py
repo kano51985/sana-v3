@@ -27,4 +27,4 @@ class DirectiveNode(PipelineNode):
         # Log generated directive (first line only)
         summary = ctx.emotional_directive.split(chr(10))[0][:60] if ctx.emotional_directive else "(empty)"
         print(f"[指令] {self.alma.current_transient_emotion} {summary}")
-        return NodeResult(next="style_review", context=ctx)
+        return NodeResult(next="persona_selection", context=ctx)

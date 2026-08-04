@@ -222,6 +222,10 @@ sana_memory_db/
 sana_memory_db/**/*
 chroma.sqlite3
 
+# Local docs and tests
+docs/
+tests/
+
 # Temp test scripts
 _fix_*.py
 _run_tests.py
