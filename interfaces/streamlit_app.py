@@ -191,6 +191,20 @@ for msg in st.session_state.messages:
             with st.expander("Sana 内心 OS"):
                 st.text(msg["thinking"])
 
+with st.container(horizontal=True):
+    if st.button("手动聚合记忆", icon=":material/database:"):
+        with st.spinner("正在聚合当前对话..."):
+            result = agent.consolidate_memory()
+        if result.get("code") == "empty":
+            st.info(result.get("message", "当前没有待聚合的对话"))
+        elif result.get("ok"):
+            if result.get("event_count") or result.get("update_count"):
+                st.success(f"{result.get('message', '聚合完成')}：归档 {result.get('event_count', 0)} 条记忆、{result.get('update_count', 0)} 条档案更新")
+            else:
+                st.success(f"{result.get('message', '聚合完成')}，本轮没有提取到新记忆")
+        else:
+            st.error(f"{result.get('message', '聚合失败')}，缓存未清空，可重试")
+
 if inp := st.chat_input("有什么想和sana分享的？"):
     st.session_state.messages.append({"role": "user", "content": inp})
     with st.chat_message("user", avatar=_USER_AVATAR):

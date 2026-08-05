@@ -14,9 +14,7 @@ from sana.nodes.memory_recall_node import MemoryRecallNode
 from sana.nodes.profile_load_node import ProfileLoadNode
 from sana.nodes.working_memory_node import WorkingMemoryNode
 from sana.nodes.prompt_builder_node import PromptBuilderNode
-from sana.nodes.style_review_node import StyleReviewNode
 from sana.nodes.persona_selection_node import PersonaSelectionNode
-from sana.nodes.compliance_review_node import ComplianceReviewNode
 from sana.nodes.llm_call_node import LLMCallNode
 from sana.nodes.tool_intercept_node import ToolInterceptNode
 from sana.nodes.deep_dive_node import DeepDiveNode
@@ -44,6 +42,10 @@ class SanaAgent:
         self.raw_db = RawMemoryDB()
         self.summarizer = MemorySummarizer()
         self.profile_mgr = ProfileManager()
+        self.consolidation_node = ConsolidationNode(
+            self.summarizer, self.raw_db, self.memory, self.profile_mgr
+        )
+        self._consolidating = False
 
         # Session state
         self.working_memory: list[dict] = []
@@ -66,12 +68,9 @@ class SanaAgent:
             .register("tool_intercept", ToolInterceptNode(self.raw_db))
             .register("deep_dive", DeepDiveNode())
             .register("format_check", FormatCheckerNode())
-            .register("style_review", StyleReviewNode())
-            .register("compliance_review", ComplianceReviewNode())
             .register("response_parser", ResponseParserNode())
             .register("memory_update", MemoryUpdateNode(self.working_memory, self.chat_buffer))
-            .register("consolidation", ConsolidationNode(
-                self.summarizer, self.raw_db, self.memory, self.profile_mgr))
+            .register("consolidation", self.consolidation_node)
             .start_at("input")
         )
 
@@ -102,4 +101,30 @@ class SanaAgent:
             "chat": result.context.chat if result.context else "Error",
             "thinking": result.context.thinking if result.context else "",
             "perception": result.context.perception_data if result.context else {},
+        }
+
+    def consolidate_memory(self) -> dict:
+        if self._consolidating:
+            return self._manual_result("busy", "已有聚合任务正在进行", error="busy")
+        if not self.chat_buffer:
+            return self._manual_result("empty", "当前没有待聚合的对话")
+
+        self._consolidating = True
+        try:
+            return self.consolidation_node.consolidate(self.chat_buffer, force=True)
+        except Exception as e:
+            return self._manual_result("error", f"聚合失败: {e}", error=str(e))
+        finally:
+            self._consolidating = False
+
+    def _manual_result(self, code, message, error=None):
+        return {
+            "ok": code == "empty",
+            "code": code,
+            "message": message,
+            "batch_id": None,
+            "event_count": 0,
+            "update_count": 0,
+            "cleared": False,
+            "error": error,
         }

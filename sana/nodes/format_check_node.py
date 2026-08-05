@@ -13,15 +13,15 @@ class FormatCheckerNode(PipelineNode):
     def process(self, ctx: Context) -> NodeResult:
         raw = ctx.llm_raw_response or ""
         if not raw.strip():
-            return NodeResult(next="compliance_review", context=ctx)
+            return NodeResult(next="response_parser", context=ctx)
         if not self._should_check_format(ctx):
-            return NodeResult(next="compliance_review", context=ctx)
+            return NodeResult(next="response_parser", context=ctx)
         has_thinking = bool(re.search(r"<thinking>", raw, re.IGNORECASE))
         has_chat = bool(re.search(r"<chat>", raw, re.IGNORECASE))
         if not has_thinking or not has_chat:
             missing = "thinking" if not has_thinking else "chat"
             return self._reject(ctx, f"回复缺少 <{missing}> 标签，请补充完整")
-        return NodeResult(next="compliance_review", context=ctx)
+        return NodeResult(next="response_parser", context=ctx)
 
     def _should_check_format(self, ctx):
         if not ctx.emotional_trajectory:
@@ -41,7 +41,7 @@ class FormatCheckerNode(PipelineNode):
         if ctx.review_retry_count >= self.MAX_RETRIES:
             print(f"[格式校验] 重试已达上限({self.MAX_RETRIES})，自动补全标签")
             ctx.llm_raw_response = self._auto_repair(ctx.llm_raw_response or "")
-            return NodeResult(next="compliance_review", context=ctx)
+            return NodeResult(next="response_parser", context=ctx)
         ctx.review_retry_count += 1
         ctx.review_feedback = feedback
         ctx.augmented_input += "\n\n[Format Check]: " + feedback

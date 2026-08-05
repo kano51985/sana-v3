@@ -15,9 +15,11 @@ class ProfileManager:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
     def apply_batch_updates(self, updates):
-        if not updates: return
+        if not updates:
+            return 0
         prof = self.load_profile()
         changed = False
+        applied = 0
         for u in updates:
             act = u.get('action', '')
             cat = u.get('category', 'general_preferences')
@@ -25,10 +27,13 @@ class ProfileManager:
             val = u.get('value', '')
             if cat not in prof or not isinstance(prof[cat], dict):
                 prof[cat] = {}
-            if act in ['update', 'add']:
+            if key and act in ['update', 'add']:
                 prof[cat][key] = val; changed = True
-            elif act == 'delete':
+                applied += 1
+            elif key and act == 'delete':
                 if key in prof[cat]:
                     del prof[cat][key]; changed = True
+                    applied += 1
         if changed:
             self.save_profile(prof)
+        return applied
