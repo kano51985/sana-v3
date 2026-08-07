@@ -1,5 +1,5 @@
 import streamlit as st
-import time, logging, io, contextlib
+import html, time, logging, io, contextlib
 import json
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -13,6 +13,22 @@ _SANA_AVATAR = os.path.join(_ASSETS_DIR, "sana_avatar.png")
 
 st.set_page_config(page_title="Sana Control Panel", layout="wide")
 st.title("Sana 情感控制台")
+st.markdown(
+    """
+    <style>
+    .sana-segment {
+        opacity: 0;
+        animation: sanaFadeIn 0.35s ease forwards;
+        white-space: pre-wrap;
+    }
+    @keyframes sanaFadeIn {
+        from { opacity: 0; transform: translateY(3px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 if "agent" not in st.session_state:
     st.session_state.agent = SanaAgent()
@@ -39,6 +55,52 @@ if not st.session_state.get("_log_added"):
 
 def norm(v):
     return max(0.0, min(1.0, (v + 1.0) / 2.0))
+
+
+def _segments_for(msg):
+    segments = msg.get("segments")
+    if segments:
+        return [seg for seg in segments if seg.get("text")]
+    content = msg.get("content", "")
+    return [{"text": content, "delay": 0.0}] if content else []
+
+
+def _render_history():
+    for msg in st.session_state.messages:
+        if msg["role"] == "user":
+            with st.chat_message("user", avatar=_USER_AVATAR):
+                st.markdown(msg["content"].replace("~~", ""))
+            continue
+        for seg in _segments_for(msg):
+            with st.chat_message("assistant", avatar=_SANA_AVATAR):
+                st.markdown(seg["text"].replace("~~", ""))
+        if msg.get("thinking"):
+            with st.expander("Sana 内心 OS"):
+                st.text(msg["thinking"])
+
+
+def _render_live_assistant(segments, thinking=""):
+    for seg in segments:
+        text = seg.get("text", "")
+        if not text:
+            continue
+        try:
+            delay = max(0.0, float(seg.get("delay") or 0.0))
+        except (TypeError, ValueError):
+            delay = 0.0
+        if delay:
+            time.sleep(delay)
+        placeholder = st.empty()
+        with placeholder.container():
+            with st.chat_message("assistant", avatar=_SANA_AVATAR):
+                st.markdown(
+                    f'<div class="sana-segment">{html.escape(text.replace("~~", ""))}</div>',
+                    unsafe_allow_html=True,
+                )
+    if thinking:
+        with st.expander("Sana 内心 OS"):
+            st.text(thinking)
+
 
 with st.sidebar:
     st.header("白日的控制台")
@@ -184,12 +246,7 @@ with st.sidebar:
     if st.button("清空日志"):
         st.session_state.console_logs = []
 
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"], avatar=_SANA_AVATAR if msg["role"] == "assistant" else _USER_AVATAR):
-         st.markdown(msg["content"].replace("~~", ""))
-         if "thinking" in msg:
-            with st.expander("Sana 内心 OS"):
-                st.text(msg["thinking"])
+_render_history()
 
 with st.container(horizontal=True):
     if st.button("手动聚合记忆", icon=":material/database:"):
@@ -209,21 +266,21 @@ if inp := st.chat_input("有什么想和sana分享的？"):
     st.session_state.messages.append({"role": "user", "content": inp})
     with st.chat_message("user", avatar=_USER_AVATAR):
         st.markdown(inp)
-    with st.chat_message("assistant", avatar=_SANA_AVATAR):
-        with st.spinner("Thinking..."):
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                reply = agent.chat(inp)
-            if buf.getvalue():
-                st.session_state.console_logs.append(buf.getvalue())
-            _chat = reply.get("chat", "")
-            st.markdown(_chat.replace("~~", ""))
-            if reply.get("thinking"):
-                with st.expander("Sana 内心 OS"):
-                    st.text(reply["thinking"])
+    with st.spinner("Thinking..."):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            reply = agent.chat(inp)
+        if buf.getvalue():
+            st.session_state.console_logs.append(buf.getvalue())
+    _chat = reply.get("chat", "")
+    segments = reply.get("segments")
+    if not segments:
+        segments = [{"text": _chat or "[Empty response]", "delay": 0.0}]
     st.session_state.messages.append({
         "role": "assistant",
-        "content": reply.get("chat", ""),
-        "thinking": reply.get("thinking", "")
+        "content": _chat,
+        "segments": segments,
+        "thinking": reply.get("thinking", ""),
     })
+    _render_live_assistant(segments, reply.get("thinking", ""))
     st.rerun()

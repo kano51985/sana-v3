@@ -221,6 +221,7 @@ __marimo__/
 sana_memory_db/
 sana_memory_db/**/*
 chroma.sqlite3
+.superpowers/
 
 # Local docs and tests
 docs/

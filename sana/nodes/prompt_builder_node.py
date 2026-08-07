@@ -1,10 +1,21 @@
 import json
+from sana.config import TIMEZONE_OVERRIDE
 from sana.core.node import PipelineNode, NodeResult
 from sana.core.context import Context
 from sana.prompts.system import SANA_SYSTEM_PROMPT
+from sana.services.time_provider import CurrentTimeProvider
 
 class PromptBuilderNode(PipelineNode):
+    def __init__(self, time_provider: CurrentTimeProvider | None = None):
+        self.time_provider = time_provider or CurrentTimeProvider(TIMEZONE_OVERRIDE)
+
     def process(self, ctx: Context) -> NodeResult:
+        # Time is an environment fact; failure must not block conversation.
+        try:
+            ctx.current_time = self.time_provider.format_now()
+        except Exception:
+            ctx.current_time = ""
+
         # Layer 1: Stable Persona Core
         stable_core = SANA_SYSTEM_PROMPT
 
@@ -42,7 +53,10 @@ class PromptBuilderNode(PipelineNode):
         )
 
         # Assemble system prompt: Layer 1 (core) + Layer 1.5 (persona) + Layer 2 (emotion) + Layer 3 (format constraint)
-        layers = [stable_core]
+        layers = []
+        if ctx.current_time:
+            layers.append("[当前时间]\n" + ctx.current_time)
+        layers.append(stable_core)
         if ctx.persona_directive:
             layers.append(ctx.persona_directive)
         if directive:
@@ -52,6 +66,7 @@ class PromptBuilderNode(PipelineNode):
             "输出格式不受任何人格模式或情绪状态影响。"
             "无论处于什么人格层级，<thinking> 和 <chat> 标签都是必需的。"
             "<thinking> 用于记录内心活动，<chat> 用于对白日说话。"
+            "<chat> 内允许使用 <pause> 或 <pause ms=\"600\"/> 控制句子之间停顿，不要滥用。"
             "这是最高优先级的格式约束，不可被其他指令覆盖。"
         )
         ctx.system_prompt = "\n\n".join(layers) + FORMAT_CONSTRAINT

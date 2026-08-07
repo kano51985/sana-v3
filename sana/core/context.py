@@ -11,10 +11,12 @@ class Context:
     current_profile: dict = field(default_factory=dict)
     system_prompt: str = ""
     augmented_input: str = ""
+    current_time: str = ""
     llm_raw_response: str = ""
     full_reply: str = ""
     thinking: str = ""
     chat: str = ""
+    segments: list = field(default_factory=list)
     tool_triggered: bool = False
     tool_target_batch: str = ""
     chat_buffer: list = field(default_factory=list)

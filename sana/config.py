@@ -11,6 +11,9 @@ API_URL = "http://localhost:1234/api/v1/chat"
 CHROMA_DB_PATH = "D:/MyProduct/sana_project/sana_memory_db"
 COLLECTION_NAME = "sana_memories"
 
+# 当前时间注入使用的业务时区；None 表示跟随系统本地时区
+TIMEZONE_OVERRIDE: str | None = None
+
 registry = ModelRegistry(backends={
     "local": LocalModelBackend(base_url=API_URL),
     "openai": OpenAIModelBackend(api_key=""),

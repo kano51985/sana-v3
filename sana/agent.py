@@ -19,6 +19,7 @@ from sana.nodes.llm_call_node import LLMCallNode
 from sana.nodes.tool_intercept_node import ToolInterceptNode
 from sana.nodes.deep_dive_node import DeepDiveNode
 from sana.nodes.response_parser_node import ResponseParserNode
+from sana.nodes.sentence_segment_node import SentenceSegmentNode
 from sana.nodes.memory_update_node import MemoryUpdateNode
 from sana.nodes.consolidation_node import ConsolidationNode
 from sana.nodes.format_check_node import FormatCheckerNode
@@ -69,6 +70,7 @@ class SanaAgent:
             .register("deep_dive", DeepDiveNode())
             .register("format_check", FormatCheckerNode())
             .register("response_parser", ResponseParserNode())
+            .register("sentence_segment", SentenceSegmentNode())
             .register("memory_update", MemoryUpdateNode(self.working_memory, self.chat_buffer))
             .register("consolidation", self.consolidation_node)
             .start_at("input")
@@ -101,6 +103,7 @@ class SanaAgent:
             "chat": result.context.chat if result.context else "Error",
             "thinking": result.context.thinking if result.context else "",
             "perception": result.context.perception_data if result.context else {},
+            "segments": result.context.segments if result.context else [],
         }
 
     def consolidate_memory(self) -> dict:
