@@ -15,6 +15,7 @@ class Context:
     llm_raw_response: str = ""
     full_reply: str = ""
     thinking: str = ""
+    chat_raw: str = ""
     chat: str = ""
     segments: list = field(default_factory=list)
     tool_triggered: bool = False

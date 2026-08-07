@@ -2,26 +2,29 @@ import re
 
 from sana.core.node import PipelineNode, NodeResult
 from sana.core.context import Context
-
-
-_PAUSE_RE = re.compile(r"<pause\b([^>]*)>", re.IGNORECASE)
-_MS_RE = re.compile(r"\bms\s*=\s*[\"']?(\d+)[\"']?", re.IGNORECASE)
+from sana.nodes.pause_parser import (
+    DEFAULT_DELAY,
+    MAX_DELAY,
+    PAUSE_RE,
+    parse_pause_delay,
+    strip_pause_tags,
+)
 _SENTENCE_SPLIT_RE = re.compile(
     r"(?<=[。！？；\n])|(?<=[~～])|(?<=……)|(?<=\.\.\.)"
 )
 
 
 class SentenceSegmentNode(PipelineNode):
-    DEFAULT_DELAY = 0.6
+    DEFAULT_DELAY = DEFAULT_DELAY
     SHORT_DELAY = 0.45
     LONG_DELAY = 0.8
-    MAX_DELAY = 3.0
+    MAX_DELAY = MAX_DELAY
     EMPTY_TEXT = "[Empty response]"
 
     def process(self, ctx: Context) -> NodeResult:
-        raw = ctx.chat or ""
+        raw = ctx.chat_raw or ctx.chat or ""
         ctx.segments = self.build_segments(raw)
-        ctx.chat = _PAUSE_RE.sub("", raw).strip()
+        ctx.chat = strip_pause_tags(ctx.chat or raw)
         return NodeResult(next="memory_update", context=ctx)
 
     @classmethod
@@ -53,7 +56,7 @@ class SentenceSegmentNode(PipelineNode):
     def _tokenize(cls, text: str) -> list[tuple[str, object]]:
         tokens = []
         pos = 0
-        for match in _PAUSE_RE.finditer(text):
+        for match in PAUSE_RE.finditer(text):
             before = text[pos:match.start()]
             if before:
                 tokens.append(("text", before))
@@ -65,16 +68,7 @@ class SentenceSegmentNode(PipelineNode):
 
     @classmethod
     def _parse_delay(cls, attrs: str) -> float:
-        match = _MS_RE.search(attrs or "")
-        if not match:
-            return cls.DEFAULT_DELAY
-        try:
-            ms = int(match.group(1))
-        except ValueError:
-            return cls.DEFAULT_DELAY
-        if ms < 0:
-            return cls.DEFAULT_DELAY
-        return min(ms / 1000.0, cls.MAX_DELAY)
+        return parse_pause_delay(attrs)
 
     @staticmethod
     def _split_sentences(value: str) -> list[str]:

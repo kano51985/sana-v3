@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sana.agent import SanaAgent
 from sana.config import registry, dump_model_config, reset_model_config
 from sana.models.registry import ModelConfig
+from sana.nodes.pause_parser import strip_pause_tags
 
 _ASSETS_DIR = os.path.join(os.path.dirname(__file__), "..", "assets")
 _USER_AVATAR = os.path.join(_ASSETS_DIR, "user_avatar.jpg")
@@ -57,11 +58,20 @@ def norm(v):
     return max(0.0, min(1.0, (v + 1.0) / 2.0))
 
 
+def _clean_visible_text(text):
+    return strip_pause_tags(text or "")
+
+
 def _segments_for(msg):
     segments = msg.get("segments")
     if segments:
-        return [seg for seg in segments if seg.get("text")]
-    content = msg.get("content", "")
+        cleaned = []
+        for seg in segments:
+            text = _clean_visible_text(seg.get("text"))
+            if text:
+                cleaned.append({**seg, "text": text})
+        return cleaned
+    content = _clean_visible_text(msg.get("content", ""))
     return [{"text": content, "delay": 0.0}] if content else []
 
 
@@ -69,11 +79,11 @@ def _render_history():
     for msg in st.session_state.messages:
         if msg["role"] == "user":
             with st.chat_message("user", avatar=_USER_AVATAR):
-                st.markdown(msg["content"].replace("~~", ""))
+                st.markdown(_clean_visible_text(msg["content"]).replace("~~", ""))
             continue
         for seg in _segments_for(msg):
             with st.chat_message("assistant", avatar=_SANA_AVATAR):
-                st.markdown(seg["text"].replace("~~", ""))
+                st.markdown(_clean_visible_text(seg["text"]).replace("~~", ""))
         if msg.get("thinking"):
             with st.expander("Sana 内心 OS"):
                 st.text(msg["thinking"])
@@ -81,7 +91,7 @@ def _render_history():
 
 def _render_live_assistant(segments, thinking=""):
     for seg in segments:
-        text = seg.get("text", "")
+        text = _clean_visible_text(seg.get("text", ""))
         if not text:
             continue
         try:
@@ -242,7 +252,7 @@ with st.sidebar:
     st.markdown("---")
     with st.expander("日志"):
         logs = st.session_state.console_logs[-100:]
-        st.text_area("log", value="\n".join(logs), height=300)
+        st.text_area("log", value="\n".join(_clean_visible_text(line) for line in logs), height=300)
     if st.button("清空日志"):
         st.session_state.console_logs = []
 
@@ -270,10 +280,11 @@ if inp := st.chat_input("有什么想和sana分享的？"):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             reply = agent.chat(inp)
-        if buf.getvalue():
-            st.session_state.console_logs.append(buf.getvalue())
-    _chat = reply.get("chat", "")
-    segments = reply.get("segments")
+        log_text = _clean_visible_text(buf.getvalue())
+        if log_text:
+            st.session_state.console_logs.append(log_text)
+    _chat = _clean_visible_text(reply.get("chat", ""))
+    segments = _segments_for({"segments": reply.get("segments"), "content": _chat})
     if not segments:
         segments = [{"text": _chat or "[Empty response]", "delay": 0.0}]
     st.session_state.messages.append({
