@@ -1,7 +1,7 @@
 import re
 
 
-PAUSE_RE = re.compile(r"<pause\b([^>]*)>", re.IGNORECASE)
+PAUSE_RE = re.compile(r"<\s*pause\b([^>]*)>", re.IGNORECASE)
 _MS_RE = re.compile(r"\bms\s*=\s*[\"']?(\d+)[\"']?", re.IGNORECASE)
 
 DEFAULT_DELAY = 0.6

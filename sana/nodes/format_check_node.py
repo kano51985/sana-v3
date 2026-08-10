@@ -1,6 +1,7 @@
 import re
 from sana.core.node import PipelineNode, NodeResult
 from sana.core.context import Context
+from sana.services.tag_normalizer import normalize_tags
 
 
 class FormatCheckerNode(PipelineNode):
@@ -11,7 +12,8 @@ class FormatCheckerNode(PipelineNode):
     MAX_RETRIES = 2
 
     def process(self, ctx: Context) -> NodeResult:
-        raw = ctx.llm_raw_response or ""
+        raw = normalize_tags(ctx.llm_raw_response or "")
+        ctx.llm_raw_response = raw
         if not raw.strip():
             return NodeResult(next="response_parser", context=ctx)
         if not self._should_check_format(ctx):

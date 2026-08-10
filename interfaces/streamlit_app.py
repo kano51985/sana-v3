@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sana.agent import SanaAgent
 from sana.config import registry, dump_model_config, reset_model_config
 from sana.models.registry import ModelConfig
+from sana.services.web_tool_config import WebToolConfig
 from sana.nodes.pause_parser import strip_pause_tags
 
 _ASSETS_DIR = os.path.join(os.path.dirname(__file__), "..", "assets")
@@ -75,6 +76,30 @@ def _segments_for(msg):
     return [{"text": content, "delay": 0.0}] if content else []
 
 
+def _tool_badge(trace, web_enabled=False):
+    if not trace:
+        return "联网查询未触发" if web_enabled else ""
+    if not trace.get("triggered"):
+        return "联网查询未触发" if web_enabled else ""
+    tool = trace.get("tool", "tool")
+    status = trace.get("status", "")
+    if tool == "web":
+        if status == "blocked":
+            return '<span style="background:#b7791f;color:white;padding:2px 8px;border-radius:4px;font-size:12px">联网查询被心情拦截</span>'
+        if status == "failed":
+            return '<span style="background:#c53030;color:white;padding:2px 8px;border-radius:4px;font-size:12px">联网查询失败</span>'
+        return '<span style="background:#2b6cb0;color:white;padding:2px 8px;border-radius:4px;font-size:12px">联网查询工具已触发</span>'
+    if tool == "memory":
+        return '<span style="background:#6b46c1;color:white;padding:2px 8px;border-radius:4px;font-size:12px">记忆工具已触发</span>'
+    return ""
+
+
+def _render_tool_badge(trace, web_enabled=False):
+    badge = _tool_badge(trace, web_enabled)
+    if badge:
+        st.markdown(f'<div style="margin-top:4px">{badge}</div>', unsafe_allow_html=True)
+
+
 def _render_history():
     for msg in st.session_state.messages:
         if msg["role"] == "user":
@@ -87,9 +112,10 @@ def _render_history():
         if msg.get("thinking"):
             with st.expander("Sana 内心 OS"):
                 st.text(msg["thinking"])
+        _render_tool_badge(msg.get("tool_trace"), agent.web_config_store.load().enabled)
 
 
-def _render_live_assistant(segments, thinking=""):
+def _render_live_assistant(segments, thinking="", tool_trace=None):
     for seg in segments:
         text = _clean_visible_text(seg.get("text", ""))
         if not text:
@@ -110,6 +136,7 @@ def _render_live_assistant(segments, thinking=""):
     if thinking:
         with st.expander("Sana 内心 OS"):
             st.text(thinking)
+    _render_tool_badge(tool_trace, agent.web_config_store.load().enabled)
 
 
 with st.sidebar:
@@ -150,6 +177,54 @@ with st.sidebar:
         agent.alma.current_mood["A"] = new_a
         agent.alma.current_mood["D"] = new_d
         st.success("已注入"); st.rerun()
+
+    st.markdown("---")
+    # ── Web Tool config ──
+    with st.expander("联网查询"):
+        web_cfg = agent.web_config_store.load()
+        enabled = st.toggle("启用联网查询", value=web_cfg.enabled)
+        level = st.select_slider(
+            "自主等级",
+            [0, 1, 2, 3, 4],
+            value=web_cfg.autonomy_level,
+            format_func=lambda x: f"{x} - {['关闭', '显式', '克制', '主动', '探索'][x]}",
+        )
+        max_heads = st.slider("每轮最大查询头数", 1, 5, web_cfg.max_query_heads)
+        results_per_head = st.slider("每头结果数", 1, 5, web_cfg.results_per_head)
+        max_injected = st.slider("最终注入结果数", 1, 10, web_cfg.max_injected_results)
+        timeout_seconds = st.slider(
+            "单请求超时（秒）",
+            1.0,
+            10.0,
+            float(web_cfg.timeout_seconds),
+            0.5,
+        )
+        allow_bing = st.checkbox("允许必应", value=web_cfg.allow_bing)
+        allow_baidu = st.checkbox("允许百度", value=web_cfg.allow_baidu)
+        allow_direct = st.checkbox("允许官网/百科兜底", value=web_cfg.allow_direct)
+        allow_bing_rss = st.checkbox("允许 Bing RSS", value=web_cfg.allow_bing_rss)
+        allow_duckduckgo = st.checkbox("允许 DuckDuckGo", value=web_cfg.allow_duckduckgo)
+        allow_katana = st.checkbox("允许 Katana 爬虫", value=web_cfg.allow_katana)
+        katana_bin = st.text_input("Katana 路径", value=web_cfg.katana_bin)
+        if st.button("保存联网配置", use_container_width=True):
+            agent.web_config_store.save(WebToolConfig(
+                enabled=enabled,
+                autonomy_level=level,
+                max_query_heads=max_heads,
+                results_per_head=results_per_head,
+                max_injected_results=max_injected,
+                timeout_seconds=timeout_seconds,
+                allow_bing=allow_bing,
+                allow_baidu=allow_baidu,
+                allow_direct=allow_direct,
+                allow_bing_rss=allow_bing_rss,
+                allow_duckduckgo=allow_duckduckgo,
+                allow_katana=allow_katana,
+                katana_bin=katana_bin,
+            ))
+            st.success("已保存")
+        st.markdown("**最近工具轨迹**")
+        st.json(agent.last_web_trace)
 
     st.markdown("---")
     # ── Model config ──
@@ -292,6 +367,7 @@ if inp := st.chat_input("有什么想和sana分享的？"):
         "content": _chat,
         "segments": segments,
         "thinking": reply.get("thinking", ""),
+        "tool_trace": reply.get("tool_trace", {}),
     })
-    _render_live_assistant(segments, reply.get("thinking", ""))
+    _render_live_assistant(segments, reply.get("thinking", ""), reply.get("tool_trace", {}))
     st.rerun()

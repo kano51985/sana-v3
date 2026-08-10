@@ -2,13 +2,14 @@ from sana.models.registry import ModelRegistry, ModelConfig
 from sana.models.local_backend import LocalModelBackend
 from sana.models.openai_backend import OpenAIModelBackend
 from sana.models.deepseek_backend import DeepSeekBackend
+import os
 
 # 角色名称
 AGENT_NAME = "Sana"
 USER_NAME = "白日"
 
 API_URL = "http://localhost:1234/api/v1/chat"
-CHROMA_DB_PATH = "D:/MyProduct/sana_project/sana_memory_db"
+CHROMA_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sana_memory_db")
 COLLECTION_NAME = "sana_memories"
 
 # 当前时间注入使用的业务时区；None 表示跟随系统本地时区

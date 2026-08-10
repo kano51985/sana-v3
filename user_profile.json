@@ -24,5 +24,27 @@
         "temperature": 0.3
       }
     }
+  },
+  "web_tool": {
+    "enabled": true,
+    "autonomy_level": 4,
+    "max_query_heads": 3,
+    "results_per_head": 3,
+    "max_injected_results": 8,
+    "timeout_seconds": 2.5,
+    "total_timeout_seconds": 8.0,
+    "allow_bing": true,
+    "allow_baidu": true,
+    "allow_direct": true,
+    "allow_bing_rss": true,
+    "allow_duckduckgo": true,
+    "allow_katana": true,
+    "katana_bin": "katana",
+    "katana_max_depth": 2,
+    "katana_max_pages": 20,
+    "katana_timeout_seconds": 5.0,
+    "katana_concurrency": 3,
+    "katana_allowed_domains": [],
+    "mood_influence": "strong"
   }
 }

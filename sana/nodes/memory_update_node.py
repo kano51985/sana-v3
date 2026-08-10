@@ -10,6 +10,8 @@ class MemoryUpdateNode(PipelineNode):
     def process(self, ctx: Context) -> NodeResult:
         self.working_memory.append({"role": USER_NAME, "content": ctx.user_input})
         self.working_memory.append({"role": AGENT_NAME, "content": ctx.chat})
+        if ctx.tool_trace.get("triggered"):
+            self.working_memory.append({"role": "tool", "content": _tool_note(ctx.tool_trace)})
         self.chat_buffer.append({"role": USER_NAME, "content": ctx.user_input})
         self.chat_buffer.append({"role": AGENT_NAME, "content": ctx.chat})
         # 滑动窗口：超出上限时移除最早的一对 user+assistant
@@ -21,3 +23,17 @@ class MemoryUpdateNode(PipelineNode):
         ctx.working_memory = self.working_memory
         ctx.chat_buffer = self.chat_buffer
         return NodeResult(next="consolidation", context=ctx)
+
+
+def _tool_note(trace: dict) -> str:
+    tool = trace.get("tool", "tool")
+    status = trace.get("status", "")
+    if tool == "web":
+        query = " | ".join(trace.get("query_heads", []))
+        count = trace.get("results_count", 0)
+        error = trace.get("error", "")
+        note = f"[Web] {status}: {query}; 结果 {count} 条"
+        if error:
+            note += f"; 错误 {error}"
+        return note
+    return f"[Tool] {tool} {status}"

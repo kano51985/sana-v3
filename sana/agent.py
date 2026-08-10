@@ -7,6 +7,16 @@ from sana.services.memory_service import MemoryManager
 from sana.services.memory_summarizer import MemorySummarizer
 from sana.services.mongo_client import RawMemoryDB
 from sana.services.profile_manager import ProfileManager
+from sana.services.web_tool_config import WebToolConfigStore
+from sana.services.web_tool_policy import WebToolPolicy
+from sana.services.web_alias_store import WebAliasStore
+from sana.services.entity_resolver import EntityResolver
+from sana.services.web_query_planner import WebQueryPlanner
+from sana.services.web_search_service import WebSearchService
+from sana.services.retrieval_scorer import RetrievalScorer
+from sana.services.tool_registry import ToolRegistry
+from sana.services.tool_intent_detector import ToolIntentDetector
+from sana.services.result_verifier import ToolResultVerifier
 from sana.nodes.input_node import InputNode
 from sana.nodes.perception_node import PerceptionNode
 from sana.nodes.alma_node import ALMANode
@@ -24,6 +34,7 @@ from sana.nodes.memory_update_node import MemoryUpdateNode
 from sana.nodes.consolidation_node import ConsolidationNode
 from sana.nodes.format_check_node import FormatCheckerNode
 from sana.nodes.directive_node import DirectiveNode
+from sana.nodes.web_search_node import WebSearchNode
 from sana.services.emotional_directive import EmotionalDirective
 from sana.services.behavioral_reasoner import BehavioralReasoner
 from sana.nodes.behavioral_reasoner_node import BehavioralReasonerNode
@@ -43,6 +54,18 @@ class SanaAgent:
         self.raw_db = RawMemoryDB()
         self.summarizer = MemorySummarizer()
         self.profile_mgr = ProfileManager()
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.web_config_store = WebToolConfigStore(os.path.join(base_dir, "user_profile.json"))
+        self.web_policy = WebToolPolicy(self.web_config_store)
+        self.web_alias_store = WebAliasStore(os.path.join(base_dir, "sana", "data", "web_aliases.json"))
+        self.entity_resolver = EntityResolver(self.web_alias_store)
+        self.web_planner = WebQueryPlanner()
+        self.web_search_service = WebSearchService(self.web_config_store)
+        self.retrieval_scorer = RetrievalScorer()
+        self.tool_registry = ToolRegistry()
+        self.tool_intent_detector = ToolIntentDetector(tool_registry=self.tool_registry)
+        self.result_verifier = ToolResultVerifier()
+        self.last_web_trace: dict = {}
         self.consolidation_node = ConsolidationNode(
             self.summarizer, self.raw_db, self.memory, self.profile_mgr
         )
@@ -64,10 +87,24 @@ class SanaAgent:
             .register("memory_recall", MemoryRecallNode(self.memory))
             .register("profile_load", ProfileLoadNode(self.profile_mgr))
             .register("working_memory", WorkingMemoryNode(self.working_memory))
-            .register("prompt_builder", PromptBuilderNode())
+            .register("prompt_builder", PromptBuilderNode(web_policy=self.web_policy, alma=self.alma))
             .register("llm_call", LLMCallNode())
-            .register("tool_intercept", ToolInterceptNode(self.raw_db))
+            .register("tool_intercept", ToolInterceptNode(
+                self.raw_db,
+                intent_detector=self.tool_intent_detector,
+                tool_registry=self.tool_registry,
+            ))
             .register("deep_dive", DeepDiveNode())
+            .register("web_search", WebSearchNode(
+                config_store=self.web_config_store,
+                policy=self.web_policy,
+                alias_store=self.web_alias_store,
+                resolver=self.entity_resolver,
+                planner=self.web_planner,
+                search_service=self.web_search_service,
+                scorer=self.retrieval_scorer,
+                verifier=self.result_verifier,
+            ))
             .register("format_check", FormatCheckerNode())
             .register("response_parser", ResponseParserNode())
             .register("sentence_segment", SentenceSegmentNode())
@@ -99,11 +136,13 @@ class SanaAgent:
         if result.context:
             self.working_memory = result.context.working_memory
             self.chat_buffer = result.context.chat_buffer
+            self.last_web_trace = result.context.tool_trace
         return {
             "chat": result.context.chat if result.context else "Error",
             "thinking": result.context.thinking if result.context else "",
             "perception": result.context.perception_data if result.context else {},
             "segments": result.context.segments if result.context else [],
+            "tool_trace": result.context.tool_trace if result.context else {},
         }
 
     def consolidate_memory(self) -> dict:

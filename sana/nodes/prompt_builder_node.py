@@ -6,8 +6,15 @@ from sana.prompts.system import SANA_SYSTEM_PROMPT
 from sana.services.time_provider import CurrentTimeProvider
 
 class PromptBuilderNode(PipelineNode):
-    def __init__(self, time_provider: CurrentTimeProvider | None = None):
+    def __init__(
+        self,
+        time_provider: CurrentTimeProvider | None = None,
+        web_policy=None,
+        alma=None,
+    ):
         self.time_provider = time_provider or CurrentTimeProvider(TIMEZONE_OVERRIDE)
+        self.web_policy = web_policy
+        self.alma = alma
 
     def process(self, ctx: Context) -> NodeResult:
         # Time is an environment fact; failure must not block conversation.
@@ -61,6 +68,18 @@ class PromptBuilderNode(PipelineNode):
             layers.append(ctx.persona_directive)
         if directive:
             layers.append(directive)
+        if self.web_policy:
+            ctx.web_policy_block = self.web_policy.build_policy_block(ctx, self.alma)
+            if ctx.web_policy_block:
+                layers.append(ctx.web_policy_block)
+            if ctx.web_tool_enabled:
+                layers.append(
+                    "[Tool Protocol]\n"
+                    "第一轮输出必须是二选一：\n"
+                    "- 不需要工具：<thinking>...</thinking>\n<chat>...</chat>\n"
+                    '- 需要工具：只输出 <invoke_web query="具体查询"/>，不要输出 thinking 或 chat。\n'
+                    "工具执行后你会收到结果，再生成最终回复。"
+                )
         FORMAT_CONSTRAINT = (
             "\n\n[输出格式]\n"
             "输出格式不受任何人格模式或情绪状态影响。"

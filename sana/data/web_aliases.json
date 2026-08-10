@@ -1,0 +1,22 @@
+{
+  "王者荣耀": {
+    "aliases": ["农", "农药", "王者"],
+    "source": "seed"
+  },
+  "英雄联盟": {
+    "aliases": ["撸啊撸", "撸", "lol", "LOL"],
+    "source": "seed"
+  },
+  "和平精英": {
+    "aliases": ["吃鸡"],
+    "source": "seed"
+  },
+  "金铲铲之战": {
+    "aliases": ["铲铲"],
+    "source": "seed"
+  },
+  "原神": {
+    "aliases": ["原"],
+    "source": "seed"
+  }
+}
