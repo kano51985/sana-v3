@@ -5,6 +5,9 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sana.agent import SanaAgent
 from sana.config import registry, dump_model_config, reset_model_config
+from sana.models.credentials import get_user_env, set_user_env
+from sana.models.deepseek_backend import DeepSeekBackend
+from sana.models.openai_backend import OpenAIModelBackend
 from sana.models.registry import ModelConfig
 from sana.services.web_tool_config import WebToolConfig
 from sana.nodes.pause_parser import strip_pause_tags
@@ -199,13 +202,50 @@ with st.sidebar:
             float(web_cfg.timeout_seconds),
             0.5,
         )
+        provider_timeout_seconds = st.slider(
+            "Provider 阶段超时（秒）",
+            1.0,
+            30.0,
+            float(web_cfg.provider_timeout_seconds),
+            1.0,
+        )
+        rerank_timeout_seconds = st.slider(
+            "精排阶段超时（秒）",
+            1.0,
+            30.0,
+            float(web_cfg.rerank_timeout_seconds),
+            1.0,
+        )
+        web_total_timeout_seconds = st.slider(
+            "Web 搜索总超时（秒）",
+            10.0,
+            120.0,
+            float(web_cfg.web_total_timeout_seconds),
+            5.0,
+        )
         allow_bing = st.checkbox("允许必应", value=web_cfg.allow_bing)
         allow_baidu = st.checkbox("允许百度", value=web_cfg.allow_baidu)
         allow_direct = st.checkbox("允许官网/百科兜底", value=web_cfg.allow_direct)
         allow_bing_rss = st.checkbox("允许 Bing RSS", value=web_cfg.allow_bing_rss)
         allow_duckduckgo = st.checkbox("允许 DuckDuckGo", value=web_cfg.allow_duckduckgo)
+        allow_searxng = st.toggle("允许 SearXNG", value=web_cfg.allow_searxng)
+        searxng_url = st.text_input("SearXNG URL", value=web_cfg.searxng_url)
+        searxng_timeout_seconds = st.slider(
+            "SearXNG 超时（秒）",
+            1.0,
+            30.0,
+            float(web_cfg.searxng_timeout_seconds),
+            0.5,
+        )
         allow_katana = st.checkbox("允许 Katana 爬虫", value=web_cfg.allow_katana)
         katana_bin = st.text_input("Katana 路径", value=web_cfg.katana_bin)
+        katana_total_timeout_seconds = st.slider(
+            "Katana 总爬取超时（秒）",
+            5.0,
+            60.0,
+            float(web_cfg.katana_total_timeout_seconds),
+            1.0,
+        )
         if st.button("保存联网配置", use_container_width=True):
             agent.web_config_store.save(WebToolConfig(
                 enabled=enabled,
@@ -214,13 +254,20 @@ with st.sidebar:
                 results_per_head=results_per_head,
                 max_injected_results=max_injected,
                 timeout_seconds=timeout_seconds,
+                provider_timeout_seconds=provider_timeout_seconds,
+                rerank_timeout_seconds=rerank_timeout_seconds,
+                web_total_timeout_seconds=web_total_timeout_seconds,
                 allow_bing=allow_bing,
                 allow_baidu=allow_baidu,
                 allow_direct=allow_direct,
                 allow_bing_rss=allow_bing_rss,
                 allow_duckduckgo=allow_duckduckgo,
+                allow_searxng=allow_searxng,
+                searxng_url=searxng_url,
+                searxng_timeout_seconds=searxng_timeout_seconds,
                 allow_katana=allow_katana,
                 katana_bin=katana_bin,
+                katana_total_timeout_seconds=katana_total_timeout_seconds,
             ))
             st.success("已保存")
         st.markdown("**最近工具轨迹**")
@@ -236,6 +283,15 @@ with st.sidebar:
             "summarize": "总结层 Summarize",
         }
         _backends = ["local", "deepseek", "openai"]
+
+        st.session_state.setdefault("model_api_key", "")
+        st.text_input("DeepSeek/OpenAI API Key", type="password", key="model_api_key")
+        _deepseek_key_ok = bool(get_user_env("DEEPSEEK_API_KEY"))
+        _openai_key_ok = bool(get_user_env("OPENAI_API_KEY"))
+        st.caption(
+            f"DeepSeek Key: {'已检测到' if _deepseek_key_ok else '未检测到'} | "
+            f"OpenAI Key: {'已检测到' if _openai_key_ok else '未检测到'}"
+        )
 
         for role in _layers:
             st.markdown(f"**{_labels[role]}**")
@@ -281,6 +337,14 @@ with st.sidebar:
         col1, col2 = st.columns(2)
         with col1:
             if st.button("应用配置", use_container_width=True):
+                _api_key = st.session_state.get("model_api_key", "").strip()
+                _be_set = {st.session_state[f"be_{role}"] for role in _layers}
+                if _api_key and "deepseek" in _be_set:
+                    set_user_env("DEEPSEEK_API_KEY", _api_key)
+                    registry.backends["deepseek"] = DeepSeekBackend(api_key=_api_key)
+                if _api_key and "openai" in _be_set:
+                    set_user_env("OPENAI_API_KEY", _api_key)
+                    registry.backends["openai"] = OpenAIModelBackend(api_key=_api_key)
                 _profile = os.path.join(
                     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                     "user_profile.json",

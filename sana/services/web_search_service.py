@@ -1,245 +1,477 @@
-import html
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import quote_plus
+from dataclasses import asdict
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
-from sana.services.web_tool_config import WebToolConfig, WebToolConfigStore
-from sana.services.search_discovery_service import SearchDiscoveryService
-from sana.services.katana_crawler import KatanaCrawler
+from sana.models.search_context import SearchIntent
+from sana.services.candidate_classifier import CandidateClassifier
+from sana.services.candidate_scorer import CandidateScorer
 from sana.services.content_extractor import ContentExtractor
+from sana.services.crawl_planner import CrawlPlanner
+from sana.services.katana_crawler import KatanaCrawler
+from sana.services.official_source_learner import OfficialSourceLearner
+from sana.services.search_parsers import BaiduParser, BingParser
+from sana.services.search_provider import DirectSourceProvider
+from sana.services.search_provider_registry import SearchProviderRegistry
+from sana.services.web_tool_config import WebToolConfig, WebToolConfigStore
 
 
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+LINK_INTENT_TERMS = (
+    "版本", "更新", "角色", "公告", "新闻", "资讯",
+    "攻略", "配队", "爆料", "最新",
+    "version", "update", "character", "news", "guide", "announcement", "leak",
 )
 
 
-class DirectSourceRegistry:
-    def __init__(self):
-        self.sites = {
-            "王者荣耀": ["https://pvp.qq.com/web201605/news.shtml"],
-            "英雄联盟": ["https://lol.qq.com/"],
-            "和平精英": ["https://gp.qq.com/"],
-            "金铲铲之战": ["https://jcc.qq.com/"],
-            "原神": ["https://ys.mihoyo.com/"],
-        }
-
-    def urls_for(self, canonical: str) -> list[str]:
-        return list(self.sites.get(canonical, []))
-
-
-class BingParser:
-    def parse(self, html_text: str) -> list[dict]:
-        results = []
-        blocks = re.split(r'<li class="b_algo"', html_text or "", flags=re.IGNORECASE)
-        for block in blocks[1:]:
-            item = self._parse_block(block)
-            if item:
-                results.append(item)
-        return results
-
-    @staticmethod
-    def _parse_block(block: str) -> dict | None:
-        match = re.search(
-            r'<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
-            block,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        if not match:
-            return None
-        url = html.unescape(match.group(1)).strip()
-        title = _clean_html(match.group(2))
-        if not url.startswith(("http://", "https://")) or not title:
-            return None
-        snippet_match = re.search(r"<p[^>]*>(.*?)</p>", block, flags=re.IGNORECASE | re.DOTALL)
-        return {
-            "title": title,
-            "url": url,
-            "snippet": _clean_html(snippet_match.group(1)) if snippet_match else "",
-            "source": "bing",
-        }
-
-
-class BaiduParser:
-    def parse(self, html_text: str) -> list[dict]:
-        results = []
-        blocks = re.split(r'<div[^>]*class="[^"]*result[^"]*"', html_text or "", flags=re.IGNORECASE)
-        for block in blocks[1:]:
-            item = self._parse_block(block)
-            if item:
-                results.append(item)
-        return results
-
-    @staticmethod
-    def _parse_block(block: str) -> dict | None:
-        match = re.search(
-            r'<h3[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
-            block,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        if not match:
-            return None
-        url = html.unescape(match.group(1)).strip()
-        title = _clean_html(match.group(2))
-        if not url.startswith(("http://", "https://")) or not title:
-            return None
-        snippet = ""
-        for pattern in (
-            r'<span[^>]*class="[^"]*content-right[^"]*"[^>]*>(.*?)</span>',
-            r'<div[^>]*class="[^"]*c-abstract[^"]*"[^>]*>(.*?)</div>',
-        ):
-            sm = re.search(pattern, block, flags=re.IGNORECASE | re.DOTALL)
-            if sm:
-                snippet = _clean_html(sm.group(1))
-                break
-        return {
-            "title": title,
-            "url": url,
-            "snippet": snippet,
-            "source": "baidu",
-        }
-
-
 class WebSearchService:
-    def __init__(self, config_store: WebToolConfigStore | None = None, config: WebToolConfig | None = None):
+    def __init__(
+        self,
+        config_store: WebToolConfigStore | None = None,
+        config: WebToolConfig | None = None,
+        provider_registry: SearchProviderRegistry | None = None,
+        official_learner: OfficialSourceLearner | None = None,
+    ):
         self.config_store = config_store or WebToolConfigStore()
         self._config = config
-        self.direct_registry = DirectSourceRegistry()
+        self.official_learner = official_learner or OfficialSourceLearner()
         self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": USER_AGENT,
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-        })
-        self.unavailable_sources: set[str] = set()
-        self.discovery = SearchDiscoveryService()
+        self.provider_registry = provider_registry or SearchProviderRegistry(
+            direct_provider=DirectSourceProvider(registry=self.official_learner)
+        )
+        self.classifier = CandidateClassifier()
+        self.candidate_scorer = CandidateScorer()
+        self.crawl_planner = CrawlPlanner()
         self.crawler = KatanaCrawler()
         self.content_extractor = ContentExtractor()
         self.last_trace: dict = {}
+        self.last_official_urls: list[str] = []
+        self.last_scored_candidates: list[dict] = []
+        self.filtered_nav_count = 0
 
-    def search(self, heads: list[str], direct_canonical: str | None = None, config: WebToolConfig | None = None) -> list[dict]:
+    def search(
+        self,
+        heads: list[str],
+        direct_canonical: str | None = None,
+        config: WebToolConfig | None = None,
+        context_terms: list[str] | None = None,
+        search_intent: SearchIntent | None = None,
+    ) -> list[dict]:
         cfg = config or self._config or self.config_store.load()
         heads = [h for h in heads if h][:max(1, cfg.max_query_heads)]
-        results: list[dict] = []
         if not heads:
-            return results
-        with ThreadPoolExecutor(max_workers=min(3, len(heads))) as executor:
-            futures = {
-                executor.submit(self._search_head, head, cfg, direct_canonical): head
-                for head in heads
-            }
-            for future in as_completed(futures):
-                try:
-                    results.extend(future.result())
-                except Exception:
-                    continue
+            return []
 
-        discovery_results = self._discover(heads, cfg)
-        crawl_results = self._crawl(discovery_results, direct_canonical, heads, cfg)
-        results.extend(discovery_results)
-        results.extend(crawl_results)
-        self.last_trace = {**self.discovery.last_trace, **self.crawler.last_trace}
+        self.filtered_nav_count = 0
+        self.last_official_urls = []
+        self.last_scored_candidates = []
+        self.last_context_terms = context_terms or []
+        self.last_search_intent = search_intent.to_dict() if search_intent else None
+        self.last_trace = {"phase": "providers"}
+        self.provider_registry.reset_run_state()
+        provider_results = self._collect(heads, cfg, direct_canonical)
+        provider_timeout = bool(self.last_trace.get("provider_timeout"))
+        provider_elapsed_ms = int(self.last_trace.get("provider_elapsed_ms", 0))
+        self.last_trace = {
+            **self.provider_registry.last_trace,
+            "phase": "providers",
+            "discovery_sources": (
+                self.provider_registry.last_trace.get("provider_run_sources")
+                or self.provider_registry.last_trace.get("provider_sources", [])
+            ),
+            "discovery_count": len(provider_results),
+            "provider_timeout": provider_timeout,
+            "provider_elapsed_ms": provider_elapsed_ms,
+        }
+        crawl_start = time.monotonic()
+        try:
+            crawl_results = self._crawl(
+                provider_results,
+                direct_canonical,
+                heads,
+                cfg,
+                context_terms or [],
+                search_intent,
+            )
+        except Exception as exc:
+            self.last_trace["phase"] = "crawl"
+            self.last_trace["crawl_error"] = str(exc)
+            crawl_results = []
+        self.last_trace["crawl_elapsed_ms"] = int((time.monotonic() - crawl_start) * 1000)
+        provider_for_output = self.last_scored_candidates or provider_results
+        results = self._dedupe_results(provider_for_output + crawl_results)
+
+        self.last_trace.update({
+            "phase": "done",
+            "discovery_count": len(provider_results),
+            "context_terms": self.last_context_terms,
+            "search_intent": self.last_search_intent,
+            "article_count": sum(1 for item in results if item.get("_url_kind") == "article"),
+            "filtered_nav_count": self.filtered_nav_count,
+            "official_sources": self.last_official_urls,
+            "crawl_tasks": self.crawler.last_trace.get("crawl_tasks", []),
+            "crawl_sources": self.crawler.last_trace.get("crawl_sources", []),
+            "katana_visited_urls": self.crawler.last_trace.get("katana_visited_urls", []),
+            "katana_records": self.crawler.last_trace.get("katana_records", 0),
+            "katana_rounds": self.crawler.last_trace.get("katana_rounds", 0),
+            "katana_skipped_slow_hosts": self.crawler.last_trace.get("katana_skipped_slow_hosts", []),
+            "katana_total_timeout_seconds": self.crawler.last_trace.get("katana_total_timeout_seconds", cfg.katana_total_timeout_seconds),
+            "katana_available": self.crawler.last_trace.get("katana_available", False),
+            "http_fallback_count": self.crawler.last_trace.get("http_fallback_count", 0),
+            "katana_error": self.crawler.last_trace.get("katana_error", ""),
+            "crawl_error": self.crawler.last_trace.get("katana_error", self.last_trace.get("crawl_error", "")),
+        })
         return results
 
-    def _search_head(self, head: str, cfg: WebToolConfig, direct_canonical: str | None) -> list[dict]:
-        provider_results: list[dict] = []
+    def _collect(
+        self,
+        heads: list[str],
+        cfg: WebToolConfig,
+        canonical: str | None,
+    ) -> list[dict]:
+        results: list[dict] = []
+        traces: list[dict] = []
+        if not heads:
+            return results
+        start = time.monotonic()
+        timed_out = False
+        executor = ThreadPoolExecutor(max_workers=min(3, len(heads)))
+        futures = {
+            executor.submit(self._search_head, head, cfg, canonical): head
+            for head in heads
+        }
+        try:
+            for future in as_completed(futures, timeout=cfg.provider_timeout_seconds):
+                try:
+                    found, trace = future.result()
+                    results.extend(found)
+                    if trace:
+                        traces.append(trace)
+                except Exception:
+                    continue
+        except TimeoutError:
+            timed_out = True
+            executor.shutdown(wait=False, cancel_futures=True)
+        else:
+            executor.shutdown(wait=True)
+        self.last_trace["provider_elapsed_ms"] = int((time.monotonic() - start) * 1000)
+        if timed_out:
+            self.last_trace["provider_timeout"] = True
+        if traces:
+            self.provider_registry.last_trace = self._merge_provider_traces(traces, results)
+        return results
 
-        if cfg.allow_bing and "bing" not in self.unavailable_sources:
-            try:
-                provider_results.extend(self._fetch_bing(head, cfg))
-            except Exception:
-                pass
-        if cfg.allow_baidu and "baidu" not in self.unavailable_sources:
-            try:
-                provider_results.extend(self._fetch_baidu(head, cfg))
-            except Exception:
-                pass
-        if cfg.allow_direct and direct_canonical:
-            try:
-                provider_results.extend(self._fetch_direct(head, direct_canonical, cfg))
-            except Exception:
-                pass
+    def _search_head(
+        self,
+        head: str,
+        cfg: WebToolConfig,
+        canonical: str | None,
+    ) -> tuple[list[dict], dict]:
+        found = self.provider_registry.search(head, cfg, canonical)
+        trace = dict(getattr(self.provider_registry, "last_trace", {}) or {})
+        return [asdict(item) for item in found], trace
 
-        for item in provider_results[:cfg.results_per_head]:
-            item["query_head"] = head
-            item["fetched_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        return provider_results[: cfg.results_per_head * 3]
+    def _merge_provider_traces(
+        self,
+        traces: list[dict],
+        results: list[dict],
+    ) -> dict:
+        sources: set[str] = set()
+        errors: dict[str, str] = {}
+        success_sources: set[str] = set()
+        ok_sources: set[str] = set()
+        result_count = 0
 
-    def _discover(self, heads: list[str], cfg: WebToolConfig) -> list[dict]:
-        if not (cfg.allow_bing_rss or cfg.allow_duckduckgo):
-            return []
-        results = []
-        for head in heads[:2]:
-            found = self.discovery.discover(head, cfg)
-            for item in found:
-                item["query_head"] = head
-            results.extend(found)
-        return results[: cfg.max_injected_results * 2]
+        for trace in traces:
+            sources.update(
+                trace.get("provider_run_sources") or trace.get("provider_sources", [])
+            )
+            errors.update(
+                trace.get("provider_run_errors") or trace.get("provider_errors", {})
+            )
+            success_sources.update(trace.get("provider_success_sources", []))
+            ok_sources.update(trace.get("provider_ok_sources", []))
+            result_count += int(trace.get("provider_result_count") or 0)
+
+        if not sources:
+            previous = getattr(self.provider_registry, "last_trace", {}) or {}
+            sources.update(previous.get("provider_sources", []))
+            errors.update(previous.get("provider_errors", {}))
+        if not result_count:
+            result_count = len(results)
+
+        return {
+            "provider_sources": sorted(sources),
+            "provider_count": len(sources),
+            "provider_errors": errors,
+            "provider_run_sources": sorted(sources),
+            "provider_run_count": len(sources),
+            "provider_run_errors": errors,
+            "provider_success_sources": sorted(success_sources),
+            "provider_success_count": len(success_sources),
+            "provider_ok_sources": sorted(ok_sources),
+            "provider_ok_count": len(ok_sources),
+            "provider_result_count": result_count,
+        }
 
     def _crawl(
         self,
-        discovery_results: list[dict],
+        candidates: list[dict],
         direct_canonical: str | None,
         heads: list[str],
         cfg: WebToolConfig,
+        context_terms: list[str] | None = None,
+        search_intent: SearchIntent | None = None,
     ) -> list[dict]:
         if not cfg.allow_katana:
+            self.crawler.last_trace = {}
             return []
-        seed_urls = [item.get("url") for item in discovery_results if item.get("url")]
-        seed_urls = seed_urls[: cfg.katana_max_pages]
+
+        entity_terms = list(
+            dict.fromkeys(
+                term
+                for term in [direct_canonical] + (context_terms or [])
+                if term
+            )
+        )
+        question = " ".join(heads)
+        classified = self.classifier.classify_many(candidates, entity_terms, question)
+        recognized_official = []
+        official_urls = []
         if direct_canonical:
-            seed_urls.extend(self.direct_registry.urls_for(direct_canonical))
-        records = self.crawler.crawl(seed_urls, cfg)
+            recognized_official = self.official_learner.recognize_from_candidates(
+                candidates,
+                direct_canonical,
+                context_terms=context_terms or [],
+            )
+            official_urls = list(
+                dict.fromkeys(
+                    recognized_official
+                    + self.official_learner.validate_learned(
+                        direct_canonical,
+                        context_terms or [],
+                    )
+                )
+            )
+            if not self.official_learner.last_judge_trace.get("fallback"):
+                self.official_learner.learn(direct_canonical, recognized_official)
+        self.last_official_urls = official_urls
+
+        ranked = self.candidate_scorer.rank(
+            classified,
+            user_input=heads[0] if heads else "",
+            query_heads=heads,
+            entity_terms=entity_terms,
+            current_time=time.strftime("%Y-%m-%d %H:%M:%S"),
+            official_domains={_host(url) for url in official_urls},
+            context_terms=context_terms or [],
+            required_page_types=search_intent.required_page_types if search_intent else [],
+        )
+        self.last_scored_candidates = ranked
+        tasks = self.crawl_planner.plan(
+            ranked,
+            official_urls=official_urls,
+            max_tasks=cfg.katana_max_pages,
+            query_heads=heads,
+            fact_types=search_intent.fact_types if search_intent else [],
+        )
+        self.filtered_nav_count = sum(
+            1 for item in ranked if item.get("_url_kind") == "site_homepage"
+        )
+        all_tasks = list(tasks)
+        first_task_keys = {_normalize_url(task.url) for task in tasks}
+        visited_urls: list[str] = []
+        record_count = 0
+        crawl_deadline = time.monotonic() + float(cfg.katana_total_timeout_seconds)
+
+        records = self.crawler.crawl(tasks, cfg, deadline=crawl_deadline)
+        visited_urls.extend(record.get("url", "") for record in records if record.get("url"))
+        record_count += len(records)
         items = self.content_extractor.extract_many(records)
+        keywords = _link_keywords(heads, entity_terms)
+        if not records and (official_urls or tasks):
+            fetch_urls = [task.url for task in tasks]
+            fetch_urls.extend(official_urls)
+            http_records = self._fetch_pages_via_http(fetch_urls, cfg)
+            self.crawler.last_trace["http_fallback_count"] = len(http_records)
+            relevant_http = [
+                record
+                for record in http_records
+                if self._http_record_context_match(record, entity_terms)
+            ]
+            if relevant_http:
+                items.extend(self.content_extractor.extract_many(relevant_http))
+                discovered_links = self.crawler.extract_relevant_links(
+                    relevant_http,
+                    keywords,
+                    cfg,
+                )
+                if discovered_links:
+                    article_records = self._fetch_pages_via_http(
+                        [link.get("url") for link in discovered_links[:5]],
+                        cfg,
+                    )
+                    relevant_article = [
+                        record
+                        for record in article_records
+                        if self._http_record_context_match(record, entity_terms)
+                    ]
+                    items.extend(self.content_extractor.extract_many(relevant_article))
+
+        scored_links: list[dict] = []
+        discovered_links = self.crawler.extract_relevant_links(records, keywords, cfg)
+        if discovered_links and len(all_tasks) < cfg.katana_max_pages:
+            classified_links = self.classifier.classify_many(discovered_links, entity_terms, question)
+            scored_links = self.candidate_scorer.rank(
+                classified_links,
+                user_input=heads[0] if heads else "",
+                query_heads=heads,
+                entity_terms=entity_terms,
+                current_time=time.strftime("%Y-%m-%d %H:%M:%S"),
+                official_domains={_host(url) for url in official_urls},
+                context_terms=context_terms or [],
+                required_page_types=search_intent.required_page_types if search_intent else [],
+            )
+            for link in scored_links:
+                if float(link.get("_candidate_score") or 0) < CrawlPlanner.MIN_SCORE:
+                    link["_candidate_score"] = CrawlPlanner.MIN_SCORE + 5
+                    link["_snippet_score"] = CrawlPlanner.MIN_SCORE + 5
+            remaining = max(0, cfg.katana_max_pages - len(all_tasks))
+            second_tasks = self.crawl_planner.plan(
+                scored_links,
+                official_urls=[],
+                max_tasks=remaining,
+                query_heads=heads,
+                fact_types=search_intent.fact_types if search_intent else [],
+            )
+            second_tasks = [
+                task for task in second_tasks
+                if _normalize_url(task.url) not in first_task_keys
+            ]
+            if second_tasks:
+                records2 = self.crawler.crawl(second_tasks, cfg, deadline=crawl_deadline)
+                visited_urls.extend(record.get("url", "") for record in records2 if record.get("url"))
+                record_count += len(records2)
+                items.extend(self.content_extractor.extract_many(records2))
+                all_tasks.extend(second_tasks)
+
+        second_urls = {task.url for task in all_tasks[len(tasks):]}
+        scored_for_output = [
+            item for item in scored_links if item.get("url") in second_urls
+        ]
+        self.last_scored_candidates = ranked + scored_for_output
+        self.crawler.last_trace["crawl_tasks"] = [task.to_dict() for task in all_tasks]
+        self.crawler.last_trace["crawl_sources"] = [task.url for task in all_tasks]
+        self.crawler.last_trace["katana_visited_urls"] = list(dict.fromkeys(visited_urls))
+        self.crawler.last_trace["katana_records"] = record_count
+        self.crawler.last_trace["katana_rounds"] = 2 if len(all_tasks) > len(tasks) else 1
+
         head = heads[0] if heads else ""
         for item in items:
             item["query_head"] = head
+            verdict = self.classifier.classify(item, entity_terms, question)
+            item["_url_kind"] = verdict.url_kind
+            item["_relevance"] = verdict.relevance
+            item["_entity_match"] = verdict.entity_match
+            item["_classify_reason"] = verdict.reason
         return items
 
-    def _fetch_bing(self, head: str, cfg: WebToolConfig) -> list[dict]:
-        text = self._get("https://cn.bing.com/search", {"q": head}, cfg, "bing")
-        return BingParser().parse(text)
-
-    def _fetch_baidu(self, head: str, cfg: WebToolConfig) -> list[dict]:
-        text = self._get("https://www.baidu.com/s", {"wd": head}, cfg, "baidu")
-        return BaiduParser().parse(text)
-
-    def _fetch_direct(self, head: str, canonical: str, cfg: WebToolConfig) -> list[dict]:
-        results = []
-        for url in self.direct_registry.urls_for(canonical):
+    def _fetch_pages_via_http(
+        self,
+        urls: list[str],
+        cfg: WebToolConfig,
+    ) -> list[dict]:
+        records = []
+        for url in list(dict.fromkeys(str(item) for item in (urls or []) if str(item)))[:5]:
             try:
-                resp = self.session.get(url, timeout=cfg.timeout_seconds)
-                resp.raise_for_status()
-                title_match = re.search(r"<title[^>]*>(.*?)</title>", resp.text or "", re.IGNORECASE | re.DOTALL)
-                title = _clean_html(title_match.group(1)) if title_match else canonical
-                results.append({
-                    "title": title or canonical,
+                resp = self.session.get(
+                    url,
+                    timeout=max(10.0, cfg.timeout_seconds + 5),
+                )
+                if resp.status_code != 200:
+                    continue
+                records.append({
                     "url": url,
-                    "snippet": "官网/百科直抓兜底结果",
-                    "source": "direct",
+                    "html": resp.text,
+                    "source": "http_fallback",
                 })
             except Exception:
                 continue
-        return results
+        return records
 
-    def _get(self, url: str, params: dict, cfg: WebToolConfig, source: str) -> str:
-        params = {k: v for k, v in params.items() if v}
-        try:
-            resp = self.session.get(url, params=params, timeout=cfg.timeout_seconds)
-        except Exception:
-            self.unavailable_sources.add(source)
-            raise
-        if resp.status_code in (403, 429):
-            self.unavailable_sources.add(source)
-            resp.raise_for_status()
-        resp.raise_for_status()
-        return resp.text
+    @staticmethod
+    def _http_record_context_match(record: dict, entity_terms: list[str]) -> bool:
+        terms = [str(term).strip().lower() for term in entity_terms if str(term).strip()]
+        if not terms:
+            return False
+        text = " ".join([
+            str(record.get("title") or ""),
+            str(record.get("snippet") or ""),
+            str(record.get("url") or ""),
+            (str(record.get("html") or "")[:2000]),
+        ]).lower()
+        hits = sum(1 for term in terms if term in text)
+        return hits >= 2
+
+    @staticmethod
+    def _dedupe_results(results: list[dict]) -> list[dict]:
+        best: dict[str, dict] = {}
+        for item in results:
+            key = _normalize_url(item.get("url", ""))
+            if not key:
+                key = str(item.get("title", "") or "").strip().lower()
+            if not key:
+                continue
+            score = float(
+                item.get("_candidate_score")
+                or item.get("_snippet_score")
+                or item.get("_score")
+                or 0
+            )
+            if item.get("text"):
+                score += 20.0
+            current = best.get(key)
+            current_score = 0.0
+            if current:
+                current_score = float(
+                    current.get("_candidate_score")
+                    or current.get("_snippet_score")
+                    or current.get("_score")
+                    or 0
+                )
+            if current is None or score > current_score:
+                best[key] = item
+        return list(best.values())
 
 
-def _clean_html(fragment: str) -> str:
-    text = re.sub(r"<script.*?</script>|<style.*?</style>", " ", fragment or "", flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r"<[^>]+>", " ", text)
-    return html.unescape(re.sub(r"\s+", " ", text)).strip()
+def _host(url: str) -> str:
+    try:
+        parts = urlsplit(url or "")
+        return (parts.hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _normalize_url(url: str) -> str:
+    try:
+        parts = urlsplit(url or "")
+        host = (parts.hostname or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        query = "&".join(sorted(parts.query.split("&"))) if parts.query else ""
+        return urlunsplit((parts.scheme.lower(), host, (parts.path or "").rstrip("/"), query, ""))
+    except ValueError:
+        return (url or "").strip().lower()
+
+
+def _link_keywords(heads: list[str], entity_terms: list[str]) -> list[str]:
+    excluded = {str(term).lower() for term in entity_terms if str(term).strip()}
+    terms = []
+    for value in heads:
+        for part in re.split(r"[\s,，。；;、/]+", str(value or "")):
+            part = part.strip().lower()
+            if part and len(part) > 1 and part not in excluded:
+                terms.append(part)
+    return list(dict.fromkeys(terms + list(LINK_INTENT_TERMS)))

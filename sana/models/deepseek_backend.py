@@ -1,5 +1,5 @@
-import os
 from sana.models.backend import ModelBackend, ModelResponse
+from sana.models.credentials import get_user_env
 
 class DeepSeekBackend(ModelBackend):
     def __init__(self, api_key: str = "", base_url: str = "https://api.deepseek.com/v1"):
@@ -7,12 +7,15 @@ class DeepSeekBackend(ModelBackend):
         self.base_url = base_url
 
     def _get_key(self):
-        # Always check env var live, so set /p in start.bat takes effect
-        return self._key or os.environ.get("DEEPSEEK_API_KEY", "")
+        # Always check env var live, so start.bat / Streamlit can provide the key at runtime.
+        return self._key or get_user_env("DEEPSEEK_API_KEY")
 
     def chat(self, model_id: str, messages: list[dict], **kwargs) -> ModelResponse:
         from openai import OpenAI
-        client = OpenAI(api_key=self._get_key(), base_url=self.base_url)
+        key = self._get_key()
+        if not key:
+            raise RuntimeError("DEEPSEEK_API_KEY is not set. Start with start.bat or enter the key in the model config panel.")
+        client = OpenAI(api_key=key, base_url=self.base_url)
         params = {"model": model_id or "deepseek-chat", "messages": messages}
         for k in ("temperature", "max_tokens"):
             if k in kwargs:

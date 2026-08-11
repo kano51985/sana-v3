@@ -12,16 +12,23 @@ class WebToolConfig:
     max_injected_results: int = 8
     timeout_seconds: float = 2.5
     total_timeout_seconds: float = 8.0
+    provider_timeout_seconds: float = 8.0
+    rerank_timeout_seconds: float = 8.0
+    web_total_timeout_seconds: float = 40.0
     allow_bing: bool = True
     allow_baidu: bool = True
     allow_direct: bool = True
     allow_bing_rss: bool = True
     allow_duckduckgo: bool = True
+    allow_searxng: bool = False
+    searxng_url: str = ""
+    searxng_timeout_seconds: float = 5.0
     allow_katana: bool = True
     katana_bin: str = "katana"
     katana_max_depth: int = 2
     katana_max_pages: int = 20
     katana_timeout_seconds: float = 5.0
+    katana_total_timeout_seconds: float = 20.0
     katana_concurrency: int = 3
     katana_allowed_domains: list[str] = field(default_factory=list)
     mood_influence: str = "strong"
@@ -53,16 +60,43 @@ class WebToolConfigStore:
             max_injected_results=_as_int(raw.get("max_injected_results"), 8, 1, 10),
             timeout_seconds=_as_float(raw.get("timeout_seconds"), 2.5, 0.5, 10.0),
             total_timeout_seconds=_as_float(raw.get("total_timeout_seconds"), 8.0, 1.0, 20.0),
+            provider_timeout_seconds=_as_float(
+                raw.get("provider_timeout_seconds"),
+                8.0,
+                1.0,
+                30.0,
+            ),
+            rerank_timeout_seconds=_as_float(
+                raw.get("rerank_timeout_seconds"),
+                8.0,
+                1.0,
+                30.0,
+            ),
+            web_total_timeout_seconds=_as_float(
+                raw.get("web_total_timeout_seconds"),
+                40.0,
+                10.0,
+                120.0,
+            ),
             allow_bing=_as_bool(raw.get("allow_bing"), True),
             allow_baidu=_as_bool(raw.get("allow_baidu"), True),
             allow_direct=_as_bool(raw.get("allow_direct"), True),
             allow_bing_rss=_as_bool(raw.get("allow_bing_rss"), True),
             allow_duckduckgo=_as_bool(raw.get("allow_duckduckgo"), True),
+            allow_searxng=_as_bool(raw.get("allow_searxng"), False),
+            searxng_url=_as_str(raw.get("searxng_url"), ""),
+            searxng_timeout_seconds=_as_float(raw.get("searxng_timeout_seconds"), 5.0, 1.0, 30.0),
             allow_katana=_as_bool(raw.get("allow_katana"), True),
             katana_bin=_as_str(raw.get("katana_bin"), "katana"),
             katana_max_depth=_as_int(raw.get("katana_max_depth"), 2, 1, 10),
             katana_max_pages=_as_int(raw.get("katana_max_pages"), 20, 1, 200),
             katana_timeout_seconds=_as_float(raw.get("katana_timeout_seconds"), 5.0, 1.0, 30.0),
+            katana_total_timeout_seconds=_as_float(
+                raw.get("katana_total_timeout_seconds"),
+                20.0,
+                5.0,
+                60.0,
+            ),
             katana_concurrency=_as_int(raw.get("katana_concurrency"), 3, 1, 20),
             katana_allowed_domains=_as_str_list(raw.get("katana_allowed_domains")),
             mood_influence=raw.get("mood_influence", "strong"),

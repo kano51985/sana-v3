@@ -12,11 +12,17 @@ from sana.services.web_tool_policy import WebToolPolicy
 from sana.services.web_alias_store import WebAliasStore
 from sana.services.entity_resolver import EntityResolver
 from sana.services.web_query_planner import WebQueryPlanner
+from sana.services.llm_query_refiner import LLMQueryRefiner
 from sana.services.web_search_service import WebSearchService
+from sana.services.entity_context_builder import EntityContextBuilder
+from sana.services.llm_entity_context_extractor import LLMEntityContextExtractor
+from sana.services.llm_official_source_judge import LLMOfficialSourceJudge
+from sana.services.official_source_learner import OfficialSourceLearner
 from sana.services.retrieval_scorer import RetrievalScorer
 from sana.services.tool_registry import ToolRegistry
 from sana.services.tool_intent_detector import ToolIntentDetector
 from sana.services.result_verifier import ToolResultVerifier
+from sana.services.result_reranker import ResultReranker
 from sana.nodes.input_node import InputNode
 from sana.nodes.perception_node import PerceptionNode
 from sana.nodes.alma_node import ALMANode
@@ -59,12 +65,18 @@ class SanaAgent:
         self.web_policy = WebToolPolicy(self.web_config_store)
         self.web_alias_store = WebAliasStore(os.path.join(base_dir, "sana", "data", "web_aliases.json"))
         self.entity_resolver = EntityResolver(self.web_alias_store)
-        self.web_planner = WebQueryPlanner()
-        self.web_search_service = WebSearchService(self.web_config_store)
+        self.web_planner = WebQueryPlanner(query_refiner=LLMQueryRefiner())
+        self.web_search_service = WebSearchService(
+            self.web_config_store,
+            official_learner=OfficialSourceLearner(
+                judge=LLMOfficialSourceJudge()
+            ),
+        )
         self.retrieval_scorer = RetrievalScorer()
         self.tool_registry = ToolRegistry()
         self.tool_intent_detector = ToolIntentDetector(tool_registry=self.tool_registry)
         self.result_verifier = ToolResultVerifier()
+        self.result_reranker = ResultReranker()
         self.last_web_trace: dict = {}
         self.consolidation_node = ConsolidationNode(
             self.summarizer, self.raw_db, self.memory, self.profile_mgr
@@ -104,6 +116,10 @@ class SanaAgent:
                 search_service=self.web_search_service,
                 scorer=self.retrieval_scorer,
                 verifier=self.result_verifier,
+                reranker=self.result_reranker,
+                entity_context_builder=EntityContextBuilder(
+                    llm_extractor=LLMEntityContextExtractor()
+                ),
             ))
             .register("format_check", FormatCheckerNode())
             .register("response_parser", ResponseParserNode())
