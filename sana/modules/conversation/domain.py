@@ -5,14 +5,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+import hashlib
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sana.modules.orchestration.domain import RoutingDecision, SearchRun
+from sana.modules.orchestration.domain import (
+    ArtifactRef,
+    RoutingDecision,
+    SearchMode,
+    SearchRun,
+    SearchStep,
+    StepType,
+)
+from sana.modules.orchestration.outbox import OutboxMessage
 from sana.modules.orchestration.policy import SearchPolicy
 from sana.modules.shared.clock import Clock
 from sana.modules.shared.errors import InvariantViolation
-from sana.modules.shared.ids import IdFactory
+from sana.modules.shared.ids import IdFactory, TraceContext
 
 if TYPE_CHECKING:
     from sana.modules.conversation.ports import ConversationUnitOfWorkFactory
@@ -63,6 +72,7 @@ class SubmitMessageCommand:
     content: str
     idempotency_key: str
     routing: RoutingDecision
+    trace_context: TraceContext
 
     def __post_init__(self) -> None:
         if not self.content.strip():
@@ -121,6 +131,8 @@ class ConversationService:
             message_id = self._ids.new_uuid()
             response_run_id = self._ids.new_uuid()
             search_run_id = self._ids.new_uuid()
+            step_id = self._ids.new_uuid()
+            outbox_id = self._ids.new_uuid()
             message = MessageDraft(
                 id=message_id,
                 tenant_id=command.tenant_id,
@@ -148,10 +160,42 @@ class ConversationService:
                 routing=command.routing,
                 budget=self._policy.snapshot(command.routing.mode, created_at),
             )
+            content_hash = hashlib.sha256(message.content.encode("utf-8")).hexdigest()
+            route_step = SearchStep(
+                id=step_id,
+                tenant_id=command.tenant_id,
+                run_id=search_run_id,
+                step_key="route",
+                step_type=StepType.ROUTE,
+                plan_revision=1,
+                input_ref=ArtifactRef(
+                    uri=f"db://messages/{message_id}",
+                    sha256=content_hash,
+                ),
+            )
+            event_type = (
+                "STEP_READY_FAST"
+                if command.routing.mode is SearchMode.FAST
+                else "STEP_READY_RESEARCH"
+            )
+            outbox_message = OutboxMessage(
+                id=outbox_id,
+                tenant_id=command.tenant_id,
+                aggregate_type="search_step",
+                aggregate_id=step_id,
+                event_type=event_type,
+                payload={"step_id": str(step_id)},
+                trace_context=command.trace_context,
+                dedupe_key=f"step-ready:{step_id}",
+                available_at=created_at,
+                created_at=created_at,
+            )
 
             await uow.conversations.add_message(message)
             await uow.response_runs.add(response_run)
             await uow.runs.add(search_run)
+            await uow.steps.add(route_step)
+            await uow.outbox.add(outbox_message)
             await uow.commit()
             return SubmissionReceipt(
                 message_id,

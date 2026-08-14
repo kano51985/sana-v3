@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select, update
+from datetime import datetime
+
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sana.modules.conversation.domain import (
@@ -12,15 +14,28 @@ from sana.modules.conversation.domain import (
     ResponseRunDraft,
     SubmissionReceipt,
 )
-from sana.modules.orchestration.domain import SearchRun
+from sana.modules.orchestration.domain import SearchRun, SearchStep, StepAttempt
+from sana.modules.orchestration.outbox import (
+    OutboxMessage,
+    PendingOutboxMessage,
+    trace_context_from_dict,
+    trace_context_to_dict,
+)
 from sana.modules.orchestration.repository import (
+    artifact_to_dict,
     budget_to_dict,
     run_from_record,
+    step_from_record,
     usage_to_dict,
 )
 from sana.modules.shared.errors import InvariantViolation
 from sana.platform.db.models.conversation import Conversation, Message, ResponseRun
-from sana.platform.db.models.orchestration import SearchRunRecord
+from sana.platform.db.models.orchestration import (
+    OutboxEvent,
+    SearchRunRecord,
+    SearchStepRecord,
+    StepAttemptRecord,
+)
 
 
 class SqlConversationRepository:
@@ -205,3 +220,221 @@ class SqlRunRepository:
                 code="optimistic_lock_failed",
             )
         run.mark_persisted()
+
+
+class SqlStepRepository:
+    def __init__(self, session: AsyncSession, tenant_id: UUID) -> None:
+        self._session = session
+        self._tenant_id = tenant_id
+
+    def _assert_tenant(self, tenant_id: UUID) -> None:
+        if tenant_id != self._tenant_id:
+            raise InvariantViolation(
+                "Repository cannot cross its tenant scope",
+                code="tenant_scope_mismatch",
+            )
+
+    async def get(self, tenant_id: UUID, step_id: UUID) -> SearchStep | None:
+        self._assert_tenant(tenant_id)
+        statement = select(SearchStepRecord).where(
+            SearchStepRecord.tenant_id == tenant_id,
+            SearchStepRecord.id == step_id,
+        )
+        record = await self._session.scalar(statement)
+        return step_from_record(record) if record is not None else None
+
+    async def add(self, step: SearchStep) -> None:
+        self._assert_tenant(step.tenant_id)
+        self._session.add(
+            SearchStepRecord(
+                id=step.id,
+                tenant_id=step.tenant_id,
+                run_id=step.run_id,
+                step_key=step.step_key,
+                step_type=step.step_type.value,
+                plan_revision=step.plan_revision,
+                status=step.status.value,
+                input_ref=artifact_to_dict(step.input_ref),
+                output_ref=(
+                    artifact_to_dict(step.output_ref)
+                    if step.output_ref is not None
+                    else None
+                ),
+                retry_at=step.retry_at,
+                version=step.version,
+            )
+        )
+
+    async def save(self, step: SearchStep) -> None:
+        self._assert_tenant(step.tenant_id)
+        statement = (
+            update(SearchStepRecord)
+            .where(
+                SearchStepRecord.tenant_id == step.tenant_id,
+                SearchStepRecord.id == step.id,
+                SearchStepRecord.version == step.persisted_version,
+            )
+            .values(
+                status=step.status.value,
+                output_ref=(
+                    artifact_to_dict(step.output_ref)
+                    if step.output_ref is not None
+                    else None
+                ),
+                retry_at=step.retry_at,
+                version=step.version,
+            )
+        )
+        result = await self._session.execute(statement)
+        if result.rowcount != 1:
+            raise InvariantViolation(
+                "Search step was modified concurrently",
+                code="optimistic_lock_failed",
+            )
+        step.mark_persisted()
+
+
+class SqlOutboxRepository:
+    def __init__(self, session: AsyncSession, tenant_id: UUID) -> None:
+        self._session = session
+        self._tenant_id = tenant_id
+
+    def _assert_tenant(self, tenant_id: UUID) -> None:
+        if tenant_id != self._tenant_id:
+            raise InvariantViolation(
+                "Repository cannot cross its tenant scope",
+                code="tenant_scope_mismatch",
+            )
+
+    async def add(self, message: OutboxMessage) -> None:
+        self._assert_tenant(message.tenant_id)
+        self._session.add(
+            OutboxEvent(
+                id=message.id,
+                tenant_id=message.tenant_id,
+                aggregate_type=message.aggregate_type,
+                aggregate_id=message.aggregate_id,
+                event_type=message.event_type,
+                payload=dict(message.payload),
+                trace_context=trace_context_to_dict(message.trace_context),
+                dedupe_key=message.dedupe_key,
+                available_at=message.available_at,
+                created_at=message.created_at,
+                publish_attempts=0,
+            )
+        )
+
+    async def claim_unpublished(
+        self,
+        now: datetime,
+        limit: int,
+    ) -> list[PendingOutboxMessage]:
+        statement = (
+            select(OutboxEvent)
+            .where(
+                OutboxEvent.tenant_id == self._tenant_id,
+                OutboxEvent.published_at.is_(None),
+                OutboxEvent.available_at <= now,
+            )
+            .order_by(OutboxEvent.created_at)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        records = (await self._session.scalars(statement)).all()
+        return [
+            PendingOutboxMessage(
+                OutboxMessage(
+                    id=record.id,
+                    tenant_id=record.tenant_id,
+                    aggregate_type=record.aggregate_type,
+                    aggregate_id=record.aggregate_id,
+                    event_type=record.event_type,
+                    payload=dict(record.payload),
+                    trace_context=trace_context_from_dict(record.trace_context),
+                    dedupe_key=record.dedupe_key,
+                    available_at=record.available_at,
+                    created_at=record.created_at,
+                ),
+                publish_attempts=record.publish_attempts,
+            )
+            for record in records
+        ]
+
+    async def mark_published(self, message_id: UUID, published_at: datetime) -> None:
+        await self._session.execute(
+            update(OutboxEvent)
+            .where(
+                OutboxEvent.tenant_id == self._tenant_id,
+                OutboxEvent.id == message_id,
+                OutboxEvent.published_at.is_(None),
+            )
+            .values(
+                published_at=published_at,
+                publish_attempts=OutboxEvent.publish_attempts + 1,
+                last_error=None,
+            )
+        )
+
+    async def mark_failed(self, message_id: UUID, error: str) -> None:
+        await self._session.execute(
+            update(OutboxEvent)
+            .where(
+                OutboxEvent.tenant_id == self._tenant_id,
+                OutboxEvent.id == message_id,
+                OutboxEvent.published_at.is_(None),
+            )
+            .values(
+                publish_attempts=OutboxEvent.publish_attempts + 1,
+                last_error=error[:2000],
+            )
+        )
+
+
+class SqlAttemptRepository:
+    def __init__(self, session: AsyncSession, tenant_id: UUID) -> None:
+        self._session = session
+        self._tenant_id = tenant_id
+
+    def _assert_tenant(self, tenant_id: UUID) -> None:
+        if tenant_id != self._tenant_id:
+            raise InvariantViolation(
+                "Repository cannot cross its tenant scope",
+                code="tenant_scope_mismatch",
+            )
+
+    async def add(self, attempt: StepAttempt) -> None:
+        self._assert_tenant(attempt.tenant_id)
+        self._session.add(
+            StepAttemptRecord(
+                id=attempt.id,
+                tenant_id=attempt.tenant_id,
+                run_id=attempt.run_id,
+                step_id=attempt.step_id,
+                attempt_no=attempt.attempt_no,
+                idempotency_key=attempt.idempotency_key,
+                lease_owner=attempt.lease_owner,
+                leased_until=attempt.leased_until,
+                deadline_at=attempt.deadline_at,
+                started_at=attempt.started_at,
+                completed_at=attempt.completed_at,
+                error_type=attempt.error.category.value if attempt.error else None,
+                error_code=attempt.error.code if attempt.error else None,
+                error_details=attempt.error.to_dict() if attempt.error else None,
+                input_ref=artifact_to_dict(attempt.input_ref),
+                output_ref=(
+                    artifact_to_dict(attempt.output_ref)
+                    if attempt.output_ref is not None
+                    else None
+                ),
+            )
+        )
+
+    async def next_attempt_no(self, tenant_id: UUID, step_id: UUID) -> int:
+        self._assert_tenant(tenant_id)
+        statement = select(
+            func.coalesce(func.max(StepAttemptRecord.attempt_no), 0) + 1
+        ).where(
+            StepAttemptRecord.tenant_id == tenant_id,
+            StepAttemptRecord.step_id == step_id,
+        )
+        return int(await self._session.scalar(statement))

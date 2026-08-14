@@ -9,9 +9,12 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from sana.platform.db.repositories import (
+    SqlAttemptRepository,
     SqlConversationRepository,
+    SqlOutboxRepository,
     SqlResponseRunRepository,
     SqlRunRepository,
+    SqlStepRepository,
 )
 
 
@@ -45,6 +48,9 @@ class TenantUnitOfWork:
         self.conversations = SqlConversationRepository(self._session, self.tenant_id)
         self.response_runs = SqlResponseRunRepository(self._session, self.tenant_id)
         self.runs = SqlRunRepository(self._session, self.tenant_id)
+        self.steps = SqlStepRepository(self._session, self.tenant_id)
+        self.outbox = SqlOutboxRepository(self._session, self.tenant_id)
+        self.attempts = SqlAttemptRepository(self._session, self.tenant_id)
         return self
 
     async def commit(self) -> None:

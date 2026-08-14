@@ -11,6 +11,8 @@ from sana.modules.conversation.domain import (
     SubmissionReceipt,
 )
 from sana.modules.orchestration.ports import RunRepository
+from sana.modules.orchestration.ports import StepRepository
+from sana.modules.orchestration.outbox import OutboxRepository
 
 
 class ConversationRepository(Protocol):
@@ -39,6 +41,8 @@ class ConversationUnitOfWork(Protocol):
     conversations: ConversationRepository
     response_runs: ResponseRunRepository
     runs: RunRepository
+    steps: StepRepository
+    outbox: OutboxRepository
 
     async def __aenter__(self) -> "ConversationUnitOfWork": ...
 

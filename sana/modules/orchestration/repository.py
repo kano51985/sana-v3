@@ -13,7 +13,11 @@ from sana.modules.orchestration.domain import (
     RunStatus,
     SearchMode,
     SearchRun,
+    SearchStep,
+    StepStatus,
+    StepType,
     StopReason,
+    ArtifactRef,
 )
 
 
@@ -98,5 +102,33 @@ def run_from_record(record: Any) -> SearchRun:
         usage=usage_from_dict(dict(record.usage_snapshot)),
         started_at=record.started_at,
         completed_at=record.completed_at,
+        version=record.version,
+    )
+
+
+def artifact_to_dict(artifact: ArtifactRef) -> dict[str, str]:
+    return {"uri": artifact.uri, "sha256": artifact.sha256}
+
+
+def artifact_from_dict(payload: dict[str, Any]) -> ArtifactRef:
+    return ArtifactRef(uri=str(payload["uri"]), sha256=str(payload["sha256"]))
+
+
+def step_from_record(record: Any) -> SearchStep:
+    return SearchStep.rehydrate(
+        id=record.id,
+        tenant_id=record.tenant_id,
+        run_id=record.run_id,
+        step_key=record.step_key,
+        step_type=StepType(record.step_type),
+        plan_revision=record.plan_revision,
+        input_ref=artifact_from_dict(dict(record.input_ref)),
+        status=StepStatus(record.status),
+        output_ref=(
+            artifact_from_dict(dict(record.output_ref))
+            if record.output_ref is not None
+            else None
+        ),
+        retry_at=record.retry_at,
         version=record.version,
     )

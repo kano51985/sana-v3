@@ -57,6 +57,18 @@ class StepStatus(StrEnum):
     CANCELLED = "CANCELLED"
 
 
+class StepType(StrEnum):
+    ROUTE = "ROUTE"
+    PLAN = "PLAN"
+    DISCOVERY = "DISCOVERY"
+    SELECT = "SELECT"
+    FETCH = "FETCH"
+    EXTRACT = "EXTRACT"
+    VERIFY = "VERIFY"
+    SYNTHESIZE = "SYNTHESIZE"
+    COMPLETE = "COMPLETE"
+
+
 _RUN_TRANSITIONS: Mapping[RunStatus, frozenset[RunStatus]] = {
     RunStatus.QUEUED: frozenset(
         {RunStatus.RUNNING, RunStatus.FAILED, RunStatus.CANCELLED}
@@ -423,18 +435,56 @@ class SearchStep:
     tenant_id: UUID
     run_id: UUID
     step_key: str
+    step_type: StepType
     plan_revision: int
     input_ref: ArtifactRef
     _status: StepStatus = field(default=StepStatus.READY, init=False, repr=False)
     _output_ref: ArtifactRef | None = field(default=None, init=False, repr=False)
     retry_at: datetime | None = None
     version: int = 0
+    _persisted_version: int = field(default=0, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not self.step_key.strip():
             raise ValueError("step_key cannot be empty")
         if self.plan_revision < 1:
             raise ValueError("plan_revision must be at least 1")
+
+    @classmethod
+    def rehydrate(
+        cls,
+        *,
+        id: UUID,
+        tenant_id: UUID,
+        run_id: UUID,
+        step_key: str,
+        step_type: StepType,
+        plan_revision: int,
+        input_ref: ArtifactRef,
+        status: StepStatus,
+        output_ref: ArtifactRef | None,
+        retry_at: datetime | None,
+        version: int,
+    ) -> "SearchStep":
+        step = cls(
+            id=id,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            step_key=step_key,
+            step_type=step_type,
+            plan_revision=plan_revision,
+            input_ref=input_ref,
+            retry_at=retry_at,
+            version=version,
+        )
+        step._status = StepStatus(status)
+        step._output_ref = output_ref
+        step._persisted_version = version
+        if step.status is StepStatus.SUCCEEDED and step.output_ref is None:
+            raise InvariantViolation("Persisted successful step has no output")
+        if step.status is not StepStatus.SUCCEEDED and step.output_ref is not None:
+            raise InvariantViolation("Only a successful step may have an output")
+        return step
 
     @property
     def identity_key(self) -> tuple[UUID, int, str]:
@@ -457,6 +507,13 @@ class SearchStep:
     @property
     def output_ref(self) -> ArtifactRef | None:
         return self._output_ref
+
+    @property
+    def persisted_version(self) -> int:
+        return self._persisted_version
+
+    def mark_persisted(self) -> None:
+        self._persisted_version = self.version
 
     def start(self) -> None:
         self._transition(StepStatus.RUNNING)
@@ -540,6 +597,16 @@ class StepAttempt:
     def lease_expired(self, at: datetime) -> bool:
         _require_aware(at, "lease_check_at")
         return not self.is_complete and at >= self.leased_until
+
+    def renew_lease(self, leased_until: datetime) -> None:
+        _require_aware(leased_until, "leased_until")
+        if self.is_complete:
+            raise InvariantViolation("Cannot renew a completed attempt lease")
+        if leased_until <= self.leased_until:
+            raise InvariantViolation("Renewed lease must extend the current lease")
+        if leased_until > self.deadline_at:
+            raise InvariantViolation("Attempt lease cannot extend beyond its deadline")
+        self.leased_until = leased_until
 
     def _finish(self, at: datetime) -> None:
         _require_aware(at, "completed_at")

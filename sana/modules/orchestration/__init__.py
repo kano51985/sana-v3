@@ -12,6 +12,7 @@ from sana.modules.orchestration.domain import (
     SearchStep,
     StepAttempt,
     StepStatus,
+    StepType,
     StopReason,
 )
 from sana.modules.orchestration.policy import BudgetGuard, BudgetPhase, SearchPolicy
@@ -31,5 +32,6 @@ __all__ = [
     "SearchStep",
     "StepAttempt",
     "StepStatus",
+    "StepType",
     "StopReason",
 ]

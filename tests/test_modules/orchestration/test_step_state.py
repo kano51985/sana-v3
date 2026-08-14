@@ -3,7 +3,13 @@ from uuid import uuid4
 
 import pytest
 
-from sana.modules.orchestration.domain import ArtifactRef, SearchStep, StepAttempt, StepStatus
+from sana.modules.orchestration.domain import (
+    ArtifactRef,
+    SearchStep,
+    StepAttempt,
+    StepStatus,
+    StepType,
+)
 from sana.modules.shared.errors import ErrorCategory, InvariantViolation, TypedError
 
 
@@ -13,7 +19,15 @@ OUTPUT = ArtifactRef("artifact://output", "b" * 64)
 
 
 def make_step() -> SearchStep:
-    return SearchStep(uuid4(), uuid4(), uuid4(), "fetch:source-1", 1, INPUT)
+    return SearchStep(
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        "fetch:source-1",
+        StepType.FETCH,
+        1,
+        INPUT,
+    )
 
 
 def test_step_identity_is_stable_across_retry() -> None:

@@ -14,7 +14,7 @@ from sana.modules.orchestration.domain import RoutingDecision, SearchMode
 from sana.modules.orchestration.policy import SearchPolicy
 from sana.modules.shared.clock import FrozenClock
 from sana.modules.shared.errors import InvariantViolation
-from sana.modules.shared.ids import DeterministicIdFactory
+from sana.modules.shared.ids import DeterministicIdFactory, TraceContext
 
 
 NOW = datetime(2026, 8, 14, tzinfo=timezone.utc)
@@ -55,6 +55,8 @@ class FakeUnitOfWork:
         self.conversations = conversations
         self.response_runs = CollectingRepository()
         self.runs = CollectingRepository()
+        self.steps = CollectingRepository()
+        self.outbox = CollectingRepository()
         self.committed = False
         self.rolled_back = False
 
@@ -94,6 +96,7 @@ def make_service(owned: bool = True):
             policy.version,
             0.95,
         ),
+        trace_context=TraceContext.create(DeterministicIdFactory("request-trace")),
     )
     return service, command, uow
 
@@ -108,10 +111,13 @@ async def test_message_and_both_runs_commit_in_one_unit_of_work() -> None:
     assert len(uow.conversations.messages) == 1
     assert len(uow.response_runs.values) == 1
     assert len(uow.runs.values) == 1
+    assert len(uow.steps.values) == 1
+    assert len(uow.outbox.values) == 1
     run = uow.runs.values[0]
     assert run.message_id == receipt.message_id
     assert run.response_run_id == receipt.response_run_id
     assert run.tenant_id == command.tenant_id
+    assert uow.outbox.values[0].payload == {"step_id": str(uow.steps.values[0].id)}
 
 
 @pytest.mark.asyncio
