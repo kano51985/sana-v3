@@ -42,6 +42,10 @@ _DIAGNOSTIC_VALUE_KEYS = frozenset(
         "cost_usd",
         "upgraded",
         "plan_revision",
+        "covered_facts",
+        "total_facts",
+        "citation_traceability",
+        "query_pollution_count",
     }
 )
 
@@ -127,12 +131,12 @@ class TelemetryRedactor:
             result: dict[str, Any] = {}
             for raw_key, item in value.items():
                 key = str(raw_key)[:128]
-                if _SENSITIVE_KEY.search(key):
-                    result[key] = "[REDACTED]"
-                elif key not in _DIAGNOSTIC_CONTAINER_KEYS | _DIAGNOSTIC_VALUE_KEYS:
+                if key in _DIAGNOSTIC_CONTAINER_KEYS | _DIAGNOSTIC_VALUE_KEYS:
+                    result[key] = self.diagnostic_payload(item, depth=depth + 1)
+                elif _SENSITIVE_KEY.search(key):
                     result[key] = "[REDACTED]"
                 else:
-                    result[key] = self.diagnostic_payload(item, depth=depth + 1)
+                    result[key] = "[REDACTED]"
             return result
         if isinstance(value, (list, tuple)):
             return [self.diagnostic_payload(item, depth=depth + 1) for item in value[:50]]
