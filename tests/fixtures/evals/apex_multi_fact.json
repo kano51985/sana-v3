@@ -1,0 +1,46 @@
+{
+  "user_message": "sana！我好久没碰apex啦，你不是一直在玩吗，可以告诉我最近狗子的相关改动，当前是什么版本和当前版本你觉得最好用的配队吗？",
+  "entity": "Apex Legends",
+  "aliases": ["apex", "APEX", "Apex英雄"],
+  "locale": "zh-CN",
+  "expected_mode": "RESEARCH",
+  "facts": [
+    {
+      "key": "bloodhound_changes",
+      "fact_type": "character_changes",
+      "description": "获取寻血猎犬最近的角色改动",
+      "subject": "寻血猎犬",
+      "freshness": "RECENT",
+      "preferred_source_kinds": ["official_patch"]
+    },
+    {
+      "key": "current_version",
+      "fact_type": "version",
+      "description": "获取当前版本和赛季",
+      "subject": "Apex Legends",
+      "freshness": "CURRENT",
+      "preferred_source_kinds": ["official_patch"]
+    },
+    {
+      "key": "patch_notes",
+      "fact_type": "patch_notes",
+      "description": "获取对应版本的官方补丁说明",
+      "subject": "Apex Legends",
+      "freshness": "CURRENT",
+      "preferred_source_kinds": ["official_patch"]
+    },
+    {
+      "key": "team_meta",
+      "fact_type": "team_meta",
+      "description": "获取当前版本适合寻血猎犬的强势配队",
+      "subject": "寻血猎犬",
+      "freshness": "CURRENT",
+      "preferred_source_kinds": ["guide"]
+    }
+  ],
+  "forbidden_query_fragments": [
+    "sana！我好久没碰apex啦",
+    "你不是一直在玩吗",
+    "可以告诉我"
+  ]
+}
