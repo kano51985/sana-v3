@@ -12,7 +12,7 @@ PostgreSQL 是 Run、Step、Attempt、证据与记忆的唯一事实源。Redis 
 
 | 变量 | 用途 | 本地默认值 |
 | --- | --- | --- |
-| `SANA_DATABASE_URL` | PostgreSQL async SQLAlchemy URL | `postgresql+asyncpg://sana:sana@localhost:5432/sana` |
+| `SANA_DATABASE_URL` | 无 RLS 绕过权限的 PostgreSQL 应用 URL | `postgresql+asyncpg://sana_app:sana-app@localhost:5432/sana` |
 | `SANA_REDIS_URL` | SSE Redis Stream | `redis://localhost:6379/1` |
 | `SANA_CELERY_BROKER_URL` | Celery broker | `redis://localhost:6379/0` |
 | `SANA_API_URL` | Streamlit 访问的 API 地址 | `http://localhost:8000` |
@@ -37,7 +37,11 @@ $env:SANA_STEP_HANDLER_FACTORY = "your_package.worker:create_handler"
 
 `bootstrap_dev` 只允许在本地开发认证模式运行，会幂等创建开发租户与用户并打印临时 Bearer token。OIDC 用户与租户必须由正式身份供应流程预配，不使用该命令。
 
-可以用 `-SkipMigrations` 禁止 API 入口自动迁移；生产建议由独立发布作业执行 `python -m alembic upgrade head`，成功后再滚动 API。
+可以用 `-SkipMigrations` 禁止 API 入口自动迁移；生产建议由独立发布作业执行 `alembic upgrade head`，成功后再滚动 API。不要在项目根目录使用 `python -m alembic`，因为仓库内的同名迁移目录会遮蔽已安装的 Alembic 包。
+
+数据库迁移使用对象所有者 `sana`，运行时服务使用无 `SUPERUSER`、无 `BYPASSRLS` 的 `sana_app`。Compose 会先运行幂等的 `provision-db-role` 作业，再执行迁移；不要把管理角色的连接串传给 API、dispatcher 或 worker，否则 PostgreSQL 超级用户会绕过 RLS。非本地环境必须覆盖 `POSTGRES_PASSWORD` 与 `POSTGRES_APP_PASSWORD`。
+
+容器运行时不安装旧版 ChromaDB/MongoDB 适配器。执行旧界面回滚时安装 `.[legacy]`，执行记忆导入时安装 `.[migration]`；两类工具都不应进入 API/Worker 的生产镜像。Dockerfile 先安装独立的运行依赖层，再复制源码，因此普通代码变更不会重新下载全部 wheel。可通过构建参数 `PIP_INDEX_URL` 临时选择组织批准的软件源。
 
 ## Docker Compose
 
@@ -109,7 +113,7 @@ API/Worker 回滚必须先停止新流量，再停止 Dispatcher，等待运行�
 
 1. 已提供 `DurableStepExecutor`、PostgreSQL lease/Attempt finalization 与重试边界，但尚无生产 completion coordinator/`SANA_STEP_HANDLER_FACTORY` 将真实 planner、provider、fetch、extract、verify、synthesize 全部装配并生成后继 Step。
 2. 已提供带 tenant/hash 校验的本地共享卷 artifact adapter；多主机 Worker 上线前仍需接入 S3/MinIO 或经过验证的共享文件系统，不能让每台 Worker 使用独立本地目录。
-3. 当前机器没有可用 PostgreSQL，所以新 Reconciler、RLS、迁移、真实多用户、Worker crash 和记忆正式导入未在本机执行；Redis 服务可用不代表这些验收通过。
+3. 本机 Docker 已验证迁移、非绕过应用角色、RLS、双租户 API、Outbox 发布及 Redis 清空后的 READY Step 重投；尚未验证配置真实 handler 后的 Worker crash/lease 恢复，也尚未执行记忆正式导入与召回抽样。
 4. 生产 OIDC tenant/user provisioning 仍需外部身份管理流程。
 
 这些阻断项必须通过实现和真实集成环境证据关闭，不能通过降低就绪条件或改文档绕过。

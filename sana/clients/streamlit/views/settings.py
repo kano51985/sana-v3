@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import streamlit as st
 
 from sana.clients.streamlit.api_client import SanaAPIError
@@ -32,7 +34,10 @@ if scope == "用户设置":
 
     with st.container(border=True):
         st.subheader("API 连接")
-        st.text(get_value(st.session_state, "api_url"))
+        if os.environ.get("SANA_API_URL", "").strip():
+            st.text("由部署环境管理")
+        else:
+            st.text(get_value(st.session_state, "api_url"))
         if st.button("检查连接", icon=":material/network_check:"):
             try:
                 build_api_client(st.session_state).authenticate()

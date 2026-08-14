@@ -24,6 +24,16 @@ async def test_pool_connection_cannot_retain_or_cross_tenant_context() -> None:
         async with engine.connect() as connection:
             transaction = await connection.begin()
             try:
+                role_capabilities = (
+                    await connection.execute(
+                        text(
+                            "SELECT rolsuper, rolbypassrls FROM pg_roles "
+                            "WHERE rolname = current_user"
+                        )
+                    )
+                ).one()
+                assert role_capabilities == (False, False)
+
                 await connection.execute(
                     text(
                         "INSERT INTO tenants (id, slug, name, status) "

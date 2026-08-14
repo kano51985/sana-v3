@@ -24,9 +24,10 @@ st.set_page_config(
     page_icon=":material/neurology:",
     layout="wide",
 )
+managed_api_url = os.environ.get("SANA_API_URL", "").strip()
 initialize_session(
     st.session_state,
-    default_api_url=os.environ.get("SANA_API_URL", "http://localhost:8000"),
+    default_api_url=managed_api_url or "http://localhost:8000",
 )
 
 
@@ -39,11 +40,20 @@ if not is_authenticated(st.session_state):
     login_column = st.columns([1, 1.25, 1])[1]
     with login_column.container(border=True):
         with st.form("sana_login"):
-            api_url = st.text_input(
-                "API 地址",
-                value=get_value(st.session_state, "api_url"),
-                placeholder="http://localhost:8000",
-            )
+            if managed_api_url:
+                st.text_input(
+                    "API 地址",
+                    value="由部署环境管理",
+                    disabled=True,
+                    help="此部署已锁定服务端 API 连接，用户无需配置。",
+                )
+                api_url = managed_api_url
+            else:
+                api_url = st.text_input(
+                    "API 地址",
+                    value=get_value(st.session_state, "api_url"),
+                    placeholder="http://localhost:8000",
+                )
             access_token = st.text_input(
                 "访问令牌",
                 type="password",

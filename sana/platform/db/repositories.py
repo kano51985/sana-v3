@@ -121,6 +121,11 @@ class SqlConversationRepository:
                 created_at=message.created_at,
             )
         )
+        # These records are intentionally mapped without ORM relationships.
+        # Flush each aggregate parent before repositories stage its dependants,
+        # otherwise SQLAlchemy has no unit-of-work relationship edge from which
+        # to derive a safe INSERT order.
+        await self._session.flush()
 
 
 class SqlResponseRunRepository:
@@ -145,6 +150,7 @@ class SqlResponseRunRepository:
                 updated_at=response_run.created_at,
             )
         )
+        await self._session.flush()
 
 
 class SqlRunRepository:
@@ -211,6 +217,7 @@ class SqlRunRepository:
                 version=run.version,
             )
         )
+        await self._session.flush()
 
     async def save(self, run: SearchRun) -> None:
         self._assert_tenant(run.tenant_id)
