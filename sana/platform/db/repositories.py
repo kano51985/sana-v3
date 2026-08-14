@@ -269,6 +269,23 @@ class SqlStepRepository:
         record = await self._session.scalar(statement)
         return step_from_record(record) if record is not None else None
 
+    async def get_for_update(
+        self,
+        tenant_id: UUID,
+        step_id: UUID,
+    ) -> SearchStep | None:
+        self._assert_tenant(tenant_id)
+        statement = (
+            select(SearchStepRecord)
+            .where(
+                SearchStepRecord.tenant_id == tenant_id,
+                SearchStepRecord.id == step_id,
+            )
+            .with_for_update()
+        )
+        record = await self._session.scalar(statement)
+        return step_from_record(record) if record is not None else None
+
     async def add(self, step: SearchStep) -> None:
         self._assert_tenant(step.tenant_id)
         self._session.add(
@@ -464,6 +481,67 @@ class SqlAttemptRepository:
             StepAttemptRecord.step_id == step_id,
         )
         return int(await self._session.scalar(statement))
+
+    async def complete(self, attempt: StepAttempt) -> None:
+        self._assert_tenant(attempt.tenant_id)
+        if not attempt.is_complete:
+            raise InvariantViolation(
+                "Cannot persist an incomplete attempt as completed",
+                code="attempt_not_complete",
+            )
+        result = await self._session.execute(
+            update(StepAttemptRecord)
+            .where(
+                StepAttemptRecord.tenant_id == attempt.tenant_id,
+                StepAttemptRecord.id == attempt.id,
+                StepAttemptRecord.completed_at.is_(None),
+            )
+            .values(
+                leased_until=attempt.leased_until,
+                completed_at=attempt.completed_at,
+                error_type=(
+                    attempt.error.category.value if attempt.error else None
+                ),
+                error_code=attempt.error.code if attempt.error else None,
+                error_details=(
+                    attempt.error.to_dict() if attempt.error else None
+                ),
+                output_ref=(
+                    artifact_to_dict(attempt.output_ref)
+                    if attempt.output_ref is not None
+                    else None
+                ),
+            )
+        )
+        if result.rowcount != 1:
+            raise InvariantViolation(
+                "Attempt was already finalized or does not exist",
+                code="attempt_finalize_conflict",
+            )
+
+    async def renew(self, attempt: StepAttempt) -> None:
+        self._assert_tenant(attempt.tenant_id)
+        if attempt.is_complete:
+            raise InvariantViolation(
+                "Cannot renew a completed attempt",
+                code="attempt_already_complete",
+            )
+        result = await self._session.execute(
+            update(StepAttemptRecord)
+            .where(
+                StepAttemptRecord.tenant_id == attempt.tenant_id,
+                StepAttemptRecord.id == attempt.id,
+                StepAttemptRecord.lease_owner == attempt.lease_owner,
+                StepAttemptRecord.completed_at.is_(None),
+                StepAttemptRecord.leased_until < attempt.leased_until,
+            )
+            .values(leased_until=attempt.leased_until)
+        )
+        if result.rowcount != 1:
+            raise InvariantViolation(
+                "Attempt lease could not be renewed",
+                code="attempt_lease_renewal_conflict",
+            )
 
 
 class SqlRunEventRepository:

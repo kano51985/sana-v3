@@ -107,7 +107,7 @@ API/Worker 回滚必须先停止新流量，再停止 Dispatcher，等待运行�
 
 截至 2026-08-14，本仓库仍有以下阻断项，因此不能宣称最终切流完成：
 
-1. 领域层具备 FAST/RESEARCH 状态机和算子，但尚无生产 `SANA_STEP_HANDLER_FACTORY` 将真实 planner、provider、fetch、extract、verify、synthesize 全部装配到持久化执行器。
+1. 已提供 `DurableStepExecutor`、PostgreSQL lease/Attempt finalization 与重试边界，但尚无生产 completion coordinator/`SANA_STEP_HANDLER_FACTORY` 将真实 planner、provider、fetch、extract、verify、synthesize 全部装配并生成后继 Step。
 2. 已提供带 tenant/hash 校验的本地共享卷 artifact adapter；多主机 Worker 上线前仍需接入 S3/MinIO 或经过验证的共享文件系统，不能让每台 Worker 使用独立本地目录。
 3. 当前机器没有可用 PostgreSQL，所以新 Reconciler、RLS、迁移、真实多用户、Worker crash 和记忆正式导入未在本机执行；Redis 服务可用不代表这些验收通过。
 4. 生产 OIDC tenant/user provisioning 仍需外部身份管理流程。
