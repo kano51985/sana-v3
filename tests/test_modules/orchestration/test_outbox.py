@@ -49,8 +49,8 @@ class FakeStepDispatcher:
         self.failure = failure
         self.calls = []
 
-    def dispatch(self, step_id, trace_context, queue):
-        self.calls.append((step_id, trace_context, queue))
+    def dispatch(self, tenant_id, step_id, trace_context, queue):
+        self.calls.append((tenant_id, step_id, trace_context, queue))
         if self.failure:
             raise self.failure
         return f"step:{step_id}"
@@ -83,7 +83,8 @@ async def test_dispatcher_marks_event_only_after_broker_accepts_it() -> None:
     assert await dispatcher.dispatch_batch() == (1, 0)
     assert repository.published == [(message.id, NOW)]
     assert not repository.failed
-    assert steps.calls[0][2] is SearchQueue.FAST
+    assert steps.calls[0][0] == message.tenant_id
+    assert steps.calls[0][3] is SearchQueue.FAST
 
 
 @pytest.mark.asyncio

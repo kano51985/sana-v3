@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import streamlit as st
@@ -23,7 +24,10 @@ st.set_page_config(
     page_icon=":material/neurology:",
     layout="wide",
 )
-initialize_session(st.session_state)
+initialize_session(
+    st.session_state,
+    default_api_url=os.environ.get("SANA_API_URL", "http://localhost:8000"),
+)
 
 
 if not is_authenticated(st.session_state):

@@ -1,0 +1,17 @@
+.git
+.agents
+.hypothesis
+.pytest_cache
+.superpowers
+.venv
+venv
+__pycache__
+*.pyc
+*.log
+.env
+.streamlit/secrets.toml
+sana_memory_db
+chroma.sqlite3
+user_profile.json
+tests
+docs

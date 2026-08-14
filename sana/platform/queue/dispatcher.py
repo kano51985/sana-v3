@@ -26,6 +26,7 @@ class SearchQueue(StrEnum):
 class StepDispatcher(Protocol):
     def dispatch(
         self,
+        tenant_id: UUID,
         step_id: UUID,
         trace_context: dict[str, Any],
         queue: SearchQueue,
@@ -38,6 +39,7 @@ class CeleryStepDispatcher:
 
     def dispatch(
         self,
+        tenant_id: UUID,
         step_id: UUID,
         trace_context: dict[str, Any],
         queue: SearchQueue,
@@ -45,7 +47,7 @@ class CeleryStepDispatcher:
         task_id = f"step:{step_id}"
         self._app.send_task(
             "sana.execute_step",
-            args=[str(step_id), trace_context],
+            args=[str(tenant_id), str(step_id), trace_context],
             task_id=task_id,
             queue=queue.value,
         )
@@ -87,6 +89,7 @@ class OutboxDispatcher:
             message = pending.message
             try:
                 self._steps.dispatch(
+                    message.tenant_id,
                     UUID(str(message.payload["step_id"])),
                     trace_context_to_dict(message.trace_context),
                     self._queue(pending),

@@ -18,6 +18,10 @@ class SanaSettings(BaseSettings):
     environment: Literal["local", "test", "production"] = "local"
     database_url: str = "postgresql+asyncpg://sana:sana@localhost:5432/sana"
     redis_url: str = "redis://localhost:6379/1"
+    celery_broker_url: str = "redis://localhost:6379/0"
+    outbox_poll_interval_seconds: float = 0.5
+    outbox_batch_size: int = 100
+    reconciliation_redelivery_grace_seconds: float = 5.0
     auth_mode: Literal["dev", "oidc"] = "dev"
     dev_auth_enabled: bool = True
     oidc_issuer: str = ""
@@ -29,6 +33,12 @@ class SanaSettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_auth(self) -> "SanaSettings":
+        if self.outbox_poll_interval_seconds <= 0:
+            raise ValueError("Outbox poll interval must be positive")
+        if self.outbox_batch_size < 1:
+            raise ValueError("Outbox batch size must be positive")
+        if self.reconciliation_redelivery_grace_seconds < 0:
+            raise ValueError("Reconciliation redelivery grace cannot be negative")
         if self.environment == "production" and self.auth_mode == "dev":
             raise ValueError("Development authentication is forbidden in production")
         if self.auth_mode == "dev" and not self.dev_auth_enabled:

@@ -26,17 +26,18 @@ class FakeCelery:
 def test_duplicate_dispatch_uses_the_same_task_id_and_minimal_payload() -> None:
     app = FakeCelery()
     dispatcher = CeleryStepDispatcher(app)
+    tenant_id = uuid4()
     step_id = uuid4()
     trace = trace_context_to_dict(
         TraceContext.create(DeterministicIdFactory("dispatch"))
     )
 
-    first = dispatcher.dispatch(step_id, trace, SearchQueue.FAST)
-    second = dispatcher.dispatch(step_id, trace, SearchQueue.FAST)
+    first = dispatcher.dispatch(tenant_id, step_id, trace, SearchQueue.FAST)
+    second = dispatcher.dispatch(tenant_id, step_id, trace, SearchQueue.FAST)
 
     assert first == second == f"step:{step_id}"
     assert [call[1]["task_id"] for call in app.calls] == [first, first]
-    assert app.calls[0][1]["args"] == [str(step_id), trace]
+    assert app.calls[0][1]["args"] == [str(tenant_id), str(step_id), trace]
 
 
 def test_database_step_state_absorbs_duplicate_worker_delivery() -> None:

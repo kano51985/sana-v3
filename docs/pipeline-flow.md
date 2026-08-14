@@ -1,5 +1,20 @@
 # Sana Agent Pipeline Flow
 
+> 当前默认入口（2026-08-14）：`start.bat` → 新 Streamlit API 客户端 → FastAPI → PostgreSQL Run/Step/Outbox。旧 `interfaces/streamlit_app.py` 仅作为显式回滚入口保留，不再是默认入口。生产 Worker 的具体算子装配仍是切流阻断项，详见 `docs/operations/search-platform.md`。
+
+```text
+Browser session
+  -> Streamlit API client (no DB/key/profile access)
+  -> FastAPI authentication + automatic FAST/RESEARCH routing
+  -> PostgreSQL transaction: Message + Run + first Step + Outbox
+  -> tenant-aware Outbox Dispatcher
+  -> Redis/Celery queue: tenant_id + step_id + trace only
+  -> configured Worker
+  -> PostgreSQL durable state + Redis SSE acceleration
+```
+
+新链路以 PostgreSQL 为唯一工作流事实源。控制进程会从 PostgreSQL 扫描 READY、到期 RETRY_WAIT 与 lease 过期的 RUNNING Step 并重投，但在真实 PostgreSQL/Redis chaos 验收通过前，不能把恢复保证标记为完成。回滚窗口内不删除 MongoDB、Chroma、`user_profile.json` 或旧 Web 搜索代码。
+
 > 本文档描述 Sana Agent 的完整流水线架构、每个节点的职责、核心参数，以及当前代码的实际实现。
 
 ## 架构总览

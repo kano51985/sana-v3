@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
+from sqlalchemy import text
 
 from sana.app.api.auth import DevAuthProvider, OIDCAuthProvider
 from sana.app.api.dependencies import AppContainer
@@ -109,6 +111,43 @@ def create_app(
     @app.get("/health/live", include_in_schema=False)
     async def live() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/health/ready", include_in_schema=False)
+    async def ready():
+        if owned_resources is None:
+            return {
+                "status": "ok",
+                "checks": {"container": "externally_managed"},
+            }
+
+        engine, redis = owned_resources
+
+        async def database_check() -> str:
+            try:
+                async with engine.connect() as connection:
+                    await connection.execute(text("SELECT 1"))
+            except Exception:
+                return "unavailable"
+            return "ok"
+
+        async def redis_check() -> str:
+            try:
+                await redis.ping()
+            except Exception:
+                return "unavailable"
+            return "ok"
+
+        database, redis_status = await asyncio.gather(
+            database_check(),
+            redis_check(),
+        )
+        checks = {"postgresql": database, "redis": redis_status}
+        if all(value == "ok" for value in checks.values()):
+            return {"status": "ok", "checks": checks}
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "not_ready", "checks": checks},
+        )
 
     @app.exception_handler(TypedError)
     async def typed_error_handler(request: Request, exc: TypedError) -> JSONResponse:

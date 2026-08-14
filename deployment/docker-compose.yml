@@ -1,0 +1,120 @@
+x-sana-environment: &sana-environment
+  SANA_ENVIRONMENT: ${SANA_ENVIRONMENT:-local}
+  SANA_DATABASE_URL: ${SANA_DATABASE_URL:-postgresql+asyncpg://sana:sana@postgres:5432/sana}
+  SANA_REDIS_URL: ${SANA_REDIS_URL:-redis://redis:6379/1}
+  SANA_CELERY_BROKER_URL: ${SANA_CELERY_BROKER_URL:-redis://redis:6379/0}
+  SANA_AUTH_MODE: ${SANA_AUTH_MODE:-dev}
+  SANA_DEV_AUTH_ENABLED: ${SANA_DEV_AUTH_ENABLED:-true}
+  SANA_OIDC_ISSUER: ${SANA_OIDC_ISSUER:-}
+  SANA_OIDC_AUDIENCE: ${SANA_OIDC_AUDIENCE:-}
+  SANA_OIDC_JWKS_URL: ${SANA_OIDC_JWKS_URL:-}
+
+x-sana-image: &sana-image
+  build:
+    context: ..
+    dockerfile: deployment/Dockerfile
+  image: sana-v2:local
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sana
+      POSTGRES_USER: sana
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sana}
+    volumes:
+      - sana-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sana -d sana"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - sana-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    <<: *sana-image
+    restart: "no"
+    environment: *sana-environment
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  bootstrap-dev:
+    <<: *sana-image
+    profiles: ["dev-bootstrap"]
+    restart: "no"
+    environment: *sana-environment
+    command: ["python", "-m", "sana.app.bootstrap_dev"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  api:
+    <<: *sana-image
+    environment: *sana-environment
+    command: ["python", "-m", "uvicorn", "sana.app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "${SANA_API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  dispatcher:
+    <<: *sana-image
+    profiles: ["workers"]
+    environment: *sana-environment
+    command: ["python", "-m", "sana.app.outbox_dispatcher"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  worker:
+    <<: *sana-image
+    profiles: ["workers"]
+    environment:
+      <<: *sana-environment
+      SANA_STEP_HANDLER_FACTORY: ${SANA_STEP_HANDLER_FACTORY:-}
+    command: ["python", "-m", "celery", "-A", "sana.app.worker:create_app", "worker", "--loglevel", "INFO", "--queues", "fast,research,crawl,maintenance", "--concurrency", "2"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  streamlit:
+    <<: *sana-image
+    environment:
+      SANA_API_URL: http://api:8000
+    command: ["python", "-m", "streamlit", "run", "sana/clients/streamlit/app.py", "--server.address", "0.0.0.0", "--server.port", "8501"]
+    ports:
+      - "${SANA_UI_PORT:-8501}:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  sana-postgres:
+  sana-redis:

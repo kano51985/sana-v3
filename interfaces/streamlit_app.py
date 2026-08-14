@@ -17,7 +17,12 @@ _USER_AVATAR = os.path.join(_ASSETS_DIR, "user_avatar.jpg")
 _SANA_AVATAR = os.path.join(_ASSETS_DIR, "sana_avatar.png")
 
 st.set_page_config(page_title="Sana Control Panel", layout="wide")
-st.title("Sana 情感控制台")
+st.title("Sana 情感控制台（旧版回滚入口）")
+st.warning(
+    "此界面仅用于回滚窗口，不具备新平台的多租户隔离。"
+    "默认入口已切换到 API 客户端，请勿在生产环境启用。",
+    icon="⚠️",
+)
 st.markdown(
     """
     <style>
