@@ -34,13 +34,19 @@ class MemoryItem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 class MemoryEmbedding(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "memory_embeddings"
     __table_args__ = (
-        UniqueConstraint("memory_item_id", "model", name="uq_memory_embeddings_item_model"),
+        UniqueConstraint(
+            "memory_item_id",
+            "model",
+            "model_version",
+            name="uq_memory_embeddings_item_model_version",
+        ),
         Index("ix_memory_embeddings_tenant_item", "tenant_id", "memory_item_id"),
     )
 
     tenant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     memory_item_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("memory_items.id", ondelete="CASCADE"), nullable=False)
     model: Mapped[str] = mapped_column(String(200), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(100), nullable=False)
     dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(ARRAY(Float), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)

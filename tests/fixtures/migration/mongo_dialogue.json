@@ -1,0 +1,12 @@
+[
+  {
+    "_id": "batch_fixture",
+    "timestamp": 1700000000.0,
+    "dialogue_log": [
+      {"role": "user", "content": "Remember that I prefer concise answers."},
+      {"role": "assistant", "content": "I will keep responses concise."},
+      {"role": "tool", "content": "private legacy search result"},
+      {"role": "assistant", "content": "   "}
+    ]
+  }
+]

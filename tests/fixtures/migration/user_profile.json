@@ -1,0 +1,26 @@
+{
+  "name": "Legacy User",
+  "gaming_preferences": {
+    "favorite_genre": "strategy"
+  },
+  "general_preferences": {
+    "api_token": "never-migrate-this-token",
+    "answer_style": "concise"
+  },
+  "relationships": {
+    "assistant": "trusted collaborator"
+  },
+  "model_config": {
+    "api_key": "never-migrate-this-model-key",
+    "model": "legacy-model"
+  },
+  "web_tool": {
+    "enabled": true
+  },
+  "official_sources": [
+    "https://private.example.invalid"
+  ],
+  "search_history": [
+    "private legacy query"
+  ]
+}

@@ -1,0 +1,26 @@
+[
+  {
+    "id": "memory_with_text",
+    "document": "The user enjoys architecture discussions.",
+    "metadata": {
+      "batch_id": "batch_fixture",
+      "memory_type": "consolidated_episodic",
+      "untrusted_field": "must not migrate"
+    },
+    "embedding": [0.1, 0.2, 0.3]
+  },
+  {
+    "id": "memory_vector_only",
+    "document": "",
+    "metadata": {
+      "memory_type": "legacy"
+    },
+    "embedding": [0.4, 0.5]
+  },
+  {
+    "id": "memory_empty",
+    "document": null,
+    "metadata": {},
+    "embedding": null
+  }
+]

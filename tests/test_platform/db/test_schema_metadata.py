@@ -136,10 +136,22 @@ def test_migrations_cover_every_tenant_table_with_forced_rls() -> None:
 
     assert protected == TENANT_TABLES
     for path in migration_paths:
+        module = _load_migration(path)
+        if not getattr(module, "TENANT_TABLES", ()):
+            continue
         source = path.read_text(encoding="utf-8")
         assert "ENABLE ROW LEVEL SECURITY" in source
         assert "FORCE ROW LEVEL SECURITY" in source
         assert "current_setting('app.tenant_id', true)" in source
+
+
+def test_memory_embeddings_record_model_version() -> None:
+    table = Base.metadata.tables["memory_embeddings"]
+
+    assert table.c.model_version.nullable is False
+    assert "uq_memory_embeddings_item_model_version" in _constraint_names(
+        "memory_embeddings"
+    )
 
 
 def test_database_engine_is_postgres_only_and_normalizes_async_driver() -> None:
