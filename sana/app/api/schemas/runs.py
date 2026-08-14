@@ -11,6 +11,9 @@ class RunResponse(BaseModel):
     conversation_id: UUID
     message_id: UUID
     mode: str
+    routing_reason_codes: list[str]
+    route_confidence: float
+    policy_version: str
     status: str
     answer_quality: str
     stop_reason: str | None
@@ -31,6 +34,15 @@ class EvidenceItem(BaseModel):
     source_url: str
 
 
+class MissingFactItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    fact_key: str
+    description: str
+    status: str
+
+
 class EvidenceResponse(BaseModel):
     run_id: UUID
     evidence: list[EvidenceItem]
+    missing_facts: list[MissingFactItem]

@@ -27,6 +27,9 @@ class RunView:
     conversation_id: UUID
     message_id: UUID
     mode: str
+    routing_reason_codes: tuple[str, ...]
+    route_confidence: float
+    policy_version: str
     status: str
     answer_quality: str
     stop_reason: str | None
@@ -47,6 +50,39 @@ class EvidenceView:
 
 
 @dataclass(frozen=True, slots=True)
+class MissingFactView:
+    fact_key: str
+    description: str
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceReportView:
+    evidence: tuple[EvidenceView, ...]
+    missing_facts: tuple[MissingFactView, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationView:
+    id: UUID
+    title: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationMessageView:
+    id: UUID
+    role: str
+    content: str
+    created_at: datetime
+    run_id: UUID | None = None
+    run_status: str | None = None
+    answer_quality: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class EventView:
     sequence: int
     event_type: str
@@ -63,7 +99,23 @@ class RunApplicationService(Protocol):
         self,
         principal: Principal,
         run_id: UUID,
-    ) -> list[EvidenceView] | None: ...
+    ) -> EvidenceReportView | None: ...
+
+
+class ConversationCatalogService(Protocol):
+    async def create(
+        self,
+        principal: Principal,
+        title: str,
+    ) -> ConversationView: ...
+
+    async def list(self, principal: Principal) -> list[ConversationView]: ...
+
+    async def messages(
+        self,
+        principal: Principal,
+        conversation_id: UUID,
+    ) -> list[ConversationMessageView] | None: ...
 
 
 class RunEventService(Protocol):
@@ -82,6 +134,7 @@ class AppContainer:
     router: MessageRouter
     run_service: RunApplicationService
     event_service: RunEventService
+    conversation_catalog: ConversationCatalogService | None = None
 
 
 def get_container(request: Request) -> AppContainer:

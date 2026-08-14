@@ -8,7 +8,14 @@ from uuid import uuid4
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from sana.app.api.dependencies import AppContainer, EventView, RunView
+from sana.app.api.dependencies import (
+    AppContainer,
+    ConversationMessageView,
+    ConversationView,
+    EvidenceReportView,
+    EventView,
+    RunView,
+)
 from sana.app.api.main import create_app
 from sana.modules.conversation.domain import SubmissionReceipt
 from sana.modules.identity.domain import Principal
@@ -46,6 +53,28 @@ class FakeConversationService:
         return receipt
 
 
+class FakeConversationCatalog:
+    def __init__(self, principal: Principal) -> None:
+        self.principal = principal
+        self.items: list[ConversationView] = []
+        self.messages_by_id: dict = {}
+
+    async def create(self, principal, title):
+        assert principal == self.principal
+        item = ConversationView(uuid4(), title or "新会话", "ACTIVE", NOW, NOW)
+        self.items.insert(0, item)
+        self.messages_by_id[item.id] = []
+        return item
+
+    async def list(self, principal):
+        assert principal == self.principal
+        return list(self.items)
+
+    async def messages(self, principal, conversation_id):
+        assert principal == self.principal
+        return self.messages_by_id.get(conversation_id)
+
+
 class FakeRunService:
     def __init__(self, run_id) -> None:
         self.run_id = run_id
@@ -54,6 +83,9 @@ class FakeRunService:
             conversation_id=uuid4(),
             message_id=uuid4(),
             mode="FAST",
+            routing_reason_codes=("single_or_low_complexity_fact",),
+            route_confidence=0.9,
+            policy_version="search-v1",
             status="RUNNING",
             answer_quality="NONE",
             stop_reason=None,
@@ -79,7 +111,7 @@ class FakeRunService:
         return self.view
 
     async def evidence(self, principal, run_id):
-        return [] if run_id == self.run_id else None
+        return EvidenceReportView((), ()) if run_id == self.run_id else None
 
 
 class FakeEventService:
@@ -102,6 +134,7 @@ async def api_context():
     principal = Principal(uuid4(), uuid4(), "test", "subject")
     run_id = uuid4()
     conversations = FakeConversationService()
+    catalog = FakeConversationCatalog(principal)
     runs = FakeRunService(run_id)
     events = FakeEventService()
     container = AppContainer(
@@ -110,6 +143,7 @@ async def api_context():
         router=FakeRouter(),
         run_service=runs,
         event_service=events,
+        conversation_catalog=catalog,
     )
     transport = ASGITransport(app=create_app(container=container))
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -117,6 +151,7 @@ async def api_context():
             client=client,
             principal=principal,
             conversations=conversations,
+            catalog=catalog,
             runs=runs,
             events=events,
             run_id=run_id,

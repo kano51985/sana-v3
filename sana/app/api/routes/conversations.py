@@ -1,15 +1,69 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from sana.app.api.dependencies import get_container, require_principal
-from sana.app.api.schemas.conversations import MessageCreate, SubmissionResponse
+from sana.app.api.schemas.conversations import (
+    ConversationCreate,
+    ConversationListResponse,
+    ConversationMessagesResponse,
+    ConversationResponse,
+    MessageCreate,
+    SubmissionResponse,
+)
 from sana.modules.conversation.domain import SubmitMessageCommand
 from sana.modules.identity.domain import Principal
 from sana.modules.shared.ids import TraceContext
 
 
 router = APIRouter(prefix="/api/v1/conversations", tags=["conversations"])
+
+
+def _catalog(request: Request):
+    catalog = get_container(request).conversation_catalog
+    if catalog is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Conversation catalog is unavailable",
+        )
+    return catalog
+
+
+@router.post("", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
+async def create_conversation(
+    body: ConversationCreate,
+    request: Request,
+    principal: Principal = Depends(require_principal),
+) -> ConversationResponse:
+    conversation = await _catalog(request).create(principal, body.title)
+    return ConversationResponse.model_validate(conversation)
+
+
+@router.get("", response_model=ConversationListResponse)
+async def list_conversations(
+    request: Request,
+    principal: Principal = Depends(require_principal),
+) -> ConversationListResponse:
+    items = await _catalog(request).list(principal)
+    return ConversationListResponse(conversations=items)
+
+
+@router.get("/{conversation_id}/messages", response_model=ConversationMessagesResponse)
+async def list_messages(
+    conversation_id: UUID,
+    request: Request,
+    principal: Principal = Depends(require_principal),
+) -> ConversationMessagesResponse:
+    messages = await _catalog(request).messages(principal, conversation_id)
+    if messages is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        )
+    return ConversationMessagesResponse(
+        conversation_id=conversation_id,
+        messages=messages,
+    )
 
 
 @router.post(

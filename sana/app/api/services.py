@@ -7,16 +7,25 @@ from collections.abc import AsyncIterator
 import logging
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from redis.exceptions import RedisError
 
-from sana.app.api.dependencies import EvidenceView, EventView, RunView
+from sana.app.api.dependencies import (
+    ConversationMessageView,
+    ConversationView,
+    EvidenceReportView,
+    EvidenceView,
+    EventView,
+    MissingFactView,
+    RunView,
+)
 from sana.modules.identity.domain import Principal
 from sana.modules.orchestration.domain import SearchRun
 from sana.modules.orchestration.events import RunEventData
 from sana.modules.shared.clock import Clock
 from sana.modules.shared.ids import IdFactory
-from sana.platform.db.models.orchestration import RunEvent
+from sana.platform.db.models.conversation import Conversation, Message, ResponseRun
+from sana.platform.db.models.orchestration import RunEvent, SearchRunRecord
 from sana.platform.db.models.search import (
     Document,
     DocumentVersion,
@@ -37,6 +46,9 @@ def _run_view(run: SearchRun) -> RunView:
         conversation_id=run.conversation_id,
         message_id=run.message_id,
         mode=run.mode.value,
+        routing_reason_codes=tuple(run.routing.reason_codes),
+        route_confidence=run.routing.confidence,
+        policy_version=run.routing.policy_version,
         status=run.status.value,
         answer_quality=run.answer_quality.value,
         stop_reason=run.stop_reason.value if run.stop_reason else None,
@@ -46,6 +58,113 @@ def _run_view(run: SearchRun) -> RunView:
         started_at=run.started_at,
         completed_at=run.completed_at,
     )
+
+
+class DatabaseConversationCatalogService:
+    def __init__(
+        self,
+        uow_factory: TenantUnitOfWorkFactory,
+        clock: Clock,
+        id_factory: IdFactory,
+    ) -> None:
+        self._uow_factory = uow_factory
+        self._clock = clock
+        self._ids = id_factory
+
+    async def create(self, principal: Principal, title: str) -> ConversationView:
+        now = self._clock.now()
+        conversation = Conversation(
+            id=self._ids.new_uuid(),
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            title=title.strip() or "新会话",
+            status="ACTIVE",
+            created_at=now,
+            updated_at=now,
+        )
+        async with self._uow_factory(principal.tenant_id) as uow:
+            uow.session.add(conversation)
+            await uow.commit()
+        return self._view(conversation)
+
+    async def list(self, principal: Principal) -> list[ConversationView]:
+        async with self._uow_factory(principal.tenant_id) as uow:
+            statement = (
+                select(Conversation)
+                .where(
+                    Conversation.tenant_id == principal.tenant_id,
+                    Conversation.user_id == principal.user_id,
+                    Conversation.status == "ACTIVE",
+                )
+                .order_by(Conversation.updated_at.desc(), Conversation.id)
+                .limit(100)
+            )
+            records = (await uow.session.scalars(statement)).all()
+            return [self._view(item) for item in records]
+
+    async def messages(
+        self,
+        principal: Principal,
+        conversation_id: UUID,
+    ) -> list[ConversationMessageView] | None:
+        async with self._uow_factory(principal.tenant_id) as uow:
+            owned = await uow.session.scalar(
+                select(Conversation.id).where(
+                    Conversation.tenant_id == principal.tenant_id,
+                    Conversation.id == conversation_id,
+                    Conversation.user_id == principal.user_id,
+                )
+            )
+            if owned is None:
+                return None
+            statement = (
+                select(
+                    Message,
+                    SearchRunRecord.id,
+                    SearchRunRecord.status,
+                    SearchRunRecord.answer_quality,
+                )
+                .outerjoin(
+                    ResponseRun,
+                    or_(
+                        ResponseRun.message_id == Message.id,
+                        ResponseRun.output_message_id == Message.id,
+                    ),
+                )
+                .outerjoin(
+                    SearchRunRecord,
+                    SearchRunRecord.response_run_id == ResponseRun.id,
+                )
+                .where(
+                    Message.tenant_id == principal.tenant_id,
+                    Message.conversation_id == conversation_id,
+                )
+                .order_by(Message.created_at, Message.id)
+                .limit(1_000)
+            )
+            rows = (await uow.session.execute(statement)).all()
+            return [
+                ConversationMessageView(
+                    id=row[0].id,
+                    role=row[0].role,
+                    content=row[0].content,
+                    created_at=row[0].created_at,
+                    run_id=row[1],
+                    run_status=row[2],
+                    answer_quality=row[3],
+                )
+                for row in rows
+            ]
+
+    @staticmethod
+    def _view(record: Conversation) -> ConversationView:
+        return ConversationView(
+            id=record.id,
+            title=record.title,
+            status=record.status,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+        )
 
 
 class DatabaseRunApplicationService:
@@ -114,7 +233,7 @@ class DatabaseRunApplicationService:
         self,
         principal: Principal,
         run_id: UUID,
-    ) -> list[EvidenceView] | None:
+    ) -> EvidenceReportView | None:
         async with self._uow_factory(principal.tenant_id) as uow:
             run = await uow.runs.get(principal.tenant_id, run_id)
             if run is None:
@@ -147,7 +266,7 @@ class DatabaseRunApplicationService:
                 .order_by(FactRequirement.fact_key, VerifiedEvidence.confidence.desc())
             )
             rows = (await uow.session.execute(statement)).all()
-            return [
+            evidence = tuple(
                 EvidenceView(
                     fact_key=row[0],
                     verdict=row[1],
@@ -156,7 +275,29 @@ class DatabaseRunApplicationService:
                     source_url=row[4],
                 )
                 for row in rows
-            ]
+            )
+            missing_rows = (
+                await uow.session.execute(
+                    select(
+                        FactRequirement.fact_key,
+                        FactRequirement.description,
+                        FactRequirement.status,
+                    )
+                    .where(
+                        FactRequirement.tenant_id == principal.tenant_id,
+                        FactRequirement.run_id == run_id,
+                        FactRequirement.required.is_(True),
+                        FactRequirement.status != "COVERED",
+                    )
+                    .order_by(FactRequirement.fact_key)
+                )
+            ).all()
+            return EvidenceReportView(
+                evidence=evidence,
+                missing_facts=tuple(
+                    MissingFactView(row[0], row[1], row[2]) for row in missing_rows
+                ),
+            )
 
 
 class DatabaseRunEventService:

@@ -38,3 +38,35 @@ async def test_message_submission_uses_authenticated_tenant(api_context) -> None
     assert command.user_id == api_context.principal.user_id
     assert command.conversation_id == conversation_id
     assert response.json()["status"] == "QUEUED"
+
+
+async def test_authenticated_client_can_create_list_and_read_conversations(api_context) -> None:
+    created = await api_context.client.post(
+        "/api/v1/conversations",
+        json={"title": "Architecture review"},
+        headers=api_context.auth,
+    )
+    conversation_id = created.json()["id"]
+    listed = await api_context.client.get(
+        "/api/v1/conversations",
+        headers=api_context.auth,
+    )
+    messages = await api_context.client.get(
+        f"/api/v1/conversations/{conversation_id}/messages",
+        headers=api_context.auth,
+    )
+
+    assert created.status_code == 201
+    assert listed.json()["conversations"][0]["id"] == conversation_id
+    assert messages.json() == {
+        "conversation_id": conversation_id,
+        "messages": [],
+    }
+
+
+async def test_identity_endpoint_validates_the_bearer_token(api_context) -> None:
+    response = await api_context.client.get("/api/v1/me", headers=api_context.auth)
+
+    assert response.status_code == 200
+    assert response.json()["tenant_id"] == str(api_context.principal.tenant_id)
+    assert response.json()["user_id"] == str(api_context.principal.user_id)

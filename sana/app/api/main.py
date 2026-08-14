@@ -10,8 +10,12 @@ from redis.asyncio import Redis
 
 from sana.app.api.auth import DevAuthProvider, OIDCAuthProvider
 from sana.app.api.dependencies import AppContainer
-from sana.app.api.routes import conversations, events, runs
-from sana.app.api.services import DatabaseRunApplicationService, DatabaseRunEventService
+from sana.app.api.routes import conversations, events, identity, runs
+from sana.app.api.services import (
+    DatabaseConversationCatalogService,
+    DatabaseRunApplicationService,
+    DatabaseRunEventService,
+)
 from sana.app.settings import SanaSettings
 from sana.modules.conversation.domain import ConversationService
 from sana.modules.orchestration.policy import SearchPolicy
@@ -63,6 +67,11 @@ def _build_default_container(settings: SanaSettings):
             redis_stream,
             block_ms=settings.sse_block_ms,
         ),
+        conversation_catalog=DatabaseConversationCatalogService(
+            uow_factory,
+            clock,
+            id_factory,
+        ),
     )
     return container, engine, redis
 
@@ -95,6 +104,7 @@ def create_app(
     app.include_router(conversations.router)
     app.include_router(runs.router)
     app.include_router(events.router)
+    app.include_router(identity.router)
 
     @app.get("/health/live", include_in_schema=False)
     async def live() -> dict[str, str]:

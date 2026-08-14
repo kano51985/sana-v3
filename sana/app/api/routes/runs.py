@@ -44,7 +44,11 @@ async def get_evidence(
     request: Request,
     principal: Principal = Depends(require_principal),
 ) -> EvidenceResponse:
-    evidence = await get_container(request).run_service.evidence(principal, run_id)
-    if evidence is None:
+    report = await get_container(request).run_service.evidence(principal, run_id)
+    if report is None:
         raise _not_found()
-    return EvidenceResponse(run_id=run_id, evidence=evidence)
+    return EvidenceResponse(
+        run_id=run_id,
+        evidence=list(report.evidence),
+        missing_facts=list(report.missing_facts),
+    )

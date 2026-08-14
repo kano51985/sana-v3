@@ -46,9 +46,14 @@ async def test_run_get_cancel_and_evidence_are_tenant_authorized(api_context) ->
     )
 
     assert get_response.json()["status"] == "RUNNING"
+    assert get_response.json()["mode"] == "FAST"
+    assert get_response.json()["routing_reason_codes"] == [
+        "single_or_low_complexity_fact"
+    ]
     assert cancel_response.json()["status"] == "CANCELLED"
     assert evidence_response.json() == {
         "run_id": str(api_context.run_id),
         "evidence": [],
+        "missing_facts": [],
     }
     assert missing_response.status_code == 404
