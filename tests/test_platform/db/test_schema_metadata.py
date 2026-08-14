@@ -1,0 +1,140 @@
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+
+from sqlalchemy import UniqueConstraint
+
+from sana.platform.db.base import Base
+from sana.platform.db.session import create_database_engine
+import sana.platform.db.models  # noqa: F401
+
+
+EXPECTED_TABLES = {
+    "tenants",
+    "users",
+    "user_identities",
+    "conversations",
+    "messages",
+    "response_runs",
+    "search_runs",
+    "search_steps",
+    "step_attempts",
+    "outbox_events",
+    "run_events",
+    "fact_requirements",
+    "query_specs",
+    "provider_attempts",
+    "search_hits",
+    "fetch_artifacts",
+    "documents",
+    "document_versions",
+    "document_chunks",
+    "evidence_candidates",
+    "verified_evidence",
+    "answer_claims",
+    "citations",
+    "memory_items",
+    "memory_embeddings",
+    "migration_ledger",
+    "legacy_archives",
+}
+TENANT_TABLES = EXPECTED_TABLES - {"tenants"}
+
+
+def _constraint_names(table_name: str) -> set[str]:
+    return {
+        constraint.name
+        for constraint in Base.metadata.tables[table_name].constraints
+        if constraint.name is not None
+    }
+
+
+def _index_names(table_name: str) -> set[str]:
+    return {
+        index.name
+        for index in Base.metadata.tables[table_name].indexes
+        if index.name is not None
+    }
+
+
+def _load_migration(path: Path):
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_metadata_contains_the_complete_platform_schema() -> None:
+    assert set(Base.metadata.tables) == EXPECTED_TABLES
+
+
+def test_every_user_data_table_has_required_tenant_boundary() -> None:
+    for table_name in TENANT_TABLES:
+        table = Base.metadata.tables[table_name]
+        assert "tenant_id" in table.c, table_name
+        assert table.c.tenant_id.nullable is False, table_name
+        assert any(
+            foreign_key.column.table.name == "tenants"
+            for foreign_key in table.c.tenant_id.foreign_keys
+        ), table_name
+
+
+def test_workflow_recovery_constraints_and_indexes_exist() -> None:
+    assert "uq_search_steps_run_revision_key" in _constraint_names("search_steps")
+    assert "uq_step_attempts_step_number" in _constraint_names("step_attempts")
+    assert "uq_step_attempts_idempotency_key" in _constraint_names("step_attempts")
+    assert "ix_step_attempts_lease_scan" in _index_names("step_attempts")
+    assert "ix_outbox_events_unpublished" in _index_names("outbox_events")
+    outbox_index = next(
+        index
+        for index in Base.metadata.tables["outbox_events"].indexes
+        if index.name == "ix_outbox_events_unpublished"
+    )
+    assert outbox_index.dialect_options["postgresql"]["where"] is not None
+
+
+def test_document_and_memory_rows_have_tenant_local_identity_constraints() -> None:
+    for table_name in (
+        "documents",
+        "document_versions",
+        "document_chunks",
+        "evidence_candidates",
+        "verified_evidence",
+        "memory_items",
+    ):
+        table = Base.metadata.tables[table_name]
+        tenant_identity = [
+            constraint
+            for constraint in table.constraints
+            if isinstance(constraint, UniqueConstraint)
+            and {column.name for column in constraint.columns} == {"tenant_id", "id"}
+        ]
+        assert tenant_identity, table_name
+
+
+def test_migrations_cover_every_tenant_table_with_forced_rls() -> None:
+    versions = Path(__file__).parents[3] / "alembic" / "versions"
+    migration_paths = sorted(versions.glob("000*.py"))
+    modules = [_load_migration(path) for path in migration_paths]
+    protected = {
+        table
+        for module in modules
+        for table in getattr(module, "TENANT_TABLES", ())
+    }
+
+    assert protected == TENANT_TABLES
+    for path in migration_paths:
+        source = path.read_text(encoding="utf-8")
+        assert "ENABLE ROW LEVEL SECURITY" in source
+        assert "FORCE ROW LEVEL SECURITY" in source
+        assert "current_setting('app.tenant_id', true)" in source
+
+
+def test_database_engine_is_postgres_only_and_normalizes_async_driver() -> None:
+    engine = create_database_engine("postgresql://user:password@localhost/sana")
+    try:
+        assert engine.url.drivername == "postgresql+asyncpg"
+    finally:
+        engine.sync_engine.dispose()

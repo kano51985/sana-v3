@@ -1,0 +1,61 @@
+"""Import all mappings so Alembic sees complete metadata."""
+
+from sana.platform.db.models.conversation import Conversation, Message, ResponseRun
+from sana.platform.db.models.identity import Tenant, User, UserIdentity
+from sana.platform.db.models.memory import (
+    LegacyArchive,
+    MemoryEmbedding,
+    MemoryItem,
+    MigrationLedger,
+)
+from sana.platform.db.models.orchestration import (
+    OutboxEvent,
+    RunEvent,
+    SearchRunRecord,
+    SearchStepRecord,
+    StepAttemptRecord,
+)
+from sana.platform.db.models.search import (
+    AnswerClaim,
+    Citation,
+    Document,
+    DocumentChunk,
+    DocumentVersion,
+    EvidenceCandidate,
+    FactRequirement,
+    FetchArtifact,
+    ProviderAttempt,
+    QuerySpec,
+    SearchHit,
+    VerifiedEvidence,
+)
+
+__all__ = [
+    "AnswerClaim",
+    "Citation",
+    "Conversation",
+    "Document",
+    "DocumentChunk",
+    "DocumentVersion",
+    "EvidenceCandidate",
+    "FactRequirement",
+    "FetchArtifact",
+    "LegacyArchive",
+    "MemoryEmbedding",
+    "MemoryItem",
+    "Message",
+    "MigrationLedger",
+    "OutboxEvent",
+    "ProviderAttempt",
+    "QuerySpec",
+    "ResponseRun",
+    "RunEvent",
+    "SearchHit",
+    "SearchRunRecord",
+    "SearchStepRecord",
+    "StepAttemptRecord",
+    "Tenant",
+    "User",
+    "UserIdentity",
+    "VerifiedEvidence",
+]
