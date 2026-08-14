@@ -14,6 +14,7 @@ from sana.platform.db.repositories import (
     SqlOutboxRepository,
     SqlResponseRunRepository,
     SqlRunRepository,
+    SqlRunEventRepository,
     SqlStepRepository,
 )
 
@@ -51,6 +52,7 @@ class TenantUnitOfWork:
         self.steps = SqlStepRepository(self._session, self.tenant_id)
         self.outbox = SqlOutboxRepository(self._session, self.tenant_id)
         self.attempts = SqlAttemptRepository(self._session, self.tenant_id)
+        self.events = SqlRunEventRepository(self._session, self.tenant_id)
         return self
 
     async def commit(self) -> None:

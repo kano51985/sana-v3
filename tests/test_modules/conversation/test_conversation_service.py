@@ -57,6 +57,7 @@ class FakeUnitOfWork:
         self.runs = CollectingRepository()
         self.steps = CollectingRepository()
         self.outbox = CollectingRepository()
+        self.events = CollectingRepository()
         self.committed = False
         self.rolled_back = False
 
@@ -113,11 +114,13 @@ async def test_message_and_both_runs_commit_in_one_unit_of_work() -> None:
     assert len(uow.runs.values) == 1
     assert len(uow.steps.values) == 1
     assert len(uow.outbox.values) == 1
+    assert len(uow.events.values) == 1
     run = uow.runs.values[0]
     assert run.message_id == receipt.message_id
     assert run.response_run_id == receipt.response_run_id
     assert run.tenant_id == command.tenant_id
     assert uow.outbox.values[0].payload == {"step_id": str(uow.steps.values[0].id)}
+    assert uow.events.values[0].event_type == "RUN_QUEUED"
 
 
 @pytest.mark.asyncio

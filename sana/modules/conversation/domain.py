@@ -18,6 +18,7 @@ from sana.modules.orchestration.domain import (
     StepType,
 )
 from sana.modules.orchestration.outbox import OutboxMessage
+from sana.modules.orchestration.events import RunEventData
 from sana.modules.orchestration.policy import SearchPolicy
 from sana.modules.shared.clock import Clock
 from sana.modules.shared.errors import InvariantViolation
@@ -133,6 +134,7 @@ class ConversationService:
             search_run_id = self._ids.new_uuid()
             step_id = self._ids.new_uuid()
             outbox_id = self._ids.new_uuid()
+            run_event_id = self._ids.new_uuid()
             message = MessageDraft(
                 id=message_id,
                 tenant_id=command.tenant_id,
@@ -190,12 +192,22 @@ class ConversationService:
                 available_at=created_at,
                 created_at=created_at,
             )
+            queued_event = RunEventData(
+                id=run_event_id,
+                tenant_id=command.tenant_id,
+                run_id=search_run_id,
+                sequence=1,
+                event_type="RUN_QUEUED",
+                payload={"mode": command.routing.mode.value},
+                created_at=created_at,
+            )
 
             await uow.conversations.add_message(message)
             await uow.response_runs.add(response_run)
             await uow.runs.add(search_run)
             await uow.steps.add(route_step)
             await uow.outbox.add(outbox_message)
+            await uow.events.add(queued_event)
             await uow.commit()
             return SubmissionReceipt(
                 message_id,

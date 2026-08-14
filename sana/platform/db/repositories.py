@@ -21,6 +21,7 @@ from sana.modules.orchestration.outbox import (
     trace_context_from_dict,
     trace_context_to_dict,
 )
+from sana.modules.orchestration.events import RunEventData
 from sana.modules.orchestration.repository import (
     artifact_to_dict,
     budget_to_dict,
@@ -32,6 +33,7 @@ from sana.modules.shared.errors import InvariantViolation
 from sana.platform.db.models.conversation import Conversation, Message, ResponseRun
 from sana.platform.db.models.orchestration import (
     OutboxEvent,
+    RunEvent,
     SearchRunRecord,
     SearchStepRecord,
     StepAttemptRecord,
@@ -162,6 +164,23 @@ class SqlRunRepository:
         statement = select(SearchRunRecord).where(
             SearchRunRecord.tenant_id == tenant_id,
             SearchRunRecord.id == run_id,
+        )
+        record = await self._session.scalar(statement)
+        return run_from_record(record) if record is not None else None
+
+    async def get_for_update(
+        self,
+        tenant_id: UUID,
+        run_id: UUID,
+    ) -> SearchRun | None:
+        self._assert_tenant(tenant_id)
+        statement = (
+            select(SearchRunRecord)
+            .where(
+                SearchRunRecord.tenant_id == tenant_id,
+                SearchRunRecord.id == run_id,
+            )
+            .with_for_update()
         )
         record = await self._session.scalar(statement)
         return run_from_record(record) if record is not None else None
@@ -436,5 +455,40 @@ class SqlAttemptRepository:
         ).where(
             StepAttemptRecord.tenant_id == tenant_id,
             StepAttemptRecord.step_id == step_id,
+        )
+        return int(await self._session.scalar(statement))
+
+
+class SqlRunEventRepository:
+    def __init__(self, session: AsyncSession, tenant_id: UUID) -> None:
+        self._session = session
+        self._tenant_id = tenant_id
+
+    def _assert_tenant(self, tenant_id: UUID) -> None:
+        if tenant_id != self._tenant_id:
+            raise InvariantViolation(
+                "Repository cannot cross its tenant scope",
+                code="tenant_scope_mismatch",
+            )
+
+    async def add(self, event: RunEventData) -> None:
+        self._assert_tenant(event.tenant_id)
+        self._session.add(
+            RunEvent(
+                id=event.id,
+                tenant_id=event.tenant_id,
+                run_id=event.run_id,
+                sequence=event.sequence,
+                event_type=event.event_type,
+                payload=dict(event.payload),
+                created_at=event.created_at,
+            )
+        )
+
+    async def next_sequence(self, tenant_id: UUID, run_id: UUID) -> int:
+        self._assert_tenant(tenant_id)
+        statement = select(func.coalesce(func.max(RunEvent.sequence), 0) + 1).where(
+            RunEvent.tenant_id == tenant_id,
+            RunEvent.run_id == run_id,
         )
         return int(await self._session.scalar(statement))
