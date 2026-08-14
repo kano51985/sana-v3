@@ -22,7 +22,15 @@ NOW = datetime(2026, 8, 14, tzinfo=timezone.utc)
 def make_run() -> SearchRun:
     policy = SearchPolicy.default()
     routing = RoutingDecision(SearchMode.FAST, ("single_fact",), policy.version, 0.9)
-    return SearchRun(uuid4(), uuid4(), routing, policy.snapshot(SearchMode.FAST, NOW))
+    return SearchRun(
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        routing,
+        policy.snapshot(SearchMode.FAST, NOW),
+    )
 
 
 def test_controlled_timeout_is_successful_partial_answer() -> None:
@@ -82,3 +90,14 @@ def test_run_status_has_no_public_assignment_path() -> None:
 
     with pytest.raises(AttributeError):
         run.status = RunStatus.SUCCEEDED
+
+
+def test_persisted_version_tracks_multiple_changes_as_one_save_boundary() -> None:
+    run = make_run()
+    run.start(NOW)
+    run.record_usage(run.usage.add(queries=1))
+
+    assert run.version == 2
+    assert run.persisted_version == 0
+    run.mark_persisted()
+    assert run.persisted_version == 2

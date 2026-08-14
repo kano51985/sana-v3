@@ -227,6 +227,9 @@ class ArtifactRef:
 class SearchRun:
     id: UUID
     tenant_id: UUID
+    conversation_id: UUID
+    message_id: UUID
+    response_run_id: UUID
     routing: RoutingDecision
     budget: BudgetSnapshot
     _status: RunStatus = field(default=RunStatus.QUEUED, init=False, repr=False)
@@ -240,10 +243,73 @@ class SearchRun:
     started_at: datetime | None = None
     completed_at: datetime | None = None
     version: int = 0
+    _persisted_version: int = field(default=0, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.routing.policy_version != self.budget.policy_version:
             raise ValueError("Routing and budget policy versions must match")
+
+    @classmethod
+    def rehydrate(
+        cls,
+        *,
+        id: UUID,
+        tenant_id: UUID,
+        conversation_id: UUID,
+        message_id: UUID,
+        response_run_id: UUID,
+        routing: RoutingDecision,
+        budget: BudgetSnapshot,
+        status: RunStatus,
+        answer_quality: AnswerQuality,
+        stop_reason: StopReason | None,
+        usage: BudgetUsage,
+        started_at: datetime | None,
+        completed_at: datetime | None,
+        version: int,
+    ) -> "SearchRun":
+        run = cls(
+            id=id,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            response_run_id=response_run_id,
+            routing=routing,
+            budget=budget,
+            usage=usage,
+            started_at=started_at,
+            completed_at=completed_at,
+            version=version,
+        )
+        run._status = RunStatus(status)
+        run._answer_quality = AnswerQuality(answer_quality)
+        run._stop_reason = StopReason(stop_reason) if stop_reason is not None else None
+        run._persisted_version = version
+        run._validate_loaded_state()
+        return run
+
+    def _validate_loaded_state(self) -> None:
+        if self.status is RunStatus.SUCCEEDED:
+            if self.answer_quality is AnswerQuality.NONE or self.stop_reason is None:
+                raise InvariantViolation("Persisted successful run has no answer outcome")
+            if (
+                self.answer_quality is AnswerQuality.COMPLETE
+                and self.stop_reason is not StopReason.FACTS_COVERED
+            ):
+                raise InvariantViolation("Persisted complete run has an invalid stop reason")
+            if (
+                self.answer_quality is AnswerQuality.PARTIAL
+                and self.stop_reason is StopReason.FACTS_COVERED
+            ):
+                raise InvariantViolation("Persisted partial run has an invalid stop reason")
+        elif self.status is RunStatus.CANCELLED:
+            if self.stop_reason is not StopReason.USER_CANCELLED:
+                raise InvariantViolation("Persisted cancelled run has an invalid stop reason")
+        elif self.status is RunStatus.FAILED:
+            if self.answer_quality is not AnswerQuality.NONE or self.stop_reason is None:
+                raise InvariantViolation("Persisted failed run has an invalid answer outcome")
+        elif self.answer_quality is not AnswerQuality.NONE or self.stop_reason is not None:
+            raise InvariantViolation("Non-terminal run cannot have a final answer outcome")
 
     @property
     def mode(self) -> SearchMode:
@@ -269,6 +335,13 @@ class SearchRun:
             RunStatus.CANCELLED,
         }
 
+    @property
+    def persisted_version(self) -> int:
+        return self._persisted_version
+
+    def mark_persisted(self) -> None:
+        self._persisted_version = self.version
+
     def _transition(self, target: RunStatus) -> None:
         assert_transition(
             self.status,
@@ -293,6 +366,17 @@ class SearchRun:
     def record_usage(self, usage: BudgetUsage) -> None:
         if self.is_terminal:
             raise InvariantViolation("Cannot update usage for a terminal run")
+        if any(
+            new < old
+            for new, old in (
+                (usage.query_count, self.usage.query_count),
+                (usage.provider_count, self.usage.provider_count),
+                (usage.fetch_count, self.usage.fetch_count),
+                (usage.llm_call_count, self.usage.llm_call_count),
+                (usage.expansion_rounds, self.usage.expansion_rounds),
+            )
+        ):
+            raise InvariantViolation("Run usage counters cannot decrease")
         self.usage = usage
         self.version += 1
 
