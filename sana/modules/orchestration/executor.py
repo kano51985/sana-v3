@@ -6,6 +6,7 @@ import asyncio
 from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
+import logging
 from typing import Protocol
 from uuid import UUID
 
@@ -17,6 +18,9 @@ from sana.modules.orchestration.step_handlers.base import (
 from sana.modules.orchestration.domain import StepAttempt
 from sana.modules.shared.errors import ErrorCategory, TypedError
 from sana.modules.shared.ids import TraceContext
+
+
+logger = logging.getLogger(__name__)
 
 
 class ExecutionDisposition(StrEnum):
@@ -177,6 +181,16 @@ class DurableStepExecutor:
                 trace_context,
             )
         except Exception as error:
+            logger.exception(
+                "Unexpected Step operation failure",
+                extra={
+                    "tenant_id": str(tenant_id),
+                    "run_id": str(claimed.context.run_id),
+                    "step_id": str(step_id),
+                    "step_key": claimed.context.step_key,
+                    "step_type": claimed.context.step_type.value,
+                },
+            )
             disposition = await self._store.fail(
                 claimed,
                 TypedError(

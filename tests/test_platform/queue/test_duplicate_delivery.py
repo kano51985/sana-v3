@@ -77,3 +77,19 @@ def test_celery_is_configured_for_late_ack_and_single_prefetch() -> None:
     assert app.conf.task_reject_on_worker_lost is True
     assert app.conf.worker_prefetch_multiplier == 1
     assert app.conf.task_ignore_result is True
+
+
+def test_celery_queues_have_isolated_direct_exchanges_and_routing_keys() -> None:
+    app = create_celery_app("redis://localhost:6379/15")
+
+    assert app.conf.task_default_exchange == "fast"
+    assert app.conf.task_default_routing_key == "fast"
+    assert {
+        (queue.name, queue.exchange.name, queue.routing_key)
+        for queue in app.conf.task_queues
+    } == {
+        ("fast", "fast", "fast"),
+        ("research", "research", "research"),
+        ("crawl", "crawl", "crawl"),
+        ("maintenance", "maintenance", "maintenance"),
+    }

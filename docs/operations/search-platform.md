@@ -17,10 +17,15 @@ PostgreSQL 是 Run、Step、Attempt、证据与记忆的唯一事实源。Redis 
 | `SANA_CELERY_BROKER_URL` | Celery broker | `redis://localhost:6379/0` |
 | `SANA_API_URL` | Streamlit 访问的 API 地址 | `http://localhost:8000` |
 | `SANA_AUTH_MODE` | `dev` 或 `oidc` | `dev` |
-| `SANA_STEP_HANDLER_FACTORY` | Worker 处理器工厂，格式 `module:function` | 无，必须显式配置 |
+| `SANA_STEP_HANDLER_FACTORY` | Worker 处理器工厂，格式 `module:function` | `sana.app.production_worker:create_handler` |
 | `SANA_ARTIFACT_ROOT` | 跨 Step 的 content-addressed artifact 根目录 | `var/artifacts` |
+| `SANA_WORKER_PLANNER_PROVIDER` | `heuristic`、`deepseek`、`openai` 或 `local` | `heuristic` |
+| `SANA_WORKER_PLANNER_MODEL` | 模型型 planner 的显式模型名 | 空 |
+| `SANA_WORKER_DISCOVERY_PROVIDERS` | 逗号分隔的 `bing_rss`/`searxng` | `bing_rss` |
+| `SANA_WORKER_SEARXNG_URL` | 启用 `searxng` 时的服务地址 | 空 |
+| `SANA_WORKER_MAX_SELECTED_HITS` | 每个 Run 最多抓取的候选数 | `4` |
 
-生产环境必须使用 OIDC，并设置 issuer、audience 与 JWKS URL。`SanaSettings` 会拒绝在 `SANA_ENVIRONMENT=production` 时启用开发认证。模型密钥只能通过进程环境或外部秘密管理器注入，不能放进 Streamlit、数据库配置面板、镜像或仓库。
+生产环境必须使用 OIDC，并设置 issuer、audience 与 JWKS URL。`SanaSettings` 会拒绝在 `SANA_ENVIRONMENT=production` 时启用开发认证；`ProductionWorkerSettings` 也会拒绝生产环境使用离线 heuristic planner。模型密钥只能通过 Worker 进程环境或外部秘密管理器注入，不能放进 Streamlit、数据库配置面板、镜像或仓库。离线 heuristic 只供本地连通性和恢复验证，它会在证据不足时返回 `PARTIAL`，不会把猜测包装成完整答案。
 
 ## 外部 PostgreSQL/Redis 启动
 
@@ -30,7 +35,6 @@ PostgreSQL 是 Run、Step、Attempt、证据与记忆的唯一事实源。Redis 
 .\start-api.ps1
 python -m sana.app.bootstrap_dev
 .\start-worker.ps1 -Role dispatcher
-$env:SANA_STEP_HANDLER_FACTORY = "your_package.worker:create_handler"
 .\start-worker.ps1 -Role worker -Queue all
 .\start-streamlit.ps1
 ```
@@ -57,7 +61,7 @@ docker compose -f deployment/docker-compose.yml up --build
 docker compose -f deployment/docker-compose.yml --profile dev-bootstrap run --rm bootstrap-dev
 ```
 
-只有提供了真实 `SANA_STEP_HANDLER_FACTORY` 才能启用 Worker profile：
+Worker profile 默认装配内置的持久化搜索处理器。首次启动和每次升级时，`artifact-init` 会以一次性 root 作业修复共享 artifact 卷所有权；常驻 API、Dispatcher、Worker 和 Streamlit 都以非 root `sana` 用户运行：
 
 ```powershell
 docker compose -f deployment/docker-compose.yml --profile workers up --build
@@ -69,9 +73,10 @@ docker compose -f deployment/docker-compose.yml --profile workers up --build
 
 - `GET /health/live` 只证明 API 进程仍在运行。
 - `GET /health/ready` 同时探测 PostgreSQL 和 Redis；任一不可用返回 503。
-- Worker 缺少处理器工厂时直接退出，禁止产生“空 Worker 已健康”的假象。
+- Compose 和 `start-worker.ps1` 默认使用内置生产处理器；直接调用底层 Worker 且既未注入工厂也未使用入口默认值时会退出，禁止产生“空 Worker 已健康”的假象。
 - Dispatcher 每轮先枚举 ACTIVE tenant，再在各自 `app.tenant_id` RLS 事务中领取 Outbox。
-- 同一控制进程扫描 PostgreSQL 中超出 grace period 的 READY、到期 RETRY_WAIT 和 lease 过期 RUNNING Step；Redis 丢失任务后会按稳定 task ID 重投。
+- 同一控制进程扫描 PostgreSQL 中超出 grace period 的 READY、到期 RETRY_WAIT 和 lease 过期 RUNNING Step；Redis 丢失任务后会按稳定 task ID 重投，并用数据库 `updated_at` 开启下一段重投冷却，避免 Worker 离线时形成毫秒级投递风暴。
+- `fast`、`research`、`crawl`、`maintenance` 使用各自独立的 direct exchange 与 routing key。
 - Celery 消息只传 `tenant_id`、`step_id` 与 trace context，不传 prompt、正文或密钥。
 
 ## 切流门槛
@@ -111,9 +116,9 @@ API/Worker 回滚必须先停止新流量，再停止 Dispatcher，等待运行�
 
 截至 2026-08-14，本仓库仍有以下阻断项，因此不能宣称最终切流完成：
 
-1. 已提供 `DurableStepExecutor`、PostgreSQL lease/Attempt finalization 与重试边界，但尚无生产 completion coordinator/`SANA_STEP_HANDLER_FACTORY` 将真实 planner、provider、fetch、extract、verify、synthesize 全部装配并生成后继 Step。
-2. 已提供带 tenant/hash 校验的本地共享卷 artifact adapter；多主机 Worker 上线前仍需接入 S3/MinIO 或经过验证的共享文件系统，不能让每台 Worker 使用独立本地目录。
-3. 本机 Docker 已验证迁移、非绕过应用角色、RLS、双租户 API、Outbox 发布及 Redis 清空后的 READY Step 重投；尚未验证配置真实 handler 后的 Worker crash/lease 恢复，也尚未执行记忆正式导入与召回抽样。
+1. 已提供带 tenant/hash 校验的本地共享卷 artifact adapter；多主机 Worker 上线前仍需接入 S3/MinIO 或经过验证的共享文件系统，不能让每台 Worker 使用独立本地目录。
+2. 内置 completion coordinator 已在本机 Docker 完成真实 planner、Bing RSS discovery、HTTP fetch、extract、verify、synthesize 的 FAST/RESEARCH 闭环；也已在两个并行 FETCH 期间 SIGKILL Worker，验证 6 秒租约回收、旧 Attempt `lease_expired` 封账、attempt 2 续跑、重复消息吸收以及单一助手回复。生产切流前仍需用获批的模型型 planner/provider 完成质量与时延验收。
+3. 本机 Docker 已验证迁移、非绕过应用角色、RLS、双租户 API、Outbox 发布、Redis 清空后的 READY Step 重投及 Worker crash/lease 恢复；尚未执行记忆正式导入与召回抽样。
 4. 生产 OIDC tenant/user provisioning 仍需外部身份管理流程。
 
 这些阻断项必须通过实现和真实集成环境证据关闭，不能通过降低就绪条件或改文档绕过。

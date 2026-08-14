@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Protocol
 from uuid import UUID
 
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import exists, func, or_, select, update
 
 from sana.modules.orchestration.domain import SearchMode, StepStatus
 from sana.modules.orchestration.outbox import trace_context_to_dict
@@ -177,12 +177,52 @@ class TenantReconciliationScanner:
                 )
                 if current_lease is None or current_lease > now:
                     return False
+                await uow.session.execute(
+                    update(StepAttemptRecord)
+                    .where(
+                        StepAttemptRecord.tenant_id == candidate.tenant_id,
+                        StepAttemptRecord.step_id == candidate.step_id,
+                        StepAttemptRecord.completed_at.is_(None),
+                        StepAttemptRecord.leased_until <= now,
+                    )
+                    .values(
+                        completed_at=now,
+                        error_type="TRANSIENT",
+                        error_code="lease_expired",
+                        error_details={
+                            "category": "TRANSIENT",
+                            "code": "lease_expired",
+                            "message": "Worker lease expired before the attempt completed",
+                            "retryable": True,
+                            "details": {},
+                        },
+                    )
+                )
                 step.release_expired_lease()
             else:
                 return step.status is StepStatus.READY
             await uow.steps.save(step)
             await uow.commit()
             return True
+
+    async def mark_dispatched(
+        self,
+        candidate: ReconcileCandidate,
+        now: datetime,
+    ) -> None:
+        """Start a new redelivery grace window without changing Step state."""
+
+        async with self._uow_factory(candidate.tenant_id) as uow:
+            await uow.session.execute(
+                update(SearchStepRecord)
+                .where(
+                    SearchStepRecord.tenant_id == candidate.tenant_id,
+                    SearchStepRecord.id == candidate.step_id,
+                    SearchStepRecord.status == StepStatus.READY.value,
+                )
+                .values(updated_at=now)
+            )
+            await uow.commit()
 
 
 class ReconciliationPump:
@@ -229,6 +269,10 @@ class ReconciliationPump:
                     failed += 1
                 else:
                     dispatched += 1
+                    try:
+                        await self._scanner.mark_dispatched(item.candidate, now)
+                    except Exception:
+                        failed += 1
         return ReconciliationCycle(
             len(tenant_ids),
             recovered,

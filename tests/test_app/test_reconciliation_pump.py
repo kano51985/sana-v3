@@ -24,6 +24,7 @@ class FakeScanner:
     def __init__(self, items) -> None:
         self.items = items
         self.released = []
+        self.marked = []
 
     async def candidates(self, tenant_id, now, *, limit):
         return self.items
@@ -31,6 +32,9 @@ class FakeScanner:
     async def make_ready(self, candidate, now):
         self.released.append(candidate.step_id)
         return True
+
+    async def mark_dispatched(self, candidate, now):
+        self.marked.append((candidate.step_id, now))
 
 
 class FakeDispatcher:
@@ -60,6 +64,7 @@ async def test_reconciliation_releases_expired_lease_before_redis_redelivery() -
     assert cycle.recovered == cycle.dispatched == 1
     assert cycle.failed == 0
     assert scanner.released == [step_id]
+    assert scanner.marked == [(step_id, NOW)]
     assert dispatcher.calls[0][0:2] == (tenant_id, step_id)
     assert dispatcher.calls[0][3] is SearchQueue.RESEARCH
 
@@ -79,3 +84,4 @@ async def test_ready_step_is_redis_redelivered_without_state_rewrite() -> None:
     assert cycle.recovered == 0
     assert cycle.dispatched == 1
     assert scanner.released == []
+    assert scanner.marked == [(step_id, NOW)]

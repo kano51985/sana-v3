@@ -37,3 +37,21 @@ def test_celery_entrypoint_evaluates_the_worker_factory() -> None:
 
     assert result.returncode != 0
     assert "refusing to start an unconfigured worker" in result.stderr
+
+
+def test_celery_entrypoint_accepts_the_builtin_production_factory() -> None:
+    environment = os.environ.copy()
+    environment["SANA_STEP_HANDLER_FACTORY"] = (
+        "sana.app.production_worker:create_handler"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import sana.app.worker_entrypoint"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr

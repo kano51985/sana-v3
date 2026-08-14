@@ -28,11 +28,11 @@ def test_legacy_ui_requires_an_explicit_rollback_flag() -> None:
     assert "不具备新平台的多租户隔离" in legacy
 
 
-def test_worker_entry_refuses_an_unconfigured_handler() -> None:
+def test_worker_entry_uses_the_builtin_production_handler_by_default() -> None:
     worker = read("start-worker.ps1")
 
     assert "SANA_STEP_HANDLER_FACTORY" in worker
-    assert "throw" in worker
+    assert "sana.app.production_worker:create_handler" in worker
     assert "sana.app.outbox_dispatcher" in worker
 
 
@@ -42,6 +42,7 @@ def test_compose_declares_durable_services_and_opt_in_workers() -> None:
     for service in (
         "postgres:",
         "redis:",
+        "artifact-init:",
         "migrate:",
         "api:",
         "dispatcher:",
@@ -52,7 +53,11 @@ def test_compose_declares_durable_services_and_opt_in_workers() -> None:
     assert 'profiles: ["workers"]' in compose
     assert "/health/ready" in compose
     assert "sana.app.worker_entrypoint:app" in compose
+    assert "sana.app.production_worker:create_handler" in compose
     assert "sana-artifacts:/var/lib/sana/artifacts" in compose
+    assert 'user: "0:0"' in compose
+    assert "chown -R sana:sana /var/lib/sana/artifacts" in compose
+    assert "condition: service_completed_successfully" in compose
     assert "user_profile.json" not in read("deployment/Dockerfile")
 
 

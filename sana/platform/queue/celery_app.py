@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 from celery import Celery
-from kombu import Queue
+from kombu import Exchange, Queue
 
 
 QUEUE_NAMES = ("fast", "research", "crawl", "maintenance")
@@ -22,7 +22,13 @@ def create_celery_app(broker_url: str) -> Celery:
         task_ignore_result=True,
         result_backend=None,
         task_default_queue="fast",
-        task_queues=tuple(Queue(name) for name in QUEUE_NAMES),
+        task_default_exchange="fast",
+        task_default_exchange_type="direct",
+        task_default_routing_key="fast",
+        task_queues=tuple(
+            Queue(name, Exchange(name, type="direct"), routing_key=name)
+            for name in QUEUE_NAMES
+        ),
         broker_connection_retry_on_startup=True,
         task_serializer="json",
         accept_content=("json",),

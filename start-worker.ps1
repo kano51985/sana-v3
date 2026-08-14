@@ -26,7 +26,7 @@ if ($Role -eq "dispatcher") {
 }
 
 if (-not $env:SANA_STEP_HANDLER_FACTORY) {
-    throw "SANA_STEP_HANDLER_FACTORY must name a concrete module:function before a Worker can start."
+    $env:SANA_STEP_HANDLER_FACTORY = "sana.app.production_worker:create_handler"
 }
 
 $queues = if ($Queue -eq "all") {
@@ -35,7 +35,7 @@ $queues = if ($Queue -eq "all") {
     $Queue
 }
 
-Write-Host "Starting Sana Worker for queue(s): $queues" -ForegroundColor Green
+Write-Host "Starting Sana Worker for queue(s): $queues with $env:SANA_STEP_HANDLER_FACTORY" -ForegroundColor Green
 & $python -m celery -A "sana.app.worker:create_app" worker `
     --loglevel INFO `
     --queues $queues `

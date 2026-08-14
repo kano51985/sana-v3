@@ -26,3 +26,11 @@ def test_legacy_and_memory_migration_dependencies_are_not_in_runtime_image() -> 
         dependencies = project["project"]["optional-dependencies"][extra]
         assert any(item.startswith("chromadb") for item in dependencies)
         assert any(item.startswith("pymongo") for item in dependencies)
+
+
+def test_runtime_image_drops_root_before_starting_services() -> None:
+    dockerfile = Path("deployment/Dockerfile").read_text(encoding="utf-8")
+
+    assert "useradd --system" in dockerfile
+    assert "USER sana" in dockerfile
+    assert dockerfile.index("USER sana") < dockerfile.index("EXPOSE 8000 8501")

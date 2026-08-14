@@ -20,4 +20,11 @@ COPY .streamlit ./.streamlit
 
 RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation .
 
+RUN groupadd --system sana \
+    && useradd --system --gid sana --home-dir /app --no-create-home sana \
+    && mkdir -p /var/lib/sana/artifacts \
+    && chown -R sana:sana /app /var/lib/sana
+
+USER sana
+
 EXPOSE 8000 8501

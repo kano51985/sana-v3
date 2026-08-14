@@ -92,6 +92,15 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  artifact-init:
+    <<: *sana-image
+    profiles: ["workers"]
+    restart: "no"
+    user: "0:0"
+    command: ["sh", "-c", "chown -R sana:sana /var/lib/sana/artifacts"]
+    volumes:
+      - sana-artifacts:/var/lib/sana/artifacts
+
   api:
     <<: *sana-image
     environment: *sana-environment
@@ -119,13 +128,22 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      artifact-init:
+        condition: service_completed_successfully
 
   worker:
     <<: *sana-image
     profiles: ["workers"]
     environment:
       <<: *sana-environment
-      SANA_STEP_HANDLER_FACTORY: ${SANA_STEP_HANDLER_FACTORY:-}
+      SANA_STEP_HANDLER_FACTORY: ${SANA_STEP_HANDLER_FACTORY:-sana.app.production_worker:create_handler}
+      SANA_WORKER_PLANNER_PROVIDER: ${SANA_WORKER_PLANNER_PROVIDER:-heuristic}
+      SANA_WORKER_PLANNER_MODEL: ${SANA_WORKER_PLANNER_MODEL:-}
+      SANA_WORKER_DISCOVERY_PROVIDERS: ${SANA_WORKER_DISCOVERY_PROVIDERS:-bing_rss}
+      SANA_WORKER_SEARXNG_URL: ${SANA_WORKER_SEARXNG_URL:-}
+      SANA_WORKER_MAX_SELECTED_HITS: ${SANA_WORKER_MAX_SELECTED_HITS:-4}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     command: ["python", "-m", "celery", "-A", "sana.app.worker_entrypoint:app", "worker", "--loglevel", "INFO", "--queues", "fast,research,crawl,maintenance", "--concurrency", "2"]
     volumes:
       - sana-artifacts:/var/lib/sana/artifacts
@@ -134,6 +152,8 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      artifact-init:
+        condition: service_completed_successfully
 
   streamlit:
     <<: *sana-image
