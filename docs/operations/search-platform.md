@@ -18,6 +18,7 @@ PostgreSQL 是 Run、Step、Attempt、证据与记忆的唯一事实源。Redis 
 | `SANA_API_URL` | Streamlit 访问的 API 地址 | `http://localhost:8000` |
 | `SANA_AUTH_MODE` | `dev` 或 `oidc` | `dev` |
 | `SANA_STEP_HANDLER_FACTORY` | Worker 处理器工厂，格式 `module:function` | 无，必须显式配置 |
+| `SANA_ARTIFACT_ROOT` | 跨 Step 的 content-addressed artifact 根目录 | `var/artifacts` |
 
 生产环境必须使用 OIDC，并设置 issuer、audience 与 JWKS URL。`SanaSettings` 会拒绝在 `SANA_ENVIRONMENT=production` 时启用开发认证。模型密钥只能通过进程环境或外部秘密管理器注入，不能放进 Streamlit、数据库配置面板、镜像或仓库。
 
@@ -107,7 +108,7 @@ API/Worker 回滚必须先停止新流量，再停止 Dispatcher，等待运行�
 截至 2026-08-14，本仓库仍有以下阻断项，因此不能宣称最终切流完成：
 
 1. 领域层具备 FAST/RESEARCH 状态机和算子，但尚无生产 `SANA_STEP_HANDLER_FACTORY` 将真实 planner、provider、fetch、extract、verify、synthesize 全部装配到持久化执行器。
-2. Fetch/Extract 分离步骤尚无共享 artifact/object-storage adapter，只有 URI 契约。
+2. 已提供带 tenant/hash 校验的本地共享卷 artifact adapter；多主机 Worker 上线前仍需接入 S3/MinIO 或经过验证的共享文件系统，不能让每台 Worker 使用独立本地目录。
 3. 当前机器没有可用 PostgreSQL，所以新 Reconciler、RLS、迁移、真实多用户、Worker crash 和记忆正式导入未在本机执行；Redis 服务可用不代表这些验收通过。
 4. 生产 OIDC tenant/user provisioning 仍需外部身份管理流程。
 

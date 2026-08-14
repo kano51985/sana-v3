@@ -10,6 +10,7 @@ Browser session
   -> tenant-aware Outbox Dispatcher
   -> Redis/Celery queue: tenant_id + step_id + trace only
   -> configured Worker
+  -> tenant-scoped content-addressed artifact store between Steps
   -> PostgreSQL durable state + Redis SSE acceleration
 ```
 

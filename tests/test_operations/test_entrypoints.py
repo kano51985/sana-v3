@@ -51,6 +51,7 @@ def test_compose_declares_durable_services_and_opt_in_workers() -> None:
         assert service in compose
     assert 'profiles: ["workers"]' in compose
     assert "/health/ready" in compose
+    assert "sana-artifacts:/var/lib/sana/artifacts" in compose
     assert "user_profile.json" not in read("deployment/Dockerfile")
 
 

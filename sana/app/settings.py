@@ -22,6 +22,7 @@ class SanaSettings(BaseSettings):
     outbox_poll_interval_seconds: float = 0.5
     outbox_batch_size: int = 100
     reconciliation_redelivery_grace_seconds: float = 5.0
+    artifact_root: str = "var/artifacts"
     auth_mode: Literal["dev", "oidc"] = "dev"
     dev_auth_enabled: bool = True
     oidc_issuer: str = ""
@@ -39,6 +40,8 @@ class SanaSettings(BaseSettings):
             raise ValueError("Outbox batch size must be positive")
         if self.reconciliation_redelivery_grace_seconds < 0:
             raise ValueError("Reconciliation redelivery grace cannot be negative")
+        if not self.artifact_root.strip():
+            raise ValueError("Artifact root cannot be empty")
         if self.environment == "production" and self.auth_mode == "dev":
             raise ValueError("Development authentication is forbidden in production")
         if self.auth_mode == "dev" and not self.dev_auth_enabled:

@@ -4,6 +4,7 @@ x-sana-environment: &sana-environment
   SANA_REDIS_URL: ${SANA_REDIS_URL:-redis://redis:6379/1}
   SANA_CELERY_BROKER_URL: ${SANA_CELERY_BROKER_URL:-redis://redis:6379/0}
   SANA_AUTH_MODE: ${SANA_AUTH_MODE:-dev}
+  SANA_ARTIFACT_ROOT: ${SANA_ARTIFACT_ROOT:-/var/lib/sana/artifacts}
   SANA_DEV_AUTH_ENABLED: ${SANA_DEV_AUTH_ENABLED:-true}
   SANA_OIDC_ISSUER: ${SANA_OIDC_ISSUER:-}
   SANA_OIDC_AUDIENCE: ${SANA_OIDC_AUDIENCE:-}
@@ -98,6 +99,8 @@ services:
       <<: *sana-environment
       SANA_STEP_HANDLER_FACTORY: ${SANA_STEP_HANDLER_FACTORY:-}
     command: ["python", "-m", "celery", "-A", "sana.app.worker:create_app", "worker", "--loglevel", "INFO", "--queues", "fast,research,crawl,maintenance", "--concurrency", "2"]
+    volumes:
+      - sana-artifacts:/var/lib/sana/artifacts
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -118,3 +121,4 @@ services:
 volumes:
   sana-postgres:
   sana-redis:
+  sana-artifacts:
