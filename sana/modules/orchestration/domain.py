@@ -393,6 +393,27 @@ class SearchRun:
         self.usage = usage
         self.version += 1
 
+    def upgrade_to_research(
+        self,
+        routing: RoutingDecision,
+        budget: BudgetSnapshot,
+    ) -> None:
+        if self.is_terminal:
+            raise InvariantViolation("Cannot upgrade a terminal run")
+        if self.mode is not SearchMode.FAST or routing.mode is not SearchMode.RESEARCH:
+            raise InvariantViolation("Only a FAST run can upgrade to RESEARCH")
+        if routing.policy_version != budget.policy_version:
+            raise InvariantViolation("Upgrade routing and budget versions differ")
+        if routing.policy_version != self.routing.policy_version:
+            raise InvariantViolation("Upgrade cannot change the run policy version")
+        if budget.created_at != self.budget.created_at:
+            raise InvariantViolation("Upgrade must retain the original run start time")
+        if budget.hard_deadline_at <= self.budget.hard_deadline_at:
+            raise InvariantViolation("Research upgrade must extend the hard deadline")
+        self.routing = routing
+        self.budget = budget
+        self.version += 1
+
     def succeed(
         self,
         quality: AnswerQuality,
