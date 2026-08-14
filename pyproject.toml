@@ -44,7 +44,7 @@ dev = [
 include = ["sana*", "interfaces*"]
 
 [tool.pytest.ini_options]
-addopts = ["--strict-markers"]
+addopts = ["--strict-markers", "--import-mode=importlib"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
