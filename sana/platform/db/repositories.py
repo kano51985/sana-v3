@@ -223,9 +223,16 @@ class SqlRunRepository:
                 SearchRunRecord.version == expected_version,
             )
             .values(
+                mode=run.mode.value,
+                route_reason_codes=list(run.routing.reason_codes),
+                policy_version=run.routing.policy_version,
+                route_confidence=run.routing.confidence,
                 status=run.status.value,
                 answer_quality=run.answer_quality.value,
                 stop_reason=run.stop_reason.value if run.stop_reason else None,
+                soft_deadline_at=run.budget.soft_deadline_at,
+                hard_deadline_at=run.budget.hard_deadline_at,
+                budget_snapshot=budget_to_dict(run.budget),
                 usage_snapshot=usage_to_dict(run.usage),
                 started_at=run.started_at,
                 completed_at=run.completed_at,
