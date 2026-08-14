@@ -8,6 +8,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -182,6 +183,10 @@ class EvidenceCandidate(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         UniqueConstraint("fact_requirement_id", "document_chunk_id", "quote_hash", name="uq_evidence_candidates_fact_chunk_quote"),
         UniqueConstraint("tenant_id", "id", name="uq_evidence_candidates_tenant_id_id"),
         Index("ix_evidence_candidates_tenant_run_fact", "tenant_id", "run_id", "fact_requirement_id"),
+        CheckConstraint(
+            "start_offset >= 0 AND end_offset >= start_offset",
+            name="quote_offsets",
+        ),
     )
 
     tenant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
@@ -191,6 +196,8 @@ class EvidenceCandidate(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     document_chunk_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("document_chunks.id", ondelete="CASCADE"), nullable=False)
     quote: Mapped[str] = mapped_column(Text, nullable=False)
     quote_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    start_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_offset: Mapped[int] = mapped_column(Integer, nullable=False)
     support_type: Mapped[str] = mapped_column(String(32), nullable=False)
     candidate_score: Mapped[float] = mapped_column(Float, nullable=False)
 

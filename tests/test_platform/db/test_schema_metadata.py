@@ -114,6 +114,16 @@ def test_document_and_memory_rows_have_tenant_local_identity_constraints() -> No
         assert tenant_identity, table_name
 
 
+def test_evidence_candidates_persist_exact_quote_offsets() -> None:
+    table = Base.metadata.tables["evidence_candidates"]
+
+    assert table.c.start_offset.nullable is False
+    assert table.c.end_offset.nullable is False
+    assert "ck_evidence_candidates_quote_offsets" in _constraint_names(
+        "evidence_candidates"
+    )
+
+
 def test_migrations_cover_every_tenant_table_with_forced_rls() -> None:
     versions = Path(__file__).parents[3] / "alembic" / "versions"
     migration_paths = sorted(versions.glob("000*.py"))
