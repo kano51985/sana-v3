@@ -20,6 +20,19 @@ _REASON_CODE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
 _SYSTEM_REASON_CODES = frozenset(
     {"expected_answer_missing", "review_material_unavailable"}
 )
+HUMAN_REVIEW_REASON_CODES = frozenset(
+    {
+        "citation_irrelevant",
+        "contradiction",
+        "incomplete_answer",
+        "incorrect_fact",
+        "material_missing",
+        "missing_detail",
+        "source_inappropriate",
+        "stale_source",
+        "unsupported_claim",
+    }
+)
 
 
 class ReviewScore(StrEnum):
@@ -53,6 +66,8 @@ class ReviewSubmission:
         if self.actor_type is ReviewActor.HUMAN:
             if self.reviewer_user_id is None:
                 raise ValueError("Human review requires a reviewer principal")
+            if any(item not in HUMAN_REVIEW_REASON_CODES for item in reasons):
+                raise ValueError("Human review reason is not allowlisted by the rubric")
             if self.correctness_verdict is not ReviewVerdict.CORRECT and not reasons:
                 raise ValueError("Non-correct human review requires a reason code")
         elif self.reviewer_user_id is not None:
@@ -196,6 +211,7 @@ class ReviewProjection:
 
 
 __all__ = [
+    "HUMAN_REVIEW_REASON_CODES",
     "ReviewCitationProjection",
     "ReviewClaimProjection",
     "ReviewProjection",

@@ -21,6 +21,7 @@ from sana.modules.shadow_campaign.collector import (
     SourceQuery,
     SourceStep,
     collect_run_snapshot,
+    source_snapshot_digest,
 )
 from sana.modules.shadow_campaign.domain import ErrorClass
 from sana.modules.shadow_campaign.manifest import (
@@ -210,6 +211,26 @@ def test_collector_builds_traceable_metrics_and_conservative_cost() -> None:
     assert outcome.usage.observed_estimated_cost == Decimal("0.0002")
     assert outcome.error_class is None
     assert outcome.error_signal_flags == ()
+
+
+def test_source_digest_is_independent_of_gold_row_read_order() -> None:
+    case = replace(
+        _case(),
+        gold_assertions=(
+            GoldAssertion("z-last", "normalized_contains_all", ("stable",), False),
+            GoldAssertion("a-first", "normalized_contains_all", ("stable",), False),
+        ),
+    )
+    snapshot = _snapshot()
+    outcome = collect_run_snapshot(
+        snapshot,
+        case,
+        _rate(),
+        oracle_version="shadow-cases-v1",
+    )
+
+    reordered = replace(outcome, gold_assertions=tuple(reversed(outcome.gold_assertions)))
+    assert source_snapshot_digest(snapshot, reordered) == outcome.source_snapshot_digest
 
 
 @pytest.mark.parametrize(

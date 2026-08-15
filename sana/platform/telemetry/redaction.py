@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -47,6 +48,42 @@ _DIAGNOSTIC_VALUE_KEYS = frozenset(
         "citation_traceability",
         "query_pollution_count",
     }
+)
+
+_REPORT_FORBIDDEN_KEYS = frozenset(
+    {
+        "access_token",
+        "answer",
+        "api_key",
+        "authorization",
+        "content",
+        "cookie",
+        "message",
+        "password",
+        "prompt",
+        "provider_response_id",
+        "provider_token",
+        "query",
+        "query_text",
+        "quote",
+        "raw_provider",
+        "reasoning",
+        "rendered_url",
+        "reviewed_at",
+        "reviewer_user_id",
+        "secret",
+        "snippet",
+        "token",
+        "url",
+    }
+)
+_REPORT_SECRET_VALUE = re.compile(
+    r"(?:\bBearer\s+[A-Za-z0-9._~+/=-]{8,}|"
+    r"\b(?:sk|ds|api)[_-][A-Za-z0-9._-]{12,}|"
+    r"https?://[^\s/:]+:[^\s/@]+@|"
+    r"[?&](?:access_token|api_key|key|password|secret|token)=[^\s&#]+|"
+    r"\b(?:password|secret|token)\s*[=:]\s*[^\s,;]{6,})",
+    re.I,
 )
 
 
@@ -149,3 +186,44 @@ class TelemetryRedactor:
         if value is None or isinstance(value, (bool, int, float)):
             return value
         return f"<{type(value).__name__}>"
+
+
+class ReportPrivacyGuard:
+    """Fail closed when a generated report contains non-allowlisted content."""
+
+    @classmethod
+    def validate_payload(cls, value: Any, *, path: str = "$") -> None:
+        if isinstance(value, Mapping):
+            for raw_key, item in value.items():
+                key = str(raw_key)
+                if key.casefold() in _REPORT_FORBIDDEN_KEYS:
+                    raise ValueError(f"Report contains forbidden field at {path}.{key}")
+                cls.validate_payload(item, path=f"{path}.{key}")
+            return
+        if isinstance(value, (list, tuple)):
+            for index, item in enumerate(value):
+                cls.validate_payload(item, path=f"{path}[{index}]")
+            return
+        if isinstance(value, str) and _REPORT_SECRET_VALUE.search(value):
+            raise ValueError(f"Report contains a credential-like value at {path}")
+        if isinstance(value, float) and (
+            value != value or value in {float("inf"), float("-inf")}
+        ):
+            raise ValueError(f"Report contains a non-finite number at {path}")
+
+    @classmethod
+    def validate_json_bytes(cls, payload: bytes) -> None:
+        try:
+            decoded = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError("Report is not canonical UTF-8 JSON") from error
+        cls.validate_payload(decoded)
+
+    @staticmethod
+    def validate_text_bytes(payload: bytes) -> None:
+        try:
+            value = payload.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError("Report text is not UTF-8") from error
+        if _REPORT_SECRET_VALUE.search(value):
+            raise ValueError("Report text contains a credential-like value")

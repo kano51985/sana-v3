@@ -738,11 +738,30 @@ def _digest_payload(snapshot: RunSourceSnapshot, outcome: CollectionOutcome) -> 
                     "status": item.status,
                     "reason_code": item.reason_code,
                 }
-                for item in outcome.gold_assertions
+                for item in sorted(
+                    outcome.gold_assertions,
+                    key=lambda value: value.assertion_id,
+                )
             ],
             "error_signal_flags": outcome.error_signal_flags,
         },
     }
+
+
+def source_snapshot_digest(
+    snapshot: RunSourceSnapshot,
+    outcome: CollectionOutcome,
+) -> str:
+    """Recompute the Collector digest without re-running mutable business logic."""
+
+    if outcome.collector_schema_version != COLLECTOR_SCHEMA_VERSION:
+        raise InvariantViolation(
+            "Collector schema version is not implemented by this harness",
+            code="collector_schema_version_mismatch",
+        )
+    return hashlib.sha256(
+        canonical_json_bytes(_digest_payload(snapshot, outcome))
+    ).hexdigest()
 
 
 def collect_run_snapshot(
@@ -950,7 +969,7 @@ def collect_run_snapshot(
         failed_phase=_failed_phase(snapshot),
         error_signal_flags=signal_flags,
     )
-    digest = hashlib.sha256(canonical_json_bytes(_digest_payload(snapshot, preliminary))).hexdigest()
+    digest = source_snapshot_digest(snapshot, preliminary)
     return replace(preliminary, source_snapshot_digest=digest)
 
 
@@ -973,4 +992,5 @@ __all__ = [
     "SourceQuery",
     "SourceStep",
     "collect_run_snapshot",
+    "source_snapshot_digest",
 ]

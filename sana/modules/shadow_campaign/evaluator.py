@@ -201,6 +201,7 @@ class CampaignMetrics:
     coverage_stratum_bps: tuple[int, ...] = ()
     gold_pass_count: int = 0
     gold_total_count: int = 0
+    gold_macro_bps: int | None = None
     review_correct_count: int = 0
     review_citation_relevance_pass_count: int = 0
     review_source_appropriateness_pass_count: int = 0
@@ -246,6 +247,8 @@ class CampaignMetrics:
         if any(value < 0 for value in self.fast_latency_ms + self.research_latency_ms):
             raise ValueError("Campaign latencies cannot be negative")
         ratios = (self.coverage_macro_bps,) + self.coverage_stratum_bps
+        if self.gold_macro_bps is not None:
+            ratios += (self.gold_macro_bps,)
         if any(not 0 <= value <= 10_000 for value in ratios):
             raise ValueError("Campaign ratios must be basis points")
         violations = dict(self.hard_violation_counts)
@@ -526,7 +529,11 @@ class ReleaseGateEvaluator:
 
         if not policy.operational_only:
             mode_bps = _basis_points(metrics.mode_match_count, metrics.mode_total_count)
-            gold_bps = _basis_points(metrics.gold_pass_count, metrics.gold_total_count)
+            gold_bps = (
+                metrics.gold_macro_bps
+                if metrics.gold_macro_bps is not None
+                else _basis_points(metrics.gold_pass_count, metrics.gold_total_count)
+            )
             correct_bps = _basis_points(
                 metrics.review_correct_count, metrics.review_total_count
             )

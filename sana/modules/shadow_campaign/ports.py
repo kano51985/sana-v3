@@ -41,6 +41,11 @@ if TYPE_CHECKING:
         ReviewReceipt,
         ReviewSubmission,
     )
+    from sana.modules.shadow_campaign.report import (
+        CampaignReportSnapshot,
+        FinalReportBinding,
+        FinalReportReceipt,
+    )
 
 
 class CampaignRepository(Protocol):
@@ -205,3 +210,14 @@ class CampaignReportStore(Protocol):
     ) -> str: ...
 
     async def get(self, tenant_id: UUID, campaign_id: UUID, uri: str) -> bytes: ...
+
+
+class CampaignReportGateway(Protocol):
+    async def read(
+        self,
+        tenant_id: UUID,
+        user_id: UUID,
+        campaign_id: UUID,
+    ) -> CampaignReportSnapshot | None: ...
+
+    async def bind(self, binding: FinalReportBinding) -> FinalReportReceipt: ...

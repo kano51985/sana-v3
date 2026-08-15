@@ -28,6 +28,7 @@ from sana.modules.shadow_campaign.policy import (
     DOCKER_SMOKE_V1,
     ReviewRubric,
 )
+from sana.modules.shadow_campaign.report import CampaignReportBuilder
 from sana.modules.shadow_campaign.scheduler import CampaignSchedulingService
 from sana.modules.shadow_campaign.service import (
     CampaignLifecycleService,
@@ -65,6 +66,7 @@ from sana.platform.db.models.shadow_campaign import (
 )
 from sana.platform.db.session import create_database_engine, create_session_factory
 from sana.platform.db.shadow_collector import SqlShadowSnapshotReader
+from sana.platform.db.shadow_report import SqlShadowReportGateway
 from sana.platform.db.uow import TenantUnitOfWorkFactory
 
 
@@ -686,6 +688,24 @@ async def test_collector_is_fenced_atomic_idempotent_and_rls_scoped() -> None:
         )
         assert campaign_row == (1, 1, 100, 50, 0)
         assert gold == [("stable-answer", "PASS", "assertion_passed")]
+
+        report_snapshot = await SqlShadowReportGateway(sessions, reader).read(
+            tenant_id,
+            user_id,
+            campaign.id,
+        )
+        assert report_snapshot is not None
+        measured = next(
+            item
+            for item in report_snapshot.decision_input["results"]
+            if item["result_id"] == lease.id
+        )
+        assert measured["current_source_digest"] == receipt.source_snapshot_digest
+        report = CampaignReportBuilder().prepare(report_snapshot)
+        assert not any(
+            rule.rule_id == "hard_source_snapshot_mismatch" and not rule.passed
+            for rule in report.decision.rules
+        )
     finally:
         async with engine.begin() as connection:
             await connection.execute(

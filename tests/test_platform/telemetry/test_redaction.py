@@ -1,4 +1,6 @@
-from sana.platform.telemetry.redaction import TelemetryRedactor
+import pytest
+
+from sana.platform.telemetry.redaction import ReportPrivacyGuard, TelemetryRedactor
 
 
 def test_telemetry_attributes_are_allowlisted_and_identifiers_are_hashed() -> None:
@@ -64,3 +66,21 @@ def test_identifier_hash_is_stable_only_within_same_salt() -> None:
 
     assert first.hash_identifier("tenant-1") == same.hash_identifier("tenant-1")
     assert first.hash_identifier("tenant-1") != other.hash_identifier("tenant-1")
+
+
+def test_report_privacy_guard_rejects_content_identity_and_credentials() -> None:
+    safe = {
+        "decision": {"status": "PASS", "reason_codes": ["stable_reason"]},
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20},
+    }
+    ReportPrivacyGuard.validate_payload(safe)
+
+    for unsafe in (
+        {"prompt": "fixture prompt"},
+        {"reviewer_user_id": "00000000-0000-0000-0000-000000000001"},
+        {"environment": {"value": "Bearer very-secret-token"}},
+        {"source": "https://user:password@example.test/path"},
+        {"source": "https://example.test/path?access_token=private"},
+    ):
+        with pytest.raises(ValueError):
+            ReportPrivacyGuard.validate_payload(unsafe)

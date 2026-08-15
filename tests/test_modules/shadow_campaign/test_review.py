@@ -116,3 +116,19 @@ def test_unreviewable_human_submission_cannot_smuggle_scores_or_free_text() -> N
             ReviewActor.HUMAN,
             REVIEWER,
         )
+
+    with pytest.raises(ValueError, match="rubric"):
+        ReviewSubmission(
+            TENANT,
+            CAMPAIGN,
+            RESULT,
+            "rubric-v1",
+            ReviewVerdict.MINOR_ERROR,
+            ReviewScore.PASS,
+            ReviewScore.PASS,
+            ReviewScore.PASS,
+            ReviewScore.FAIL,
+            ("secret_but_structurally_valid",),
+            ReviewActor.HUMAN,
+            REVIEWER,
+        )
