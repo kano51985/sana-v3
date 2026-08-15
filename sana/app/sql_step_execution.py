@@ -93,10 +93,14 @@ class SqlStepExecutionStore:
         event_mirror: RedisEventMirror | None = None,
         retry_base_seconds: float = 1.0,
         retry_max_seconds: float = 10.0,
+        max_attempts: int = 3,
+        fetch_max_attempts: int = 2,
         lease_extension_seconds: float = 30.0,
     ) -> None:
         if retry_base_seconds <= 0 or retry_max_seconds < retry_base_seconds:
             raise ValueError("Retry delays are invalid")
+        if max_attempts < 1 or not 1 <= fetch_max_attempts <= max_attempts:
+            raise ValueError("Retry attempt limits are invalid")
         if lease_extension_seconds <= 0:
             raise ValueError("Lease extension must be positive")
         self._uow_factory = uow_factory
@@ -107,7 +111,18 @@ class SqlStepExecutionStore:
         self._mirror = event_mirror
         self._retry_base_seconds = retry_base_seconds
         self._retry_max_seconds = retry_max_seconds
+        self._max_attempts = max_attempts
+        self._fetch_max_attempts = fetch_max_attempts
         self._lease_extension_seconds = lease_extension_seconds
+
+    def _attempt_limit(self, step_type: StepType) -> int:
+        # A failed source has sibling fallbacks, so one network retry is enough.
+        # Other steps retain one additional retry for transient infrastructure.
+        return (
+            self._fetch_max_attempts
+            if step_type is StepType.FETCH
+            else self._max_attempts
+        )
 
     async def _add_event(
         self,
@@ -456,7 +471,11 @@ class SqlStepExecutionStore:
                     self._retry_base_seconds * (2 ** (claimed.attempt_no - 1)),
                 )
                 retry_at = now + timedelta(seconds=delay)
-                if error.retryable and retry_at < run.budget.hard_deadline_at:
+                if (
+                    error.retryable
+                    and claimed.attempt_no < self._attempt_limit(step.step_type)
+                    and retry_at < run.budget.hard_deadline_at
+                ):
                     step.retry_later(retry_at)
                     disposition = ExecutionDisposition.RETRY_SCHEDULED
                     event_type = "STEP_RETRY_SCHEDULED"

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from dataclasses import replace
 from datetime import timedelta
 from uuid import uuid4
 
@@ -28,6 +31,38 @@ class ParsingGateway:
 class ForbiddenGateway:
     async def generate(self, *args, **kwargs):
         raise AssertionError("No model call is allowed without accepted evidence")
+
+
+def test_synthesizer_prompt_nests_accepted_evidence_under_owning_fact() -> None:
+    fact_id = uuid4()
+    evidence = grounded_evidence(
+        tenant_id=uuid4(),
+        run_id=uuid4(),
+        fact_id=fact_id,
+        source_identity="official.example",
+        authority=SourceAuthority.OFFICIAL,
+        seed="nested-prompt",
+    )
+    fact = FactRequirement("launch", FactType.CURRENT_VALUE, "launch", "launch")
+    coverage = CoverageEvaluator().evaluate(
+        evidence.tenant_id,
+        evidence.run_id,
+        fact_id,
+        fact,
+        (evidence,),
+    )
+
+    messages = ConstrainedModelSynthesizer._messages(
+        {fact_id: fact},
+        {fact_id: coverage},
+        (evidence,),
+    )
+    payload = json.loads(messages[1].content)
+
+    assert "evidence" not in payload
+    assert payload["facts"][0]["accepted_evidence"] == [
+        {"evidence_id": str(evidence.id), "quote": evidence.candidate.quote}
+    ]
 
 
 def test_claim_parser_restores_only_grounded_requested_numeric_identifier() -> None:
@@ -89,6 +124,258 @@ def test_claim_parser_rejects_ungrounded_missing_numeric_identifier() -> None:
             '"claim_key":"http","text":"Not Found",'
             f'"fact_id":"{fact_id}","evidence_ids":["{evidence.id}"]}}]}}'
         )
+
+
+def test_claim_parser_restores_grounded_symbolic_identifier() -> None:
+    fact_id = uuid4()
+    evidence = grounded_evidence(
+        tenant_id=uuid4(),
+        run_id=uuid4(),
+        fact_id=fact_id,
+        source_identity="official.example",
+        authority=SourceAuthority.OFFICIAL,
+        seed="symbolic-identifier",
+    )
+    evidence = replace(
+        evidence,
+        candidate=replace(
+            evidence.candidate,
+            quote="Read Uncommitted can permit dirty reads.",
+            quote_hash=hashlib.sha256(
+                b"Read Uncommitted can permit dirty reads."
+            ).hexdigest(),
+            start_offset=0,
+            end_offset=len("Read Uncommitted can permit dirty reads."),
+        ),
+    )
+    parser = ProposedClaimParser(
+        {
+            fact_id: FactRequirement(
+                "read_uncommitted_anomalies",
+                FactType.BACKGROUND,
+                "Anomaly guarantees for Read Uncommitted",
+                "Read Uncommitted",
+            )
+        },
+        (evidence,),
+    )
+
+    claims = parser.parse(
+        '{"claims":[{'
+        '"claim_key":"dirty-read","text":"Dirty reads can occur",'
+        f'"fact_id":"{fact_id}","evidence_ids":["{evidence.id}"]}}]}}'
+    )
+
+    assert claims[0].text == "Read Uncommitted: Dirty reads can occur"
+
+
+def test_rfc_identifier_is_grounded_by_reviewed_source_url_as_one_unit() -> None:
+    fact_id = uuid4()
+    evidence = grounded_evidence(
+        tenant_id=uuid4(),
+        run_id=uuid4(),
+        fact_id=fact_id,
+        source_identity="rfc-editor.org",
+        authority=SourceAuthority.OFFICIAL,
+        seed="rfc-source-identifier",
+    )
+    quote = 'Offsets "Z" and "+00:00" both identify UTC.'
+    evidence = replace(
+        evidence,
+        candidate=replace(
+            evidence.candidate,
+            source=replace(
+                evidence.source,
+                url="https://www.rfc-editor.org/rfc/rfc3339.txt",
+            ),
+            quote=quote,
+            quote_hash=hashlib.sha256(quote.encode()).hexdigest(),
+            start_offset=0,
+            end_offset=len(quote),
+        ),
+    )
+    parser = ProposedClaimParser(
+        {
+            fact_id: FactRequirement(
+                "rfc3339_plus0000_semantics",
+                FactType.COMPARISON,
+                "Semantics of '+00:00' in RFC 3339",
+                "RFC 3339 '+00:00' offset",
+            )
+        },
+        (evidence,),
+    )
+
+    claims = parser.parse(
+        '{"claims":[{'
+        '"claim_key":"offset","text":"+00:00 identifies UTC",'
+        f'"fact_id":"{fact_id}","evidence_ids":["{evidence.id}"]}}]}}'
+    )
+
+    assert claims[0].text == "RFC 3339: +00:00 identifies UTC"
+
+
+def test_symbolic_identifier_preserves_requested_case() -> None:
+    fact_id = uuid4()
+    evidence = grounded_evidence(
+        tenant_id=uuid4(),
+        run_id=uuid4(),
+        fact_id=fact_id,
+        source_identity="postgresql.org",
+        authority=SourceAuthority.OFFICIAL,
+        seed="symbolic-case",
+    )
+    quote = "Read uncommitted is treated as Read committed."
+    evidence = replace(
+        evidence,
+        candidate=replace(
+            evidence.candidate,
+            quote=quote,
+            quote_hash=hashlib.sha256(quote.encode()).hexdigest(),
+            start_offset=0,
+            end_offset=len(quote),
+        ),
+    )
+    parser = ProposedClaimParser(
+        {
+            fact_id: FactRequirement(
+                "read_uncommitted",
+                FactType.COMPARISON,
+                "Behavior of Read Uncommitted",
+                "Read Uncommitted",
+            )
+        },
+        (evidence,),
+    )
+
+    claims = parser.parse(
+        '{"claims":[{'
+        '"claim_key":"level","text":"Read uncommitted maps to Read committed",'
+        f'"fact_id":"{fact_id}","evidence_ids":["{evidence.id}"]}}]}}'
+    )
+
+    assert claims[0].text.startswith("Read Uncommitted:")
+
+
+def test_rfc3339_plus_zero_example_rejects_a_z_suffixed_timestamp() -> None:
+    fact_id = uuid4()
+    evidence = grounded_evidence(
+        tenant_id=uuid4(),
+        run_id=uuid4(),
+        fact_id=fact_id,
+        source_identity="rfc-editor.org",
+        authority=SourceAuthority.OFFICIAL,
+        seed="rfc3339-relationship",
+    )
+    quote = '"Z" or "+00:00" both identify UTC; 1985-04-12T23:20:50.52Z.'
+    evidence = replace(
+        evidence,
+        candidate=replace(
+            evidence.candidate,
+            source=replace(
+                evidence.source,
+                url="https://www.rfc-editor.org/rfc/rfc3339.txt",
+            ),
+            quote=quote,
+            quote_hash=hashlib.sha256(quote.encode()).hexdigest(),
+            start_offset=0,
+            end_offset=len(quote),
+        ),
+    )
+    fact = FactRequirement(
+        "rfc3339_example_plus0000",
+        FactType.BACKGROUND,
+        "Example of an RFC 3339 timestamp using '+00:00'",
+        "RFC 3339 '+00:00' example",
+    )
+    parser = ProposedClaimParser({fact_id: fact}, (evidence,))
+
+    with pytest.raises(ValueError, match=r"ending \+00:00"):
+        parser.parse(
+            '{"claims":[{'
+            '"claim_key":"example","text":"Example: 1985-04-12T23:20:50.52Z",'
+            f'"fact_id":"{fact_id}","evidence_ids":["{evidence.id}"]}}]}}'
+        )
+
+    assert ConstrainedModelSynthesizer._derived_fallback_text(
+        fact,
+        (evidence.id,),
+        {evidence.id: evidence},
+    ) == "1985-04-12T23:20:50.52+00:00"
+
+
+@pytest.mark.parametrize(
+    ("fact", "quote", "url", "expected"),
+    [
+        (
+            FactRequirement(
+                "json_media_type",
+                FactType.CURRENT_VALUE,
+                "The registered media type for JSON",
+                "JSON media type",
+            ),
+            "Type name: application\nSubtype name: json\nPublished specification: RFC 8259",
+            "https://www.iana.org/assignments/media-types/application/json",
+            "application/json",
+        ),
+        (
+            FactRequirement(
+                "tls13_rfc",
+                FactType.CURRENT_VALUE,
+                "The RFC that specifies TLS 1.3",
+                "TLS 1.3",
+            ),
+            "Request for Comments: 8446; TLS Protocol Version 1.3",
+            "https://www.rfc-editor.org/rfc/rfc8446.txt",
+            "TLS 1.3 is specified by RFC 8446.",
+        ),
+        (
+            FactRequirement(
+                "sha256_digest_length",
+                FactType.CURRENT_VALUE,
+                "SHA-256 digest length in bits",
+                "SHA-256",
+            ),
+            "The SHA-224 and SHA-256 algorithms produce 224-bit and 256-bit message digests",
+            "https://www.rfc-editor.org/rfc/rfc6234.txt",
+            "The SHA-256 digest length is 256 bits.",
+        ),
+    ],
+)
+def test_reviewed_relationships_have_safe_deterministic_fallbacks(
+    fact: FactRequirement,
+    quote: str,
+    url: str,
+    expected: str,
+) -> None:
+    evidence = grounded_evidence(
+        tenant_id=uuid4(),
+        run_id=uuid4(),
+        fact_id=uuid4(),
+        source_identity="standards.example",
+        authority=SourceAuthority.OFFICIAL,
+        seed=expected,
+    )
+    evidence = replace(
+        evidence,
+        candidate=replace(
+            evidence.candidate,
+            source=replace(evidence.source, url=url),
+            quote=quote,
+            quote_hash=hashlib.sha256(quote.encode()).hexdigest(),
+            start_offset=0,
+            end_offset=len(quote),
+        ),
+    )
+
+    derived = ConstrainedModelSynthesizer._derived_fallback_text(
+        fact,
+        (evidence.id,),
+        {evidence.id: evidence},
+    )
+
+    assert derived == expected
+    ProposedClaimParser._validate_requested_relationship(fact, derived)
 
 
 @pytest.mark.asyncio

@@ -105,6 +105,30 @@ def test_fact_semantics_select_reviewed_primary_pages() -> None:
         "The authoritative DNS port registry",
         "DNS",
     )
+    json_media_type = FactRequirement(
+        "json_media_type",
+        FactType.CURRENT_VALUE,
+        "The registered media type for JSON",
+        "JSON media type",
+    )
+    sha_size = FactRequirement(
+        "sha256_digest_length_bits",
+        FactType.CURRENT_VALUE,
+        "SHA-256 digest length in bits",
+        "SHA-256",
+    )
+    rfc3339_offset = FactRequirement(
+        "semantics_plus_00_00",
+        FactType.COMPARISON,
+        "Semantics of the +00:00 offset",
+        "RFC 3339 UTC representations",
+    )
+    sql_isolation = FactRequirement(
+        "read_uncommitted_anomaly_guarantees",
+        FactType.COMPARISON,
+        "PostgreSQL anomaly guarantees for Read Uncommitted isolation",
+        "Read Uncommitted",
+    )
 
     assert policy.urls_for_fact("Python releases", python_support) == (
         "https://devguide.python.org/versions/",
@@ -131,6 +155,21 @@ def test_fact_semantics_select_reviewed_primary_pages() -> None:
         "https://www.iana.org/assignments/service-names-port-numbers/"
         "service-names-port-numbers.xhtml",
     )
+    assert policy.urls_for_fact("JSON media type", json_media_type) == (
+        "https://www.iana.org/assignments/media-types/application/json",
+    )
+    assert policy.urls_for_fact("SHA-256", sha_size) == (
+        "https://www.rfc-editor.org/rfc/rfc6234.txt",
+    )
+    assert policy.urls_for_fact("RFC 3339", rfc3339_offset) == (
+        "https://www.rfc-editor.org/rfc/rfc3339.txt",
+    )
+    assert policy.urls_for_fact(
+        "PostgreSQL transaction isolation levels",
+        sql_isolation,
+    ) == (
+        "https://www.postgresql.org/docs/current/transaction-iso.html",
+    )
 
 
 def test_full_campaign_standards_have_reviewed_direct_sources() -> None:
@@ -140,9 +179,15 @@ def test_full_campaign_standards_have_reviewed_direct_sources() -> None:
     assert policy.urls_for("SHA-256", FactType.CURRENT_VALUE)
     assert policy.urls_for("DNS", FactType.CURRENT_VALUE)
     assert policy.urls_for("TLS 1.3", FactType.VERSION)
+    assert policy.urls_for("TLS 1.3", FactType.CURRENT_VALUE) == (
+        "https://www.rfc-editor.org/rfc/rfc8446.txt",
+    )
     assert policy.urls_for("RFC 3339", FactType.COMPARISON)
     assert policy.urls_for("SQL transaction isolation", FactType.COMPARISON)
     assert policy.urls_for("PostgreSQL", FactType.CURRENT_VALUE)
     assert policy.urls_for("SQLite", FactType.BACKGROUND)
     assert policy.urls_for("CAP theorem", FactType.BACKGROUND)
     assert policy.urls_for("database ACID", FactType.BACKGROUND)
+    assert policy.urls_for("数据库 ACID 性质", FactType.BACKGROUND) == (
+        "https://www.ibm.com/think/topics/transaction-management",
+    )

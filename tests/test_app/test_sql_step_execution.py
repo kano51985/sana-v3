@@ -144,6 +144,29 @@ def store(uow, clock, mirror=None):
     )
 
 
+def test_sql_store_uses_bounded_phase_aware_attempt_limits() -> None:
+    run, step = run_and_step()
+    service = store(FakeUow(run, step), FrozenClock(NOW))
+
+    assert service._attempt_limit(StepType.FETCH) == 2
+    assert service._attempt_limit(StepType.PLAN) == 3
+
+
+def test_sql_store_rejects_invalid_attempt_limits() -> None:
+    run, step = run_and_step()
+
+    with pytest.raises(ValueError, match="attempt limits"):
+        SqlStepExecutionStore(
+            lambda tenant_id: FakeUow(run, step),
+            LeaseService(DeterministicIdFactory("lease")),
+            UnusedCompletion(),
+            FrozenClock(NOW),
+            DeterministicIdFactory("events"),
+            max_attempts=2,
+            fetch_max_attempts=3,
+        )
+
+
 @pytest.mark.asyncio
 async def test_sql_store_claim_starts_run_leases_step_and_commits_event() -> None:
     run, step = run_and_step()

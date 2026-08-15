@@ -129,13 +129,21 @@ class IntentParser:
         policy: SearchPlanningPolicy,
         *,
         allow_optional_facts: bool = False,
+        allow_high_consequence: bool = False,
         minimum_facts: int = 1,
     ) -> None:
         if not 1 <= minimum_facts <= policy.max_facts:
             raise ValueError("minimum_facts must fit within the planning policy")
         self._policy = policy
         self._allow_optional_facts = allow_optional_facts
+        self._allow_high_consequence = allow_high_consequence
         self._minimum_facts = minimum_facts
+
+    def _consequence(self, raw: object) -> Consequence:
+        consequence = Consequence(str(raw or "LOW").strip().upper())
+        if consequence is Consequence.HIGH and not self._allow_high_consequence:
+            return Consequence.MEDIUM
+        return consequence
 
     def parse(self, text: str) -> NormalizedIntent:
         payload: dict[str, Any] = json.loads(text)
@@ -161,9 +169,7 @@ class IntentParser:
                 freshness=Freshness(
                     str(raw.get("freshness", "STABLE")).strip().upper()
                 ),
-                consequence=Consequence(
-                    str(raw.get("consequence", "LOW")).strip().upper()
-                ),
+                consequence=self._consequence(raw.get("consequence", "LOW")),
                 preferred_source_kinds=tuple(
                     str(item) for item in raw.get("preferred_source_kinds", [])
                 ),
@@ -226,6 +232,16 @@ class SearchPlanner:
             "fact. When the request names N items and asks about each, emit at least "
             "N distinct facts; use one fact per named or enumerated item. Cross-check "
             "requests need separate facts for the source perspectives being checked. "
+            "Describe each fact as a neutral evidence question or lookup target. Never "
+            "pre-fill an answer, invent an example, or assert protocol constraints that "
+            "are not stated in the current request. Preserve exact identifiers and "
+            "terms the user explicitly asks to see. "
+            "A request to cite a source is an evidence constraint, not a separate "
+            "fact; do not emit citation-only, bibliography-only, or source-formatting "
+            "facts. Keep identifiers that express one relationship together, such as "
+            "a protocol version and the RFC that specifies it. Consequence describes "
+            "real-world harm, not answer strictness: ordinary standards and software "
+            "facts are LOW or MEDIUM, never HIGH. "
             "Mark every requested fact required=true unless the user explicitly says "
             "that part is optional. "
             "Return one JSON object only with entity, aliases, locale, "
@@ -243,9 +259,14 @@ class SearchPlanner:
                 "\nAllowed context summary (resolve references only; never copy it as "
                 f"a query suffix):\n{allowed_conversation_summary.strip()}"
             )
+        high_consequence = (
+            "high_consequence_cross_check"
+            in AutomaticModeRouter(self._policy.version).route(user_message).reason_codes
+        )
         parser = IntentParser(
             self._policy,
             allow_optional_facts=bool(self._OPTIONAL_REQUEST.search(user_message)),
+            allow_high_consequence=high_consequence,
             minimum_facts=minimum_facts,
         )
         result = await self._gateway.generate(

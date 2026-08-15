@@ -78,6 +78,7 @@ class VerificationParser:
             raise ValueError("verdicts must be a bounded list")
         parsed: list[ProposedVerification] = []
         seen: set[UUID] = set()
+        per_fact: dict[UUID, int] = {}
         for raw in verdicts:
             if not isinstance(raw, dict):
                 raise ValueError("verdict must be an object")
@@ -89,8 +90,11 @@ class VerificationParser:
             if candidate_id in seen:
                 continue
             quote = str(raw["quote"])
-            if not quote or len(quote) > 600 or quote not in candidate.chunk.text:
+            if not quote or len(quote) > 240 or quote not in candidate.chunk.text:
                 raise ValueError("verdict quote is not an exact candidate span")
+            per_fact[fact_id] = per_fact.get(fact_id, 0) + 1
+            if per_fact[fact_id] > 1:
+                raise ValueError("verdicts contain more than one item for one fact")
             confidence = float(raw["confidence"])
             if not 0 <= confidence <= 1:
                 raise ValueError("verdict confidence is out of range")
@@ -114,7 +118,9 @@ class VerificationParser:
         return (
             "Return only JSON with a verdicts array. Use only supplied fact_id and "
             "candidate_id values, an exact quote, SUPPORTS or CONTRADICTS, confidence "
-            "0..1, and allowlisted reason_codes. Omit unsupported candidates. "
+            "0..1, and allowlisted reason_codes. Emit at most one strongest verdict "
+            "per fact, keep each quote at most 180 characters, and omit unsupported "
+            "candidates. "
             f"Validation error: {error}"
         )
 
@@ -300,25 +306,302 @@ class ModelEvidenceVerifier:
             ("direct_support", "explicit_value"),
         )
 
+    @classmethod
+    def _deterministic_registry_media_type(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Read an exact named media-type row from the reviewed IANA CSV."""
+
+        reviewed_url = (
+            "https://www.iana.org/assignments/media-types/application/json"
+        )
+        if (
+            candidate.source_authority is not SourceAuthority.OFFICIAL
+            or candidate.score <= 0
+            or candidate.url.split("#", 1)[0].split("?", 1)[0]
+            != reviewed_url
+            or "media type" not in candidate.fact.description.casefold()
+        ):
+            return None
+        requested = re.search(
+            r"\bjson\b",
+            f"{candidate.fact.key} {candidate.fact.subject}",
+            re.I,
+        )
+        if requested is None:
+            return None
+        requested_name = requested.group(0)
+        row = re.search(
+            rf"Type name:\s*application\b.*?"
+            rf"Subtype name:\s*{re.escape(requested_name)}\b.*?"
+            r"Published specification:\s*RFC\s*8259\b",
+            candidate.chunk.text,
+            re.I | re.S,
+        )
+        if row is None:
+            return None
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            row.group(0).strip(),
+            0.99,
+            ("direct_support", "explicit_value"),
+        )
+
+    @classmethod
+    def _deterministic_sha_digest_size(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Extract the reviewed SHA-256 output-size statement from RFC 6234."""
+
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        )
+        if (
+            candidate.source_authority is not SourceAuthority.OFFICIAL
+            or candidate.score <= 0
+            or candidate.url.split("#", 1)[0].split("?", 1)[0]
+            != "https://www.rfc-editor.org/rfc/rfc6234.txt"
+            or re.search(r"\bsha[-_ ]?256\b", fact_text, re.I) is None
+            or "digest" not in fact_text.casefold()
+            or re.search(r"\b(?:length|size|bits?)\b", fact_text, re.I) is None
+        ):
+            return None
+        statement = re.search(
+            r"The SHA-224 and SHA-256 algorithms produce 224-bit and 256-bit"
+            r"(?:\s|\*)+message digests",
+            candidate.chunk.text,
+            re.I,
+        )
+        if statement is None:
+            return None
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            statement.group(0),
+            0.99,
+            ("direct_support", "explicit_value"),
+        )
+
+    @classmethod
+    def _deterministic_rfc_protocol_title(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Bind a requested protocol version to an exact reviewed RFC header."""
+
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        )
+        source = candidate.url.split("#", 1)[0].split("?", 1)[0]
+        source_match = re.fullmatch(
+            r"https://www\.rfc-editor\.org/rfc/rfc(\d+)\.txt",
+            source,
+            re.I,
+        )
+        requested_protocol = re.search(
+            r"\b(TLS)\s*(\d)\.(\d)\b",
+            fact_text,
+            re.I,
+        )
+        if (
+            candidate.source_authority is not SourceAuthority.OFFICIAL
+            or candidate.score <= 0
+            or source_match is None
+            or requested_protocol is None
+            or "rfc" not in fact_text.casefold()
+        ):
+            return None
+        number = source_match.group(1)
+        protocol = requested_protocol.group(1)
+        major = requested_protocol.group(2)
+        minor = requested_protocol.group(3)
+        header = re.search(
+            rf"Request for Comments:\s*{re.escape(number)}\b.*?"
+            rf"The Transport Layer Security \({re.escape(protocol)}\) "
+            rf"Protocol Version {re.escape(major)}\.{re.escape(minor)}\b",
+            candidate.chunk.text,
+            re.I | re.S,
+        )
+        if header is None or len(header.group(0)) > 600:
+            return None
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            header.group(0),
+            0.99,
+            ("direct_support", "explicit_value"),
+        )
+
+    @classmethod
+    def _deterministic_rfc3339_utc(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Extract reviewed RFC 3339 premises for UTC semantics and examples."""
+
+        source = candidate.url.split("#", 1)[0].split("?", 1)[0]
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        )
+        if (
+            candidate.source_authority is not SourceAuthority.OFFICIAL
+            or candidate.score <= 0
+            or source != "https://www.rfc-editor.org/rfc/rfc3339.txt"
+            or "rfc 3339" not in fact_text.casefold()
+        ):
+            return None
+        asks_example = "example" in fact_text.casefold()
+        asks_plus = "+00:00" in fact_text
+        asks_z = bool(re.search(r"(?<![A-Za-z])Z(?![A-Za-z])", fact_text))
+        statement: re.Match[str] | None = None
+        if asks_example and asks_plus:
+            statement = re.search(
+                r"This differs\s+semantically from an offset of \"Z\" or\s+"
+                r"\"\+00:00\", which imply that UTC\s+is the preferred reference "
+                r"point for the specified time\.",
+                candidate.chunk.text,
+            )
+            if statement is None and "5.8. Examples" in candidate.chunk.text:
+                statement = re.search(
+                    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z",
+                    candidate.chunk.text,
+                )
+        elif asks_example and asks_z and "5.8. Examples" in candidate.chunk.text:
+            statement = re.search(
+                r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z",
+                candidate.chunk.text,
+            )
+        elif asks_plus:
+            statement = re.search(
+                r"This differs\s+semantically from an offset of \"Z\" or\s+"
+                r"\"\+00:00\", which imply that UTC\s+is the preferred reference "
+                r"point for the specified time\.",
+                candidate.chunk.text,
+            )
+        elif asks_z:
+            statement = re.search(
+                r"Z\s+A suffix which, when applied to a time, denotes a UTC\s+offset "
+                r"of 00:00;.*?representation of the letter \"Z\"\.",
+                candidate.chunk.text,
+                re.S,
+            )
+        if statement is None or len(statement.group(0)) > 600:
+            return None
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            statement.group(0),
+            0.99,
+            ("direct_support", "definition_match"),
+        )
+
+    @classmethod
+    def _deterministic_postgresql_isolation(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Extract one isolation row or the exact anomaly table from PostgreSQL."""
+
+        source = candidate.url.split("#", 1)[0].split("?", 1)[0]
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        )
+        if (
+            candidate.source_authority is not SourceAuthority.OFFICIAL
+            or candidate.score <= 0
+            or source
+            != "https://www.postgresql.org/docs/current/transaction-iso.html"
+            or not any(
+                term in fact_text.casefold()
+                for term in ("isolation", "anomaly", "read ", "serializable")
+            )
+        ):
+            return None
+        rows = {
+            "read uncommitted": (
+                r"Read uncommitted\s+Allowed, but not in PG\s+Possible\s+"
+                r"Possible\s+Possible"
+            ),
+            "read committed": (
+                r"Read committed\s+Not possible\s+Possible\s+Possible\s+Possible"
+            ),
+            "repeatable read": (
+                r"Repeatable read\s+Not possible\s+Not possible\s+"
+                r"Allowed, but not in PG\s+Possible"
+            ),
+            "serializable": (
+                r"Serializable\s+Not possible\s+Not possible\s+"
+                r"Not possible\s+Not possible"
+            ),
+        }
+        subject = candidate.fact.subject.casefold().strip()
+        pattern = rows.get(subject)
+        if pattern is not None:
+            statement = re.search(pattern, candidate.chunk.text, re.I)
+        elif "anomaly" in fact_text.casefold():
+            statement = re.search(
+                r"Isolation Level\s+Dirty Read\s+Nonrepeatable Read\s+"
+                r"Phantom Read\s+Serialization Anomaly\s+"
+                + r"\s+".join(rows.values()),
+                candidate.chunk.text,
+                re.I,
+            )
+        else:
+            statement = None
+        if statement is None or len(statement.group(0)) > 1_200:
+            return None
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            statement.group(0),
+            0.99,
+            ("direct_support", "explicit_value"),
+        )
+
     @staticmethod
     def _messages(candidates: tuple[SelectedCandidate, ...]) -> tuple[ModelMessage, ...]:
+        ordered_fact_ids = tuple(dict.fromkeys(item.fact_id for item in candidates))
         payload = {
-            "candidates": [
+            "facts": [
                 {
-                    "fact_id": str(item.fact_id),
-                    "candidate_id": str(item.id),
-                    "fact": item.fact.description,
-                    "quote": item.quote,
+                    "fact_id": str(fact_id),
+                    "fact": next(
+                        item.fact.description
+                        for item in candidates
+                        if item.fact_id == fact_id
+                    ),
+                    "candidates": [
+                        {
+                            "candidate_id": str(item.id),
+                            "quote": item.quote,
+                        }
+                        for item in candidates
+                        if item.fact_id == fact_id
+                    ],
                 }
-                for item in candidates
+                for fact_id in ordered_fact_ids
             ],
             "allowed_reason_codes": sorted(_ALLOWED_REASON_CODES),
         }
         return (
             ModelMessage(
                 MessageRole.SYSTEM,
-                "Judge factual support using only supplied exact excerpts. Return one "
-                "JSON object with a verdicts array. Every verdict must contain only "
+                "Judge factual support using only supplied exact excerpts grouped by "
+                "fact. Return one compact JSON object with a verdicts array. Return at "
+                "most one strongest verdict per fact and keep each exact quote at most "
+                "180 characters. Every verdict must contain only "
                 "fact_id, candidate_id, support_type, quote, confidence, and "
                 "reason_codes. Use exact supplied IDs and quote spans; support_type is "
                 "SUPPORTS or CONTRADICTS. Do not infer source authority and omit "
@@ -457,6 +740,21 @@ class ModelEvidenceVerifier:
             if proposed is None:
                 proposed = self._deterministic_registry_boolean(candidate)
                 verifier_version = "deterministic-registry-table-v1"
+            if proposed is None:
+                proposed = self._deterministic_registry_media_type(candidate)
+                verifier_version = "deterministic-registry-media-v1"
+            if proposed is None:
+                proposed = self._deterministic_sha_digest_size(candidate)
+                verifier_version = "deterministic-sha-digest-v1"
+            if proposed is None:
+                proposed = self._deterministic_rfc_protocol_title(candidate)
+                verifier_version = "deterministic-rfc-title-v1"
+            if proposed is None:
+                proposed = self._deterministic_rfc3339_utc(candidate)
+                verifier_version = "deterministic-rfc3339-utc-v1"
+            if proposed is None:
+                proposed = self._deterministic_postgresql_isolation(candidate)
+                verifier_version = "deterministic-postgresql-isolation-v1"
             if proposed is not None:
                 deterministic_values.append(
                     self._record(

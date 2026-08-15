@@ -66,6 +66,8 @@ async def test_planner_makes_one_primary_call_and_returns_semantic_facts() -> No
     assert len(gateway.calls) == 1
     assert "never copy it as a query suffix" in gateway.calls[0][1][1].content
     assert "Never collapse separately requested subquestions" in gateway.calls[0][1][0].content
+    assert "citation-only" in gateway.calls[0][1][0].content
+    assert "ordinary standards and software facts" in gateway.calls[0][1][0].content
     assert "required=true" in gateway.calls[0][1][0].content
 
 
@@ -97,6 +99,32 @@ def test_intent_parser_normalizes_enum_casing_but_keeps_schema_strict() -> None:
     assert intent.facts[0].fact_type is FactType.VERSION
     assert intent.facts[0].freshness is Freshness.CURRENT
     assert intent.facts[0].consequence is Consequence.MEDIUM
+
+
+def test_only_policy_recognized_high_stakes_requests_can_keep_high_consequence() -> None:
+    payload = json.dumps(
+        {
+            "entity": "TLS 1.3",
+            "facts": [
+                {
+                    "key": "rfc",
+                    "fact_type": "background",
+                    "description": "RFC for TLS 1.3",
+                    "subject": "TLS 1.3",
+                    "consequence": "HIGH",
+                }
+            ],
+        }
+    )
+
+    ordinary = IntentParser(SearchPlanningPolicy()).parse(payload)
+    high_stakes = IntentParser(
+        SearchPlanningPolicy(),
+        allow_high_consequence=True,
+    ).parse(payload)
+
+    assert ordinary.facts[0].consequence is Consequence.MEDIUM
+    assert high_stakes.facts[0].consequence is Consequence.HIGH
 
 
 def test_repair_instruction_names_exact_enum_contract() -> None:

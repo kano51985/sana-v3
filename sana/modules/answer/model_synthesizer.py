@@ -46,6 +46,32 @@ class ConstrainedSynthesisResult:
 class ProposedClaimParser:
     _FIELDS = frozenset({"claim_key", "text", "fact_id", "evidence_ids"})
     _NUMERIC_IDENTIFIER = re.compile(r"\d+(?:[.-]\d+)*")
+    _QUOTED_IDENTIFIER = re.compile(r"(?P<quote>['\"])(?P<value>[^'\"]{1,64})(?P=quote)")
+    _STANDARD_IDENTIFIER = re.compile(
+        r"\b(?:RFC\s*\d+|TLS\s*\d+(?:\.\d+)*|SHA-?\d+|HTTP\s+[A-Z][A-Z-]+)\b"
+    )
+    _TITLE_PHRASE = re.compile(
+        r"\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})+\b"
+    )
+    _TITLE_WORD = re.compile(r"\b[A-Z][a-z]{3,}\b")
+    _RFC3339_Z_TIMESTAMP = re.compile(
+        r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\b"
+    )
+    _RFC3339_PLUS_ZERO_TIMESTAMP = re.compile(
+        r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?\+00:00\b"
+    )
+    _GENERIC_TITLE_WORDS = frozenset(
+        {
+            "Anomaly",
+            "Definition",
+            "Example",
+            "Guarantees",
+            "Launch",
+            "Semantics",
+            "Standard",
+            "Whether",
+        }
+    )
 
     def __init__(
         self,
@@ -63,20 +89,75 @@ class ProposedClaimParser:
             for item in evidence
             if item.verdict is EvidenceVerdict.ACCEPTED
         }
+        self._evidence_url = {
+            item.id: item.source.url
+            for item in evidence
+            if item.verdict is EvidenceVerdict.ACCEPTED
+        }
 
     @classmethod
     def _numeric_identifiers(cls, fact: FactRequirement) -> tuple[str, ...]:
-        values = cls._NUMERIC_IDENTIFIER.findall(
-            f"{fact.key} {fact.description} {fact.subject}"
-        )
+        material = f"{fact.description} {fact.subject}"
+        material = cls._QUOTED_IDENTIFIER.sub(" ", material)
+        material = cls._STANDARD_IDENTIFIER.sub(" ", material)
+        values = cls._NUMERIC_IDENTIFIER.findall(material)
         return tuple(dict.fromkeys(values))
 
+    @classmethod
+    def _symbolic_identifiers(cls, fact: FactRequirement) -> tuple[str, ...]:
+        values: list[str] = []
+        for material in (fact.description, fact.subject):
+            values.extend(
+                match.group("value")
+                for match in cls._QUOTED_IDENTIFIER.finditer(material)
+            )
+            values.extend(cls._STANDARD_IDENTIFIER.findall(material))
+            values.extend(cls._TITLE_PHRASE.findall(material))
+            values.extend(
+                value
+                for value in cls._TITLE_WORD.findall(material)
+                if value not in cls._GENERIC_TITLE_WORDS
+            )
+        deduplicated = tuple(
+            dict.fromkeys(value.strip() for value in values if value.strip())
+        )
+        return tuple(
+            value
+            for value in deduplicated
+            if not any(
+                value != other
+                and re.search(
+                    rf"(?<![A-Za-z0-9]){re.escape(value)}(?![A-Za-z0-9])",
+                    other,
+                )
+                for other in deduplicated
+            )
+        )
+
     @staticmethod
-    def _contains_identifier(text: str, identifier: str) -> bool:
+    def _contains_identifier(
+        text: str,
+        identifier: str,
+        *,
+        case_sensitive: bool = False,
+    ) -> bool:
         return bool(
             re.search(
                 rf"(?<![A-Za-z0-9]){re.escape(identifier)}(?![A-Za-z0-9])",
                 text,
+                0 if case_sensitive else re.I,
+            )
+        )
+
+    def _identifier_grounded(self, evidence_id: UUID, identifier: str) -> bool:
+        if self._contains_identifier(self._evidence_quote[evidence_id], identifier):
+            return True
+        rfc = re.fullmatch(r"RFC\s*(\d+)", identifier, re.I)
+        return bool(
+            rfc
+            and re.search(
+                rf"/rfc/rfc{re.escape(rfc.group(1))}(?:[./]|$)",
+                self._evidence_url[evidence_id],
                 re.I,
             )
         )
@@ -87,28 +168,87 @@ class ProposedClaimParser:
         claim_text: str,
         evidence_ids: tuple[UUID, ...],
     ) -> str:
-        missing = tuple(
+        missing_numeric = tuple(
             identifier
             for identifier in self._numeric_identifiers(fact)
             if not self._contains_identifier(claim_text, identifier)
         )
-        if not missing:
-            return claim_text
         cited_quotes = tuple(self._evidence_quote[value] for value in evidence_ids)
         if any(
             not any(
                 self._contains_identifier(quote, identifier)
                 for quote in cited_quotes
             )
-            for identifier in missing
+            for identifier in missing_numeric
         ):
             raise ValueError(
                 "claim omitted a numeric identifier not grounded by citations"
             )
+        missing_symbolic = tuple(
+            identifier
+            for identifier in self._symbolic_identifiers(fact)
+            if not self._contains_identifier(
+                claim_text,
+                identifier,
+                case_sensitive=True,
+            )
+            and any(self._identifier_grounded(value, identifier) for value in evidence_ids)
+        )
+        missing = tuple(dict.fromkeys((*missing_numeric, *missing_symbolic)))
+        if not missing:
+            return claim_text
         normalized = f"{', '.join(missing)}: {claim_text}"
         if len(normalized) > 1_200:
             raise ValueError("self-contained claim is too long")
         return normalized
+
+    @classmethod
+    def _validate_requested_relationship(
+        cls,
+        fact: FactRequirement,
+        claim_text: str,
+    ) -> None:
+        fact_text = f"{fact.key} {fact.description} {fact.subject}"
+        folded = fact_text.casefold()
+        if "media type" in folded and "json" in folded:
+            if "application/json" not in claim_text.casefold():
+                raise ValueError("JSON media-type claim must contain application/json")
+            return
+        tls = re.search(r"\bTLS\s*(\d)\.(\d)\b", fact_text, re.I)
+        if tls is not None and "rfc" in folded:
+            if (
+                re.search(
+                    rf"\bTLS\s*{tls.group(1)}\.{tls.group(2)}\b",
+                    claim_text,
+                    re.I,
+                )
+                is None
+                or re.search(r"\bRFC\s*\d+\b", claim_text, re.I) is None
+            ):
+                raise ValueError("TLS/RFC claim must preserve both related identifiers")
+            return
+        sha = re.search(r"\bSHA-?256\b", fact_text, re.I)
+        if sha is not None and "digest" in folded:
+            if (
+                "sha-256" not in claim_text.casefold()
+                or re.search(r"\b256\s*(?:bits?|位)\b", claim_text, re.I) is None
+            ):
+                raise ValueError("SHA-256 digest claim must preserve its 256-bit size")
+            return
+        if "rfc 3339" not in folded or "example" not in folded:
+            return
+        if "+00:00" in fact_text and not cls._RFC3339_PLUS_ZERO_TIMESTAMP.search(
+            claim_text
+        ):
+            raise ValueError(
+                "RFC 3339 +00:00 example must contain a timestamp ending +00:00"
+            )
+        if (
+            "+00:00" not in fact_text
+            and re.search(r"(?<![A-Za-z])Z(?![A-Za-z])", fact_text)
+            and not cls._RFC3339_Z_TIMESTAMP.search(claim_text)
+        ):
+            raise ValueError("RFC 3339 Z example must contain a timestamp ending Z")
 
     def parse(self, text: str) -> tuple[ProposedClaim, ...]:
         payload = json.loads(text)
@@ -140,6 +280,10 @@ class ProposedClaimParser:
                 self._facts[fact_id],
                 claim_text,
                 evidence_ids,
+            )
+            self._validate_requested_relationship(
+                self._facts[fact_id],
+                claim_text,
             )
             parsed.append(
                 ProposedClaim(
@@ -190,28 +334,30 @@ class ConstrainedModelSynthesizer:
                     "evidence_ids": [
                         str(value) for value in coverage[fact_id].evidence_ids
                     ],
+                    "accepted_evidence": [
+                        {
+                            "evidence_id": str(item.id),
+                            "quote": item.candidate.quote,
+                        }
+                        for item in evidence
+                        if item.verdict is EvidenceVerdict.ACCEPTED
+                        and item.fact_requirement_id == fact_id
+                    ],
                 }
                 for fact_id, fact in facts.items()
-            ],
-            "evidence": [
-                {
-                    "evidence_id": str(item.id),
-                    "fact_id": str(item.fact_requirement_id),
-                    "quote": item.candidate.quote,
-                }
-                for item in evidence
-                if item.verdict is EvidenceVerdict.ACCEPTED
             ],
         }
         return (
             ModelMessage(
                 MessageRole.SYSTEM,
-                "Write concise factual claims using only supplied accepted evidence. "
+                "Write one concise factual claim for every fact that has accepted "
+                "evidence, using only the evidence nested inside that fact. "
                 "Keep each claim self-contained by preserving requested numeric "
                 "identifiers when they also appear in its cited evidence. "
                 "Return one JSON object with a claims array. Every claim must contain "
                 "only claim_key, text, fact_id, and evidence_ids, using exact supplied "
-                "IDs. Never emit URLs, citation labels, support labels, or answer "
+                "IDs. Never move an evidence ID between facts. Never emit URLs, "
+                "citation labels, support labels, or answer "
                 "quality. Return an empty claims array when no accepted evidence "
                 "supports a fact.",
             ),
@@ -222,12 +368,90 @@ class ConstrainedModelSynthesizer:
         )
 
     @staticmethod
+    def _derived_fallback_text(
+        fact: FactRequirement,
+        evidence_ids: tuple[UUID, ...],
+        by_id: dict[UUID, VerifiedEvidence],
+    ) -> str | None:
+        fact_text = f"{fact.key} {fact.description} {fact.subject}"
+        folded = fact_text.casefold()
+        quotes = tuple(by_id[value].candidate.quote for value in evidence_ids)
+        if "media type" in folded and "json" in folded:
+            media_type = next(
+                (
+                    f"{match.group(1).casefold()}/{match.group(2).casefold()}"
+                    for quote in quotes
+                    if (
+                        match := re.search(
+                            r"Type name:\s*([A-Za-z0-9.+-]+).*?"
+                            r"Subtype name:\s*([A-Za-z0-9.+-]+)",
+                            quote,
+                            re.I | re.S,
+                        )
+                    )
+                    is not None
+                ),
+                None,
+            )
+            if media_type is not None:
+                return media_type
+        tls = re.search(r"\bTLS\s*(\d)\.(\d)\b", fact_text, re.I)
+        if tls is not None and "rfc" in folded:
+            rfc_number = next(
+                (
+                    match.group(1)
+                    for value in evidence_ids
+                    if (
+                        match := re.search(
+                            r"/rfc/rfc(\d+)(?:[./]|$)",
+                            by_id[value].source.url,
+                            re.I,
+                        )
+                    )
+                    is not None
+                ),
+                None,
+            )
+            if rfc_number is not None:
+                return f"TLS {tls.group(1)}.{tls.group(2)} is specified by RFC {rfc_number}."
+        if re.search(r"\bSHA-?256\b", fact_text, re.I) and "digest" in folded:
+            if any(
+                re.search(r"SHA-256.*?256-bit.*?message digests", quote, re.I | re.S)
+                for quote in quotes
+            ):
+                return (
+                    "SHA-256 的摘要长度为 256 位。"
+                    if "位" in fact_text
+                    else "The SHA-256 digest length is 256 bits."
+                )
+        if not (
+            "rfc 3339" in folded
+            and "example" in folded
+            and "+00:00" in fact_text
+        ):
+            return None
+        has_equivalence = any('"Z" or "+00:00"' in quote for quote in quotes)
+        timestamp = next(
+            (
+                match.group(0)
+                for quote in quotes
+                if (match := ProposedClaimParser._RFC3339_Z_TIMESTAMP.search(quote))
+                is not None
+            ),
+            None,
+        )
+        if not has_equivalence or timestamp is None:
+            return None
+        return f"{timestamp[:-1]}+00:00"
+
+    @staticmethod
     def _fallback(
         facts: dict[UUID, FactRequirement],
         coverage: dict[UUID, CoverageAssessment],
         evidence: tuple[VerifiedEvidence, ...],
     ) -> tuple[ProposedClaim, ...]:
         by_id = {item.id: item for item in evidence}
+        parser = ProposedClaimParser(facts, evidence)
         proposals: list[ProposedClaim] = []
         for fact_id, fact in facts.items():
             evidence_ids = tuple(
@@ -236,6 +460,19 @@ class ConstrainedModelSynthesizer:
             if not evidence_ids:
                 continue
             quote = by_id[evidence_ids[0]].candidate.quote.replace("\n", " ").strip()
+            quote = (
+                ConstrainedModelSynthesizer._derived_fallback_text(
+                    fact,
+                    evidence_ids,
+                    by_id,
+                )
+                or quote
+            )
+            try:
+                quote = parser._self_contained_text(fact, quote, evidence_ids)
+            except ValueError:
+                # A fallback never manufactures an ungrounded identifier.
+                pass
             proposals.append(
                 ProposedClaim(
                     fact.key,

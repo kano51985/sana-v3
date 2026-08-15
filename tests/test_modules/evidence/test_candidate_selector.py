@@ -368,7 +368,7 @@ def test_one_fetched_document_can_ground_multiple_planned_facts() -> None:
     assert {item.fact_id for item in selected} == {first, second}
 
 
-def test_current_fact_prefers_leading_fresh_content_over_later_lexical_match() -> None:
+def test_current_fact_ranks_evidence_relevance_before_document_position() -> None:
     fact_id = uuid4()
     fact = FactRequirement(
         "rust_current_version",
@@ -379,8 +379,8 @@ def test_current_fact_prefers_leading_fresh_content_over_later_lexical_match() -
     )
     tenant_id, document_id = uuid4(), uuid4()
     raw_chunks = (
-        "Rust 1.97.1 current release information",
-        "Rust old archive current stable version release details",
+        "Rust archive and release information",
+        "Rust 1.97.1 is the current stable version.",
     )
     chunks = tuple(
         (
@@ -424,4 +424,61 @@ def test_current_fact_prefers_leading_fresh_content_over_later_lexical_match() -
     )
 
     assert len(selected) == 1
-    assert selected[0].chunk.ordinal == 0
+    assert selected[0].chunk.ordinal == 1
+
+
+def test_standard_identifier_normalization_prefers_semantic_digest_statement() -> None:
+    fact_id = uuid4()
+    fact = FactRequirement(
+        "sha256_digest_length_bits",
+        FactType.BACKGROUND,
+        "SHA-256 digest length in bits",
+        "SHA-256",
+    )
+    raw_chunks = (
+        "SHA256HashSizeBits length bits SHA256HashSizeBits implementation code.",
+        "The SHA-224 and SHA-256 algorithms produce 224-bit and 256-bit "
+        "message digests; the digest size is measured in bits.",
+    )
+    tenant_id, document_id = uuid4(), uuid4()
+    chunks = tuple(
+        (
+            uuid4(),
+            DocumentChunk(
+                ordinal,
+                text,
+                hashlib.sha256(text.encode()).hexdigest(),
+                16,
+                ordinal * 200,
+                ordinal * 200 + len(text),
+            ),
+        )
+        for ordinal, text in enumerate(raw_chunks)
+    )
+    full_text = "\n".join(raw_chunks)
+    candidate_document = CandidateDocument(
+        document_id,
+        DocumentVersion(
+            uuid4(),
+            tenant_id,
+            document_id,
+            hashlib.sha256(full_text.encode()).hexdigest(),
+            full_text,
+            "text/plain",
+            "en",
+            NOW,
+        ),
+        chunks,
+        "https://www.rfc-editor.org/rfc/rfc6234.txt",
+        "RFC 6234",
+        (fact_id,),
+    )
+
+    selected = CandidateSelector(max_per_fact=1, max_total=1).select(
+        run_id=uuid4(),
+        entity="SHA-256",
+        facts={fact_id: fact},
+        documents=(candidate_document,),
+    )
+
+    assert selected[0].chunk.ordinal == 1

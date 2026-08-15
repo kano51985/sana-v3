@@ -29,7 +29,7 @@ class DirectSourceRule:
 class DirectSourcePolicy:
     """Reviewed direct URLs; authority remains owned by SourceAuthorityPolicy."""
 
-    version: str = "direct-sources-v5"
+    version: str = "direct-sources-v6"
     sources: Mapping[str, Mapping[str, tuple[str, ...]]] = field(
         default_factory=lambda: {
             "python": {
@@ -141,10 +141,13 @@ class DirectSourcePolicy:
             },
             "tls 1.3": {
                 FactType.BACKGROUND.value: (
-                    "https://www.rfc-editor.org/rfc/rfc8446.html",
+                    "https://www.rfc-editor.org/rfc/rfc8446.txt",
                 ),
                 FactType.VERSION.value: (
-                    "https://www.rfc-editor.org/rfc/rfc8446.html",
+                    "https://www.rfc-editor.org/rfc/rfc8446.txt",
+                ),
+                FactType.CURRENT_VALUE.value: (
+                    "https://www.rfc-editor.org/rfc/rfc8446.txt",
                 ),
             },
             "rfc 3339": {
@@ -191,6 +194,11 @@ class DirectSourcePolicy:
                 ),
             },
             "database acid": {
+                FactType.BACKGROUND.value: (
+                    "https://www.ibm.com/think/topics/transaction-management",
+                ),
+            },
+            "acid": {
                 FactType.BACKGROUND.value: (
                     "https://www.ibm.com/think/topics/transaction-management",
                 ),
@@ -274,6 +282,47 @@ class DirectSourcePolicy:
                         "https://www.iana.org/assignments/"
                         "service-names-port-numbers/"
                         "service-names-port-numbers.xhtml",
+                    ),
+                ),
+            ),
+            "json": (
+                DirectSourceRule(
+                    frozenset({FactType.BACKGROUND, FactType.CURRENT_VALUE}),
+                    ("json_media_type", "media type", "registered"),
+                    (
+                        "https://www.iana.org/assignments/media-types/"
+                        "application/json",
+                    ),
+                ),
+            ),
+            "sha-256": (
+                DirectSourceRule(
+                    frozenset({FactType.BACKGROUND, FactType.CURRENT_VALUE}),
+                    ("digest", "length", "size", "standard_reference"),
+                    ("https://www.rfc-editor.org/rfc/rfc6234.txt",),
+                ),
+            ),
+            "rfc 3339": (
+                DirectSourceRule(
+                    frozenset({FactType.BACKGROUND, FactType.COMPARISON}),
+                    ("semantics", "example", "citation", "+00:00", "designator"),
+                    ("https://www.rfc-editor.org/rfc/rfc3339.txt",),
+                ),
+            ),
+            "postgresql": (
+                DirectSourceRule(
+                    frozenset({FactType.BACKGROUND, FactType.COMPARISON}),
+                    (
+                        "isolation",
+                        "anomaly",
+                        "read_uncommitted",
+                        "read_committed",
+                        "repeatable_read",
+                        "serializable",
+                    ),
+                    (
+                        "https://www.postgresql.org/docs/current/"
+                        "transaction-iso.html",
                     ),
                 ),
             ),

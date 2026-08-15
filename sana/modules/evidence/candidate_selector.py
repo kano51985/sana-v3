@@ -10,7 +10,7 @@ from uuid import UUID, uuid5
 from sana.modules.content.domain import DocumentChunk, DocumentVersion
 from sana.modules.evidence.domain import SourceAuthority
 from sana.modules.evidence.source_authority import SourceAuthorityPolicy
-from sana.modules.search_planning.domain import FactRequirement, Freshness
+from sana.modules.search_planning.domain import FactRequirement
 
 
 _TERM = re.compile(r"[\w\u3400-\u9fff]+", re.UNICODE)
@@ -29,6 +29,7 @@ _GENERIC_ANCHORS = frozenset(
         "fact",
         "gap",
         "information",
+        "media",
         "object",
         "official",
         "overview",
@@ -45,6 +46,29 @@ _GENERIC_ANCHORS = frozenset(
         "suggestion",
         "tradeoff",
         "type",
+    }
+)
+_CONTEXT_STOPWORDS = _GENERIC_ANCHORS | frozenset(
+    {
+        "according",
+        "and",
+        "are",
+        "cite",
+        "for",
+        "from",
+        "include",
+        "into",
+        "preserve",
+        "specifie",
+        "specify",
+        "the",
+        "this",
+        "using",
+        "version",
+        "what",
+        "whether",
+        "which",
+        "with",
     }
 )
 
@@ -104,8 +128,21 @@ class CandidateSelector:
     @staticmethod
     def _tokens(*values: str) -> frozenset[str]:
         normalized = " ".join(values).replace("_", " ").replace("-", " ")
-        tokens = []
-        for value in _TERM.findall(normalized.casefold()):
+        normalized = re.sub(
+            r"\btls\s*(\d)[.]?([0-9])\b",
+            r"tls \1.\2",
+            normalized,
+            flags=re.I,
+        )
+        normalized = re.sub(
+            r"(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])",
+            " ",
+            normalized,
+        )
+        decimal_identifiers = re.findall(r"\b\d+(?:\.\d+)+\b", normalized)
+        tokens = list(decimal_identifiers)
+        without_decimals = re.sub(r"\b\d+(?:\.\d+)+\b", " ", normalized)
+        for value in _TERM.findall(without_decimals.casefold()):
             if len(value) <= 1:
                 continue
             if (
@@ -117,6 +154,10 @@ class CandidateSelector:
                 value = value[:-1]
             if value in {"created", "creator", "creates", "creation"}:
                 value = "creat"
+            if value == "length":
+                value = "size"
+            if value == "bits":
+                value = "bit"
             tokens.append(value)
         return frozenset(tokens)
 
@@ -127,12 +168,8 @@ class CandidateSelector:
         fact: FactRequirement,
     ) -> tuple[frozenset[str], frozenset[str]]:
         entity_terms = cls._tokens(entity, fact.fact_type.value)
-        context = cls._tokens(
-            entity,
-            fact.subject,
-            fact.description,
-            fact.fact_type.value,
-        )
+        context = cls._tokens(entity, fact.subject, fact.description)
+        context = context.difference(_CONTEXT_STOPWORDS)
         anchors = set(cls._tokens(fact.key))
         anchors.difference_update(entity_terms)
         anchors.difference_update(_GENERIC_ANCHORS)
@@ -144,6 +181,51 @@ class CandidateSelector:
             if value.isdecimal()
         )
         return context, frozenset(anchors)
+
+    @staticmethod
+    def _exact_spans(text: str, term: str) -> tuple[tuple[int, int], ...]:
+        if not term.isascii():
+            return tuple(
+                (match.start(), match.end())
+                for match in re.finditer(re.escape(term), text)
+            )
+        plural = r"(?:s)?" if term.isalpha() and not term.endswith("s") else ""
+        return tuple(
+            match.span()
+            for match in re.finditer(
+                rf"(?<![A-Za-z0-9_]){re.escape(term)}{plural}"
+                r"(?![A-Za-z0-9_])",
+                text,
+                re.I,
+            )
+        )
+
+    @classmethod
+    def _exact_occurrences(cls, text: str, term: str) -> int:
+        return len(cls._exact_spans(text, term))
+
+    @classmethod
+    def _numeric_relation_score(
+        cls,
+        text: str,
+        anchors: frozenset[str],
+    ) -> float:
+        numeric = tuple(term for term in anchors if term.isdecimal())
+        semantic = tuple(term for term in anchors if not term.isdecimal())
+        if not numeric or not semantic:
+            return 0.0
+        denominator = min(2, len(semantic))
+        best = 0
+        for number in numeric:
+            for start, end in cls._exact_spans(text, number):
+                window_start = max(0, start - 80)
+                window_end = min(len(text), end + 80)
+                nearby = sum(
+                    bool(cls._exact_spans(text[window_start:window_end], term))
+                    for term in semantic
+                )
+                best = max(best, min(denominator, nearby))
+        return best / denominator
 
     def _quote_window(
         self,
@@ -208,19 +290,40 @@ class CandidateSelector:
                 terms, anchors = self._term_sets(entity, fact)
                 for chunk_id, chunk in document.chunks:
                     folded = chunk.text.casefold()
-                    matched = {term for term in terms if term in folded}
+                    chunk_terms = self._tokens(chunk.text)
+                    matched = {
+                        term
+                        for term in terms
+                        if term in folded or term in chunk_terms
+                    }
                     if not matched:
                         continue
-                    matched_anchors = {term for term in anchors if term in folded}
+                    matched_anchors = {
+                        term
+                        for term in anchors
+                        if term in folded or term in chunk_terms
+                    }
                     if anchors and not matched_anchors:
                         continue
                     context_score = len(matched) / max(1, len(terms))
-                    score = (
-                        0.7 * len(matched_anchors) / len(anchors)
-                        + 0.3 * context_score
-                        if anchors
-                        else context_score
-                    )
+                    if anchors:
+                        anchor_score = len(matched_anchors) / len(anchors)
+                        exact_anchor_score = sum(
+                            self._exact_occurrences(chunk.text, term) > 0
+                            for term in anchors
+                        ) / len(anchors)
+                        lexical_score = (
+                            0.45 * anchor_score
+                            + 0.35 * exact_anchor_score
+                            + 0.20 * context_score
+                        )
+                        relation_score = self._numeric_relation_score(
+                            chunk.text,
+                            anchors,
+                        )
+                        score = 0.90 * lexical_score + 0.10 * relation_score
+                    else:
+                        score = context_score
                     quote = self._quote_window(chunk.text, terms, anchors)
                     quote_hash = hashlib.sha256(quote.encode("utf-8")).hexdigest()
                     by_fact[mapped_fact_id].append(
@@ -252,9 +355,6 @@ class CandidateSelector:
                     0
                     if item.source_authority is SourceAuthority.OFFICIAL
                     else 1,
-                    item.chunk.ordinal
-                    if item.fact.freshness is Freshness.CURRENT
-                    else 0,
                     -item.score,
                     item.source_identity,
                     item.chunk.ordinal,
