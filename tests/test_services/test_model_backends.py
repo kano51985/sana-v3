@@ -1,26 +1,17 @@
 import os
-import json
 import unittest
+from types import SimpleNamespace
 from unittest import mock
-
-import requests
 
 from sana.models.deepseek_backend import DeepSeekBackend
 from sana.models.openai_backend import OpenAIModelBackend
 
 
-class FakeResponse:
-    def __init__(self, payload, status_code=200):
-        self.payload = payload
-        self.status_code = status_code
-        self.text = json.dumps(payload, ensure_ascii=False)
-
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise requests.HTTPError(response=self)
-
-    def json(self):
-        return self.payload
+def _sdk_response(content: str):
+    response = mock.Mock()
+    response.choices = [SimpleNamespace(message=SimpleNamespace(content=content))]
+    response.model_dump_json.return_value = '{"choices":[]}'
+    return response
 
 
 class ModelBackendKeyTest(unittest.TestCase):
@@ -40,46 +31,65 @@ class ModelBackendKeyTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "DEEPSEEK_API_KEY"):
                 DeepSeekBackend().chat("model", [{"role": "user", "content": "x"}])
 
-    def test_deepseek_uses_requests_and_parses_response(self):
-        response = FakeResponse({"choices": [{"message": {"content": "ok"}}]})
+    def test_deepseek_uses_sdk_and_parses_response(self):
+        client = mock.Mock()
+        client.chat.completions.create.return_value = _sdk_response("ok")
         with mock.patch.dict(
             os.environ,
             {"DEEPSEEK_API_KEY": "sk-test"},
             clear=False,
         ), mock.patch(
-            "sana.models.deepseek_backend.requests.post",
-            return_value=response,
-        ) as post:
+            "openai.OpenAI",
+            return_value=client,
+        ) as openai:
             result = DeepSeekBackend().chat(
                 "model",
                 [{"role": "user", "content": "x"}],
                 timeout=5,
             )
         self.assertEqual(result.content, "ok")
-        kwargs = post.call_args.kwargs
-        self.assertEqual(kwargs["json"]["model"], "model")
+        openai.assert_called_once_with(
+            api_key="sk-test",
+            base_url="https://api.deepseek.com/v1",
+        )
+        kwargs = client.chat.completions.create.call_args.kwargs
+        self.assertEqual(kwargs["model"], "model")
         self.assertEqual(kwargs["timeout"], 5)
-        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer sk-test")
+        self.assertEqual(kwargs["messages"], [{"role": "user", "content": "x"}])
 
-    def test_deepseek_retries_connection_error_then_succeeds(self):
-        response = FakeResponse({"choices": [{"message": {"content": "ok"}}]})
+    def test_deepseek_forwards_only_supported_options(self):
+        client = mock.Mock()
+        client.chat.completions.create.return_value = _sdk_response("ok")
         with mock.patch.dict(
             os.environ,
             {"DEEPSEEK_API_KEY": "sk-test"},
             clear=False,
         ), mock.patch(
-            "sana.models.deepseek_backend.requests.post",
-            side_effect=[requests.ConnectionError("bad"), response],
-        ) as post, mock.patch(
-            "sana.models.deepseek_backend.time.sleep",
+            "openai.OpenAI",
+            return_value=client,
         ):
-            result = DeepSeekBackend().chat(
+            DeepSeekBackend().chat(
                 "model",
                 [{"role": "user", "content": "x"}],
+                system_prompt="system",
+                temperature=0.1,
+                max_tokens=32,
                 timeout=5,
+                unsupported="ignored",
             )
-        self.assertEqual(post.call_count, 2)
-        self.assertEqual(result.content, "ok")
+        self.assertEqual(
+            client.chat.completions.create.call_args.kwargs,
+            {
+                "model": "model",
+                "messages": [
+                    {"role": "system", "content": "system"},
+                    {"role": "user", "content": "x"},
+                ],
+                "temperature": 0.1,
+                "max_tokens": 32,
+                "timeout": 5,
+            },
+        )
 
 
 if __name__ == "__main__":
