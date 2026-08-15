@@ -9,6 +9,7 @@ ROOT = Path(__file__).parents[2]
 COMPOSE = ROOT / "deployment" / "docker-compose.shadow-eval.yml"
 DOCKERFILE = ROOT / "deployment" / "Dockerfile"
 LAUNCHER = ROOT / "scripts" / "run_shadow_campaign.ps1"
+AUDITOR = ROOT / "scripts" / "audit_shadow_campaign.ps1"
 FIXTURE_COMPOSE = ROOT / "deployment" / "docker-compose.shadow-fake.yml"
 
 
@@ -159,3 +160,24 @@ def test_offline_override_cannot_receive_a_real_provider_credential() -> None:
         "DEEPSEEK_API_KEY": "shadow-offline-fixture-no-provider-call",
     }
     assert runner == {"SANA_SHADOW_OFFLINE_FIXTURE": "true"}
+
+
+def test_post_campaign_auditor_is_fail_closed_and_secret_safe() -> None:
+    auditor = AUDITOR.read_text(encoding="utf-8")
+    parameter_block = auditor.split(")", 1)[0]
+
+    assert "$Token" not in parameter_block
+    assert "$Password" not in parameter_block
+    assert "status --porcelain=v1 --untracked-files=all" in auditor
+    assert "Campaign candidate image" in auditor
+    assert "Campaign harness fileset" in auditor
+    assert "Campaign environment identity" in auditor
+    assert "active_reservation_count" in auditor
+    assert "provider_called_count" in auditor
+    assert "relforcerowsecurity" in auditor
+    assert "LLEN" in auditor
+    assert "{{.State.Status}}|{{.State.Health.Status}}|{{.State.Paused}}" in auditor
+    assert "worker process count" in auditor
+    assert "Campaign report integrity/privacy scan failed" in auditor
+    assert "privacy_scan=PASS" in auditor
+    assert "Write-Output $protectedValues" not in auditor

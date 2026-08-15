@@ -183,7 +183,9 @@ async def test_idempotent_retry_returns_existing_and_payload_change_conflicts() 
     )
     repository.added.clear()
 
-    duplicate = await service.create(command)
+    duplicate = await service.create(
+        replace(command, retention_until=command.retention_until + timedelta(seconds=1))
+    )
 
     assert duplicate.id == first.id
     assert duplicate.duplicate is True

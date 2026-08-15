@@ -2,11 +2,13 @@
 
 日期：2026-08-15
 
-状态：待实施
+状态：任务 0–12 离线发布门禁已完成；任务 13 live smoke 待本地 DeepSeek credential
 
 对应设计：docs/superpowers/specs/2026-08-15-shadow-campaign-release-gate-design.md
 
 设计基线：6c15fb3 docs: complete shadow campaign architecture audit
+
+实施收口：实际迁移保持线性 `0009_shadow_campaign_gate -> 0010_shadow_collector_audit`，当前唯一 Alembic head 为 `0010_shadow_collector_audit`。任务 11/12 的可重复测试映射、Docker 故障证据与已修复反例记录在 `docs/operations/shadow-campaign-fault-matrix.md`。离线 gate 不能替代任务 13 的真实 DeepSeek smoke。
 
 ## 1. 执行边界
 

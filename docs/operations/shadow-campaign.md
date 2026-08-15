@@ -62,6 +62,18 @@
 
 切换到 live 必须重新执行不带 `-OfflineFixture` 的 `prepare`，生成 `execution_class=LIVE_DEEPSEEK` 的新 attestation；同一 attestation 不能跨执行类别复用。
 
+离线 Campaign 完成后执行 fail-closed 审计：
+
+```powershell
+.\scripts\audit_shadow_campaign.ps1 `
+  -CampaignId <uuid> `
+  -OfflineFixture
+```
+
+审计器要求当前 worktree clean，且 HEAD、Campaign provenance、attestation 和运行中容器 image ID 完全一致。它同时核对 Result/SearchRun 唯一性、提交次数、Campaign/Result/ModelInvocation 账本、ACTIVE reservation、SearchRun、Outbox、全部业务队列、FORCE RLS、worker health/进程数和报告文件哈希。日志与报告会在进程内扫描数据库口令、当前 token/key 和 manifest prompt；输出只包含 PASS 断言，不回显敏感值。离线模式还强制全部 Provider 调用、token 与费用为零。
+
+`worker` 的 Docker healthcheck 是有界 Redis PING，只证明 worker 进程依赖可达，不单独证明 Celery 消费能力。Celery pidbox/inspect 不作为容器健康条件，因为超时探针可能遗留子进程且在任务后产生假阴性；实际消费能力必须由完成 Campaign、队列归零和上述审计共同证明。
+
 ## 费率版本
 
 `deepseek-v4-flash-usd-2026-08-15-v1` 冻结采用 DeepSeek 官方定价页在 2026-08-15 列出的缓存未命中输入价 0.14 美元/百万 token 与输出价 0.28 美元/百万 token；未知出站按每个 run 0.001 美元记 possibly-billed reserve。来源：<https://api-docs.deepseek.com/quick_start/pricing>。
@@ -94,6 +106,8 @@
 
 `pause` 与 `abort` 都会停止新 claim，恢复已持久化的同键在途请求，drain 后再进入 PAUSED/ABORTED。Ctrl-C 或 SIGTERM 会先持久化 PAUSE intent；再次执行 `pause` 可完成无人值守 drain。
 
+`PAUSED` 是可恢复状态，不是报告终态。即使已收集的部分结果存在 hard failure，PAUSE drain 也只能生成内存中的 PENDING snapshot，禁止绑定 JSON、Markdown 或 decision hash。只有 `resume` 完成剩余单元后才能进行最终封账；数据库绑定层会再次拒绝 `status=PAUSED` 或 `stop_intent=PAUSE`。
+
 人工复核与报告：
 
 ```powershell
@@ -114,11 +128,13 @@ Review 终端会临时显示 answer、claim、citation URL 与 quote；数据库
 
 ## 恢复原则
 
-- create 输出丢失：先执行 `list`，再按 Campaign ID 执行 `resume`；不要换 campaign key。
+- create 输出丢失：可以用完全相同的 campaign key/profile/manifest/attestation 直接重放 `create`；CLI 生成的 retention deadline 是首写拥有的运维元数据，不参与 Campaign 身份 hash。也可以先执行 `list`，再按 Campaign ID 执行 `resume`；绝不能换 campaign key。
 - Conversation/Message receipt 丢失：Runner 使用持久化 idempotency key 重放，不生成新 Conversation/SearchRun ID。
 - 首次不确定 POST 会保留 ACTIVE reservation；一次恢复重放仍失败后，才按 frozen reserve 记 possibly-billed 并封账。
 - Collector provenance/lineage 永久失败会从 ModelInvocation audit 结算账本，标记 FAILED，并触发 FATAL drain。
 - 报告 artifact 写入后绑定失败：再次执行 `report`，content-addressed artifact 与 decision hash 会收敛。
+
+完整故障覆盖、测试映射和 Docker 证据见 `docs/operations/shadow-campaign-fault-matrix.md`。
 
 ## 停止容器
 

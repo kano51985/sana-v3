@@ -495,7 +495,10 @@ class CampaignService:
                 "cost_rate": cost_rate.snapshot(),
                 "cost_rate_hash": cost_rate.sha256,
                 "provenance": command.provenance.snapshot(),
-                "retention_until": command.retention_until,
+                # The CLI derives this operational deadline from its wall clock.
+                # It is not caller-selectable Campaign identity: including it here
+                # would make a lost create response impossible to retry with the
+                # same idempotency key. The first committed row owns the deadline.
                 "parent_smoke_campaign_id": command.parent_smoke_campaign_id,
                 "parent_smoke_decision_hash": parent_decision_hash,
             }
