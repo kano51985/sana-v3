@@ -397,12 +397,37 @@ def _select_ranked_hits(
         for _, _, authority in ranked
     )
     if mode is SearchMode.FAST:
+        direct_official = [
+            value
+            for value in ranked
+            if value[2] is SourceAuthority.OFFICIAL
+            and str(value[0].get("provider", "")) == "direct"
+        ]
         direct_official_pages = {
             str(item["canonical_url"])
-            for item, _, authority in ranked
-            if authority is SourceAuthority.OFFICIAL
-            and str(item.get("provider", "")) == "direct"
+            for item, _, _ in direct_official
         }
+        if len(direct_official_pages) >= 2:
+            selection_limit = min(max_selected_hits, 2)
+            remaining = list(direct_official)
+            selected: list[dict[str, Any]] = []
+            covered_fact_ids: set[str] = set()
+            while remaining and len(selected) < selection_limit:
+                gains = [
+                    len(
+                        set(map(str, item.get("fact_ids", ())))
+                        - covered_fact_ids
+                    )
+                    for item, _, _ in remaining
+                ]
+                chosen_index = max(
+                    range(len(remaining)),
+                    key=lambda index: (gains[index], -index),
+                )
+                item, _, _ = remaining.pop(chosen_index)
+                selected.append(item)
+                covered_fact_ids.update(map(str, item.get("fact_ids", ())))
+            return selected
         if has_official:
             selection_limit = min(
                 max_selected_hits,
@@ -649,31 +674,33 @@ class SearchStepOperations:
         queries = self._compiler.compile(intent, run.mode)
         fact_payloads = [_fact_dict(context.run_id, fact) for fact in intent.facts]
         fact_ids = {item["key"]: item["id"] for item in fact_payloads}
-        query_payloads = [
-            {
-                "id": str(uuid5(context.run_id, f"query:{query.key}")),
-                "key": query.key,
-                "fact_key": query.fact_key,
-                "fact_id": fact_ids[query.fact_key],
-                "text": query.text,
-                "signature": query.signature,
-                "locale": query.locale,
-                "freshness_days": query.freshness_days,
-                "plan_revision": query.plan_revision,
-                "metadata": dict(query.metadata),
-                "direct_urls": list(
-                    self._direct_sources.urls_for_fact(
-                        intent.entity,
-                        next(
-                            fact
-                            for fact in intent.facts
-                            if fact.key == query.fact_key
-                        ),
-                    )
-                ),
-            }
-            for query in queries
-        ]
+        fact_by_key = {fact.key: fact for fact in intent.facts}
+        query_payloads = []
+        for query in queries:
+            direct_urls = self._direct_sources.urls_for_fact(
+                intent.entity,
+                fact_by_key[query.fact_key],
+            )
+            query_payloads.append(
+                {
+                    "id": str(uuid5(context.run_id, f"query:{query.key}")),
+                    "key": query.key,
+                    "fact_key": query.fact_key,
+                    "fact_id": fact_ids[query.fact_key],
+                    "text": query.text,
+                    "signature": query.signature,
+                    "locale": query.locale,
+                    "freshness_days": query.freshness_days,
+                    "plan_revision": query.plan_revision,
+                    "metadata": dict(query.metadata),
+                    "direct_urls": list(direct_urls),
+                    "providers": (
+                        ["direct"]
+                        if planning.strategy == "reviewed_template" and direct_urls
+                        else list(self.provider_names)
+                    ),
+                }
+            )
         return await self._result(
             context,
             {

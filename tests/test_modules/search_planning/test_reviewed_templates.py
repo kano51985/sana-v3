@@ -46,6 +46,24 @@ def test_public_apex_mmr_mechanism_question_is_not_misclassified_as_private() ->
     assert reviewed_intent_template("How does Apex Legends MMR work?") is None
 
 
+def test_structured_public_apex_cases_have_reviewed_runtime_plans() -> None:
+    expected_ids = {
+        "fast-zh-07-apex-current",
+        "fast-en-07-apex-version",
+        "research-zh-05-apex-bloodhound",
+        "research-zh-08-apex-pollution",
+        "research-en-06-apex-patch",
+        "research-en-07-apex-conversation",
+    }
+    cases = [case for case in _cases() if case["id"] in expected_ids]
+
+    assert {case["id"] for case in cases} == expected_ids
+    for case in cases:
+        intent = reviewed_intent_template(case["prompt"])
+        assert intent is not None, case["id"]
+        assert len(intent.facts) >= case["minimum_required_facts"], case["id"]
+
+
 def test_reviewed_private_data_plans_never_compile_attacker_instructions() -> None:
     cases = [case for case in _cases() if "privacy" in case["tags"]]
 

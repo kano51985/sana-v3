@@ -133,21 +133,31 @@ def test_fast_selection_prefers_reviewed_direct_page_over_search_homepage() -> N
 
 
 def test_fast_selection_keeps_two_reviewed_pages_on_one_official_domain() -> None:
+    creator_fact, history_fact = str(uuid4()), str(uuid4())
     creator = _hit(
         "https://www.python.org/download/releases/2.1/license/",
         score=1.0,
         rank=1,
     )
     creator["provider"] = "direct"
+    creator["fact_ids"] = [creator_fact]
     history = _hit(
         "https://docs.python.org/3/license.html#history-of-the-software",
         score=1.0,
         rank=1,
     )
     history["provider"] = "direct"
+    history["fact_ids"] = [history_fact]
+    independent = _hit(
+        "https://independent.example.net/python-history",
+        score=1.0,
+        rank=1,
+    )
+    independent["provider"] = "bing_rss"
+    independent["fact_ids"] = [creator_fact, history_fact]
 
     selected = _select_ranked_hits(
-        (creator, history),
+        (creator, history, independent),
         authority_policy=SourceAuthorityPolicy(),
         entity="Python",
         mode=SearchMode.FAST,
@@ -155,6 +165,10 @@ def test_fast_selection_keeps_two_reviewed_pages_on_one_official_domain() -> Non
     )
 
     assert len(selected) == 2
+    assert {item["canonical_url"] for item in selected} == {
+        creator["canonical_url"],
+        history["canonical_url"],
+    }
 
 
 def test_research_selection_covers_facts_before_redundant_publishers() -> None:

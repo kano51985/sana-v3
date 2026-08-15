@@ -457,7 +457,12 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
                     plan_revision=int(query["plan_revision"]),
                     query_key=str(query["key"]),
                     query_text=str(query["text"]),
-                    provider_class=",".join(map(str, payload.get("providers", []))),
+                    provider_class=",".join(
+                        map(
+                            str,
+                            query.get("providers", payload.get("providers", [])),
+                        )
+                    ),
                     locale=str(query["locale"]),
                     freshness_days=query.get("freshness_days"),
                     query_metadata=dict(query.get("metadata", {})),
@@ -808,7 +813,9 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
                         "schema": "sana.discovery-input.v1",
                         "plan_ref": _ref_dict(result.output_ref),
                         "query": query,
-                        "providers": list(payload.get("providers", [])),
+                        "providers": list(
+                            query.get("providers", payload.get("providers", []))
+                        ),
                     },
                 )
                 await self._add_step(

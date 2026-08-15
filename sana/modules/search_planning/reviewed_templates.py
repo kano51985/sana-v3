@@ -133,6 +133,120 @@ def reviewed_intent_template(message: str) -> NormalizedIntent | None:
             comparison=True,
         )
 
+    if re.search(r"\bapex(?: legends)?\b", text, re.I) and (
+        re.search(r"(?:map rotation|\u5730\u56fe\u8f6e\u6362)", text, re.I)
+        and re.search(
+            r"(?:ranked rules?|\u6392\u540d\u89c4\u5219|\u6392\u4f4d\u89c4\u5219)",
+            text,
+            re.I,
+        )
+        and re.search(
+            r"(?:team[- ]composition|\u9635\u5bb9\u5206\u6790|\u9635\u5bb9).{0,48}"
+            r"(?:perspectives?|sources?|\u6765\u6e90)|"
+            r"(?:two|2|\u4e24\u4e2a|\u4e8c\u4e2a).{0,48}"
+            r"(?:team[- ]composition|\u9635\u5bb9)",
+            text,
+            re.I,
+        )
+    ):
+        return _intent(
+            "Apex Legends",
+            locale,
+            (
+                _fact(
+                    "current_map_rotation",
+                    "Current official Apex Legends map rotation",
+                    "Apex Legends map rotation",
+                    fact_type=FactType.CURRENT_VALUE,
+                    freshness=Freshness.CURRENT,
+                ),
+                _fact(
+                    "ranked_rules_changes",
+                    "Current official Apex Legends ranked rules changes",
+                    "Apex Legends ranked rules",
+                    fact_type=FactType.PATCH_NOTES,
+                    freshness=Freshness.RECENT,
+                ),
+                _fact(
+                    "community_team_composition_1",
+                    "First independent Apex Legends team composition perspective",
+                    "Apex Legends team composition source one",
+                    fact_type=FactType.TEAM_META,
+                    freshness=Freshness.CURRENT,
+                    sources=("independent",),
+                ),
+                _fact(
+                    "community_team_composition_2",
+                    "Second independent Apex Legends team composition perspective",
+                    "Apex Legends team composition source two",
+                    fact_type=FactType.TEAM_META,
+                    freshness=Freshness.CURRENT,
+                    sources=("independent",),
+                ),
+            ),
+            comparison=True,
+        )
+
+    if "apex legends" in folded and re.search(
+        r"(?:bloodhound|\u5bfb\u8840\u730e\u72ac)", text, re.I
+    ) and re.search(r"(?:patch|balance|\u8865\u4e01|\u6539\u52a8)", text, re.I):
+        return _intent(
+            "Apex Legends",
+            locale,
+            (
+                _fact(
+                    "current_release",
+                    "Current official Apex Legends release",
+                    "Apex Legends current release",
+                    fact_type=FactType.VERSION,
+                    freshness=Freshness.CURRENT,
+                ),
+                _fact(
+                    "bloodhound_balance_changes",
+                    "Recent official Bloodhound balance changes",
+                    "Apex Legends Bloodhound changes",
+                    fact_type=FactType.CHARACTER_CHANGES,
+                    freshness=Freshness.RECENT,
+                ),
+                _fact(
+                    "official_patch_interpretation",
+                    "Confirmed facts in the official Apex Legends patch notes",
+                    "Apex Legends official patch notes",
+                    fact_type=FactType.PATCH_NOTES,
+                    freshness=Freshness.RECENT,
+                ),
+                _fact(
+                    "community_team_interpretation",
+                    "Independent current team composition interpretation",
+                    "Apex Legends community team composition",
+                    fact_type=FactType.TEAM_META,
+                    freshness=Freshness.CURRENT,
+                    sources=("independent",),
+                ),
+            ),
+            comparison=True,
+        )
+
+    if "apex legends" in folded and re.search(
+        r"(?:current (?:official )?.{0,24}(?:season|game version)|"
+        r"\u5b98\u65b9\u5f53\u524d\u8d5b\u5b63|\u5f53\u524d\u8d5b\u5b63\u540d\u79f0)",
+        text,
+        re.I,
+    ):
+        return _intent(
+            "Apex Legends",
+            locale,
+            (
+                _fact(
+                    "current_season_or_release",
+                    "Current official Apex Legends season or game release",
+                    "Apex Legends current official release",
+                    fact_type=FactType.VERSION,
+                    freshness=Freshness.CURRENT,
+                ),
+            ),
+        )
+
     if _contains(text, r"http", r"(?<!\d)201(?!\d)", r"(?<!\d)204(?!\d)"):
         return _intent(
             "HTTP",
