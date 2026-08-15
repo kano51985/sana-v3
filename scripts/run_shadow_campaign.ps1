@@ -59,6 +59,13 @@ function Get-ComposeOutput([string[]]$Arguments) {
     return ($output -join "`n").Trim()
 }
 
+function ConvertTo-ImmutableImageId([string]$Value) {
+    $normalized = $Value.Trim().ToLowerInvariant()
+    if ($normalized -match '^[0-9a-f]{64}$') { return "sha256:$normalized" }
+    if ($normalized -match '^sha256:[0-9a-f]{64}$') { return $normalized }
+    throw 'Docker did not return an immutable SHA-256 image ID'
+}
+
 function Assert-NoPublishedPort([string]$Service, [string]$Port) {
     $containerId = Get-ComposeOutput @('ps', '-q', $Service)
     if (-not $containerId) { throw "$Service container is not running" }
@@ -86,6 +93,43 @@ function Get-TrackedFilesetHash {
         "$path`0$digest`n"
     }
     return Get-Sha256Text ($entries -join '')
+}
+
+function Get-ValidatedAttestedImage {
+    if (-not (Test-Path -LiteralPath $AttestationPath)) {
+        throw 'Run prepare before invoking a Campaign command'
+    }
+    Assert-CleanSource
+    $python = Join-Path $WorkspaceRoot 'venv/Scripts/python.exe'
+    if (-not (Test-Path -LiteralPath $python)) { $python = 'python' }
+    $identity = @(& $python -c @'
+import pathlib
+import sys
+from sana.app.shadow_provenance import parse_shadow_attestation_bytes
+
+value = parse_shadow_attestation_bytes(pathlib.Path(sys.argv[1]).read_bytes()).provenance
+print(value.candidate_image_id)
+print(value.candidate_commit_sha)
+print(value.harness_commit_sha)
+'@ $AttestationPath)
+    Assert-LastExitCode 'strict attestation validation'
+    if ($identity.Count -ne 3) { throw 'Attestation identity output is incomplete' }
+    $imageId = ConvertTo-ImmutableImageId $identity[0]
+    $commit = (& git -C $WorkspaceRoot rev-parse HEAD).Trim()
+    Assert-LastExitCode 'git rev-parse HEAD'
+    if ($identity[1] -ne $commit -or $identity[2] -ne $commit) {
+        throw 'Attested candidate/harness commit does not equal the current commit'
+    }
+    $actualImageId = ConvertTo-ImmutableImageId (
+        (& docker image inspect --format '{{.Id}}' $imageId).Trim()
+    )
+    Assert-LastExitCode 'docker image inspect attested candidate'
+    $revision = (& docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' $imageId).Trim()
+    Assert-LastExitCode 'docker image inspect attested OCI revision'
+    if ($actualImageId -ne $imageId -or $revision -ne $commit) {
+        throw 'Attested candidate image identity is no longer valid'
+    }
+    return $imageId
 }
 
 function Get-TopologyHash([hashtable]$Topology) {
@@ -117,11 +161,14 @@ function Prepare-ShadowEnvironment {
     $configHash = Get-Sha256Text $renderedConfig
 
     Invoke-Compose @('build', 'migrate')
-    $imageId = (& docker image inspect --format '{{.Id}}' $CandidateImage).Trim()
+    $imageId = ConvertTo-ImmutableImageId (
+        (& docker image inspect --format '{{.Id}}' $CandidateImage).Trim()
+    )
     Assert-LastExitCode 'docker image inspect candidate'
     $revision = (& docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' $CandidateImage).Trim()
     Assert-LastExitCode 'docker image inspect OCI revision'
     if ($revision -ne $commit) { throw 'OCI revision label does not equal candidate commit' }
+    $env:SANA_SHADOW_IMAGE = $imageId
 
     Invoke-Compose @('up', '-d', '--wait', 'postgres', 'provision-db-role', 'redis', 'migrate', 'artifact-init', 'api', 'dispatcher', 'worker')
 
@@ -134,7 +181,9 @@ function Prepare-ShadowEnvironment {
 
     $candidateServices = @('migrate', 'artifact-init', 'api', 'dispatcher', 'worker')
     foreach ($service in $candidateServices) {
-        $serviceImage = Get-ComposeOutput @('images', '-q', $service)
+        $serviceImage = ConvertTo-ImmutableImageId (
+            Get-ComposeOutput @('images', '-q', $service)
+        )
         if ($serviceImage -ne $imageId) { throw "$service does not use the candidate image ID" }
     }
 
@@ -232,15 +281,13 @@ function Prepare-ShadowEnvironment {
 }
 
 function Invoke-RunnerCommand {
+    $attestedImage = Get-ValidatedAttestedImage
     Set-SecretEnvironment 'SANA_SHADOW_OWNER_DB_PASSWORD' 'Shadow database owner password'
     Set-SecretEnvironment 'SANA_SHADOW_APP_DB_PASSWORD' 'Shadow database application password'
     Set-SecretEnvironment 'DEEPSEEK_API_KEY' 'DeepSeek API key'
     Set-SecretEnvironment 'SANA_ACCESS_TOKEN' 'Local Sana token (tenant UUID:user UUID)'
-    if (-not (Test-Path -LiteralPath $AttestationPath)) {
-        throw 'Run prepare before invoking a Campaign command'
-    }
     $env:SANA_SHADOW_ATTESTATION_PATH = $AttestationPath
-    $env:SANA_SHADOW_IMAGE = $CandidateImage
+    $env:SANA_SHADOW_IMAGE = $attestedImage
     $env:SANA_CANDIDATE_COMMIT_SHA = (& git -C $WorkspaceRoot rev-parse HEAD).Trim()
     Assert-LastExitCode 'git rev-parse HEAD'
     $arguments = @('run', '--rm', 'campaign-runner', 'python', 'scripts/run_shadow_campaign.py', $Command, '--api-url', 'http://api:8000')

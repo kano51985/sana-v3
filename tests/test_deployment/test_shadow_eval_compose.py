@@ -127,6 +127,9 @@ def test_host_launcher_hashes_sanitized_inputs_and_never_accepts_token_argv() ->
     assert "org.opencontainers.image.revision" in launcher
     assert ".HostConfig.PortBindings" in launcher
     assert " compose @ComposeArgs port " not in launcher
+    assert "parse_shadow_attestation_bytes" in launcher
+    assert "$env:SANA_SHADOW_IMAGE = $attestedImage" in launcher
+    assert "docker image inspect --format '{{.Id}}' $imageId" in launcher
     assert "docker.sock" in launcher
     assert "down', '--remove-orphans'" in launcher
     assert "down', '--volumes'" not in launcher
