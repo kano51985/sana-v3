@@ -585,8 +585,14 @@ class ShadowCampaignRunner:
             )
             return
         if lease.reservation_state is ReservationState.NONE:
-            admission = await self._budget.reserve_run(lease)
-            if not admission.allowed:
+            while True:
+                admission = await self._budget.reserve_run(lease)
+                if admission.allowed:
+                    break
+                if admission.deferred:
+                    await self._sleeper(self._poll_interval)
+                    await self._scheduling.renew(lease)
+                    continue
                 await self._mark_failure(
                     lease,
                     RunnerFailure(

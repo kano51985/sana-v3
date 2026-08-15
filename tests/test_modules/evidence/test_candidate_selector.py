@@ -368,6 +368,62 @@ def test_one_fetched_document_can_ground_multiple_planned_facts() -> None:
     assert {item.fact_id for item in selected} == {first, second}
 
 
+def test_purpose_fact_prefers_definition_over_incidental_object_mentions() -> None:
+    fact_id = uuid4()
+    fact = FactRequirement(
+        "commit_purpose",
+        FactType.BACKGROUND,
+        "What is the purpose of the commit object in Git?",
+        "Git",
+    )
+    tenant_id, document_id = uuid4(), uuid4()
+    raw_chunks = (
+        "Git object types include commit, tree, blob, and tag objects.",
+        "A commit records the top-level tree and parent commit IDs.",
+    )
+    chunks = tuple(
+        (
+            uuid4(),
+            DocumentChunk(
+                ordinal,
+                text,
+                hashlib.sha256(text.encode()).hexdigest(),
+                10,
+                ordinal * 100,
+                ordinal * 100 + len(text),
+            ),
+        )
+        for ordinal, text in enumerate(raw_chunks)
+    )
+    full_text = "\n".join(raw_chunks)
+    candidate_document = CandidateDocument(
+        document_id,
+        DocumentVersion(
+            uuid4(),
+            tenant_id,
+            document_id,
+            hashlib.sha256(full_text.encode()).hexdigest(),
+            full_text,
+            "text/plain",
+            "en",
+            NOW,
+        ),
+        chunks,
+        "https://git-scm.com/docs/gitdatamodel.html",
+        "Git data model",
+        (fact_id,),
+    )
+
+    selected = CandidateSelector(max_per_fact=1, max_total=1).select(
+        run_id=uuid4(),
+        entity="Git",
+        facts={fact_id: fact},
+        documents=(candidate_document,),
+    )
+
+    assert selected[0].chunk.ordinal == 1
+
+
 def test_current_fact_ranks_evidence_relevance_before_document_position() -> None:
     fact_id = uuid4()
     fact = FactRequirement(

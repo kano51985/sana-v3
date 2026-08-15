@@ -227,6 +227,31 @@ class CandidateSelector:
                 best = max(best, min(denominator, nearby))
         return best / denominator
 
+    @classmethod
+    def _definition_relation_score(
+        cls,
+        text: str,
+        anchors: frozenset[str],
+        fact: FactRequirement,
+    ) -> float:
+        """Prefer an entity definition over incidental mentions for purpose Facts."""
+
+        fact_text = f"{fact.key} {fact.description}".casefold()
+        if "purpose" not in fact_text and "\u7528\u9014" not in fact_text:
+            return 0.0
+        relation = re.compile(
+            r"(?:\b(?:contains?|represents?|records?|stores?|points?\s+to|"
+            r"refers?\s+to|used\s+for|required\s+fields)\b|"
+            r"\u5305\u542b|\u8868\u793a|\u8bb0\u5f55|\u5b58\u50a8|\u5f15\u7528|\u7528\u4e8e)",
+            re.I,
+        )
+        for anchor in anchors:
+            for start, end in cls._exact_spans(text, anchor):
+                window = text[max(0, start - 48) : min(len(text), end + 140)]
+                if relation.search(window):
+                    return 1.0
+        return 0.0
+
     def _quote_window(
         self,
         text: str,
@@ -321,7 +346,24 @@ class CandidateSelector:
                             chunk.text,
                             anchors,
                         )
-                        score = 0.90 * lexical_score + 0.10 * relation_score
+                        definition_score = self._definition_relation_score(
+                            chunk.text,
+                            anchors,
+                            fact,
+                        )
+                        is_purpose = (
+                            "purpose"
+                            in f"{fact.key} {fact.description}".casefold()
+                            or "\u7528\u9014" in fact.description
+                        )
+                        if is_purpose:
+                            score = (
+                                0.75 * lexical_score
+                                + 0.10 * relation_score
+                                + 0.15 * definition_score
+                            )
+                        else:
+                            score = 0.90 * lexical_score + 0.10 * relation_score
                     else:
                         score = context_score
                     quote = self._quote_window(chunk.text, terms, anchors)

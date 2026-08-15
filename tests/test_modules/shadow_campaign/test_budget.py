@@ -74,6 +74,22 @@ def test_cost_limit_denies_but_exact_boundary_is_admitted() -> None:
     assert boundary.projected_estimated_cost == Decimal("1.00")
 
 
+def test_active_reservation_pressure_is_distinct_from_irreversible_spend() -> None:
+    snapshot = _snapshot(
+        observed_provider_calls=14,
+        possibly_billed_call_charge=0,
+        reserved_provider_calls=4,
+        observed_estimated_cost=Decimal("0.0029"),
+        possibly_billed_cost_charge=Decimal("0"),
+        reserved_estimated_cost=Decimal("0.004"),
+        estimated_cost_stop_threshold=Decimal("0.01"),
+    )
+    request = ReservationRequest(4, Decimal("0.004"))
+
+    assert snapshot.admit(request).allowed is False
+    assert snapshot.admit_after_active_reservations_settle(request).allowed is True
+
+
 def test_settlement_usage_hash_is_stable_and_detects_reservation_overrun() -> None:
     usage = SettlementUsage(
         observed_provider_calls=7,

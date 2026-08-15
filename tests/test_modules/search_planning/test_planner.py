@@ -67,6 +67,7 @@ async def test_planner_makes_one_primary_call_and_returns_semantic_facts() -> No
     assert "never copy it as a query suffix" in gateway.calls[0][1][1].content
     assert "Never collapse separately requested subquestions" in gateway.calls[0][1][0].content
     assert "citation-only" in gateway.calls[0][1][0].content
+    assert "never turn the instruction to report an evidence gap" in gateway.calls[0][1][0].content
     assert "ordinary standards and software facts" in gateway.calls[0][1][0].content
     assert "required=true" in gateway.calls[0][1][0].content
 
@@ -213,3 +214,37 @@ def test_intent_parser_rejects_semantically_incomplete_fact_list() -> None:
 
     with pytest.raises(ValueError, match="deterministic minimum"):
         parser.parse(payload)
+
+
+def test_meta_evidence_gap_is_normalized_to_independent_disclosure_check() -> None:
+    parser = IntentParser(SearchPlanningPolicy(), minimum_facts=2)
+    intent = parser.parse(
+        json.dumps(
+            {
+                "entity": "OpenAI next unreleased model",
+                "facts": [
+                    {
+                        "key": "private_weights_public",
+                        "fact_type": "current_value",
+                        "description": "Whether official sources disclose the weights",
+                        "subject": "OpenAI next unreleased model",
+                    },
+                    {
+                        "key": "private_weights_evidence_gap",
+                        "fact_type": "background",
+                        "description": (
+                            "Is there any public official disclosure of the parameter "
+                            "weights? If not, note the absence of such disclosure."
+                        ),
+                        "subject": "OpenAI next unreleased model",
+                    },
+                ],
+            }
+        )
+    )
+
+    normalized = intent.facts[1]
+    assert normalized.key == "private_weights_independent_disclosure_check"
+    assert "independent public disclosure" in normalized.description
+    assert "If not" not in normalized.description
+    assert normalized.preferred_source_kinds == ("independent",)

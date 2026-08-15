@@ -378,6 +378,105 @@ def test_reviewed_relationships_have_safe_deterministic_fallbacks(
     ProposedClaimParser._validate_requested_relationship(fact, derived)
 
 
+@pytest.mark.parametrize(
+    ("fact", "quote", "expected"),
+    (
+        (
+            FactRequirement(
+                "git_object_types",
+                FactType.BACKGROUND,
+                "What are the four types of objects in Git's object model?",
+                "Git",
+            ),
+            "There are 4 types of objects: commits, trees, blobs, and tag objects.",
+            "Git has four object types: commit, tree, blob, and tag.",
+        ),
+        (
+            FactRequirement(
+                "blob_purpose",
+                FactType.BACKGROUND,
+                "What is the purpose of the blob object in Git?",
+                "Git",
+            ),
+            "A blob object contains a file's contents.",
+            "A Git blob object contains a file's contents.",
+        ),
+        (
+            FactRequirement(
+                "tree_purpose",
+                FactType.BACKGROUND,
+                "What is the purpose of the tree object in Git?",
+                "Git",
+            ),
+            "A tree is how Git represents a directory. It can contain files or "
+            "other trees (which are subdirectories).",
+            "A Git tree object represents a directory and can contain files or subtrees.",
+        ),
+        (
+            FactRequirement(
+                "commit_purpose",
+                FactType.BACKGROUND,
+                "What is the purpose of the commit object in Git?",
+                "Git",
+            ),
+            "A commit contains these required fields: a top-level tree, parent "
+            "commit IDs, author and committer information, and a commit message",
+            "A Git commit object records its top-level tree, parent commits, author "
+            "and committer metadata, and commit message.",
+        ),
+        (
+            FactRequirement(
+                "tag_purpose",
+                FactType.BACKGROUND,
+                "What is the purpose of the tag object in Git?",
+                "Git",
+            ),
+            "Tag objects contain these required fields: the ID and type of the "
+            "object it references, tagger data, and a tag message, similar to a "
+            "commit message",
+            "A Git tag object records the referenced object's ID and type, tagger "
+            "metadata, and a tag message.",
+        ),
+    ),
+)
+def test_reviewed_git_relationships_have_safe_fallbacks(
+    fact: FactRequirement,
+    quote: str,
+    expected: str,
+) -> None:
+    evidence = grounded_evidence(
+        tenant_id=uuid4(),
+        run_id=uuid4(),
+        fact_id=uuid4(),
+        source_identity="git-scm.com",
+        authority=SourceAuthority.OFFICIAL,
+        seed=expected,
+    )
+    evidence = replace(
+        evidence,
+        candidate=replace(
+            evidence.candidate,
+            source=replace(
+                evidence.source,
+                url="https://git-scm.com/docs/gitdatamodel.html",
+            ),
+            quote=quote,
+            quote_hash=hashlib.sha256(quote.encode()).hexdigest(),
+            start_offset=0,
+            end_offset=len(quote),
+        ),
+    )
+
+    derived = ConstrainedModelSynthesizer._derived_fallback_text(
+        fact,
+        (evidence.id,),
+        {evidence.id: evidence},
+    )
+
+    assert derived == expected
+    ProposedClaimParser._validate_requested_relationship(fact, derived)
+
+
 @pytest.mark.asyncio
 async def test_valid_model_claim_gets_deterministic_full_lineage_citation() -> None:
     fact_id = uuid4()

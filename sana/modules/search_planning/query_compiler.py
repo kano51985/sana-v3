@@ -18,8 +18,53 @@ from sana.modules.search_planning.policy import SearchPlanningPolicy
 
 
 class QueryCompiler:
+    _KEY_TOKEN = re.compile(r"[A-Za-z0-9]+")
+
     def __init__(self, policy: SearchPlanningPolicy | None = None) -> None:
         self.policy = policy or SearchPlanningPolicy()
+
+    @classmethod
+    def _semantic_key_terms(
+        cls,
+        fact: FactRequirement,
+        *,
+        entity: str,
+        keyword_groups: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        """Keep bounded Fact semantics without copying conversational prose."""
+
+        excluded = {
+            value.casefold()
+            for value in cls._KEY_TOKEN.findall(
+                " ".join((entity, fact.subject, *keyword_groups))
+            )
+        }
+        excluded.update(
+            {
+                "answer",
+                "background",
+                "evidence",
+                "fact",
+                "gap",
+                "info",
+                "information",
+                "overview",
+                "profile",
+                "purpose",
+                "result",
+                "source",
+                "status",
+            }
+        )
+        terms: list[str] = []
+        for raw in cls._KEY_TOKEN.findall(fact.key):
+            term = raw.casefold()
+            if len(term) < 2 or term in excluded or term in terms:
+                continue
+            terms.append(term)
+            if len(terms) == 4:
+                break
+        return tuple(terms)
 
     @staticmethod
     def _keywords(fact: FactRequirement, *, chinese: bool) -> tuple[tuple[str, ...], ...]:
@@ -116,6 +161,13 @@ class QueryCompiler:
             components = []
             if subject.casefold() != intent.entity.casefold():
                 components.append(subject)
+            components.extend(
+                self._semantic_key_terms(
+                    fact,
+                    entity=intent.entity,
+                    keyword_groups=keywords,
+                )
+            )
             components.extend(keywords)
             text = self._fit(intent.entity.strip(), components)
             # QuerySpec has exactly one Fact binding. Text-identical queries for

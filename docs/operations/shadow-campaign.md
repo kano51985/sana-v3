@@ -131,6 +131,7 @@ Review 终端会临时显示 answer、claim、citation URL 与 quote；数据库
 - create 输出丢失：可以用完全相同的 campaign key/profile/manifest/attestation 直接重放 `create`；CLI 生成的 retention deadline 是首写拥有的运维元数据，不参与 Campaign 身份 hash。也可以先执行 `list`，再按 Campaign ID 执行 `resume`；绝不能换 campaign key。
 - Conversation/Message receipt 丢失：Runner 使用持久化 idempotency key 重放，不生成新 Conversation/SearchRun ID。
 - 首次不确定 POST 会保留 ACTIVE reservation；一次恢复重放仍失败后，才按 frozen reserve 记 possibly-billed 并封账。
+- 如新 Run 只因其他在途 Run 的 ACTIVE reservation 暂时无法准入，Runner 保留并续租当前 lease，等待 Collector 结算后重试；只有 observed/possibly-billed 不可逆总账本身已无法容纳一个完整 Run 时，才进入 BUDGET/CALL_CEILING stop。
 - Collector provenance/lineage 永久失败会从 ModelInvocation audit 结算账本，标记 FAILED，并触发 FATAL drain。
 - 报告 artifact 写入后绑定失败：再次执行 `report`，content-addressed artifact 与 decision hash 会收敛。
 

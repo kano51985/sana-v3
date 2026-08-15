@@ -212,7 +212,7 @@ tests/test_modules/evidence/test_evidence_levels.py
 - Verifier parser 只接受输入集合中的 fact/candidate ID、枚举 support type、exact quote、confidence 和 allowlisted reason codes。
 - quote 必须重新定位至 Chunk/DocumentVersion exact span，随后调用 `EvidenceBuilder` 和 `EvidenceVerifier`。
 - 单次模型输出可对多个 Fact/候选给出判断；重复判断按稳定规则去重。
-- 模型失败时运行 lexical fallback，并标记 degraded；fallback 结果最高只允许 PARTIAL。
+- 模型失败时只保留已审阅的确定性适配结果，其他候选 fail closed 为 REJECTED 并标记 degraded；词法匹配只用于候选排序。
 
 ### 验证
 

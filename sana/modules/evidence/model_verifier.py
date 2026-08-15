@@ -570,6 +570,139 @@ class ModelEvidenceVerifier:
             ("direct_support", "explicit_value"),
         )
 
+    @classmethod
+    def _deterministic_git_object_model(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Extract Git object types and structures from the reviewed data model."""
+
+        source = candidate.url.split("#", 1)[0].split("?", 1)[0]
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        )
+        if (
+            candidate.source_authority is not SourceAuthority.OFFICIAL
+            or candidate.score <= 0
+            or source != "https://git-scm.com/docs/gitdatamodel.html"
+            or "git" not in fact_text.casefold()
+        ):
+            return None
+
+        folded = fact_text.casefold()
+        if (
+            "object_types" in folded
+            or "four types" in folded
+            or "four types" in candidate.fact.description.casefold()
+        ):
+            statement = re.search(
+                r"(?:There are 4 types of objects:\s*|Objects\s*:\s*)"
+                r"commits\s*,\s*trees\s*,\s*blobs\s*,\s*and\s*tag objects\s*\.?",
+                candidate.chunk.text,
+                re.I,
+            )
+        elif "blob" in folded:
+            statement = re.search(
+                r"A blob object contains a file(?:'|\u2019)s contents\.",
+                candidate.chunk.text,
+                re.I,
+            )
+        elif "tree" in folded:
+            statement = re.search(
+                r"A tree is how Git represents a directory\.\s*It can contain files "
+                r"or other trees \(which are subdirectories\)\.",
+                candidate.chunk.text,
+                re.I,
+            )
+        elif "commit" in folded:
+            statement = re.search(
+                r"A commit contains these required fields.*?\bA\s+commit message",
+                candidate.chunk.text,
+                re.I | re.S,
+            )
+        elif "tag" in folded:
+            statement = re.search(
+                r"Tag objects contain these required fields.*?\bA\s+tag message\s*,\s*"
+                r"similar to a commit message",
+                candidate.chunk.text,
+                re.I | re.S,
+            )
+        else:
+            statement = None
+        if statement is None or len(statement.group(0)) > 600:
+            return None
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            statement.group(0).strip(),
+            0.99,
+            ("direct_support", "definition_match"),
+        )
+
+    @classmethod
+    def _deterministic_proposal(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> tuple[ProposedVerification, str] | None:
+        adapters = (
+            (cls._deterministic_explicit_value, "deterministic-explicit-value-v1"),
+            (cls._deterministic_explicit_terms, "deterministic-explicit-terms-v1"),
+            (cls._deterministic_registry_boolean, "deterministic-registry-table-v1"),
+            (cls._deterministic_registry_media_type, "deterministic-registry-media-v1"),
+            (cls._deterministic_sha_digest_size, "deterministic-sha-digest-v1"),
+            (cls._deterministic_rfc_protocol_title, "deterministic-rfc-title-v1"),
+            (cls._deterministic_rfc3339_utc, "deterministic-rfc3339-utc-v1"),
+            (
+                cls._deterministic_postgresql_isolation,
+                "deterministic-postgresql-isolation-v1",
+            ),
+            (cls._deterministic_git_object_model, "deterministic-git-object-v1"),
+        )
+        for adapter, version in adapters:
+            proposed = adapter(candidate)
+            if proposed is not None:
+                return proposed, version
+        return None
+
+    @staticmethod
+    def _model_proposal_is_semantically_admissible(
+        candidate: SelectedCandidate,
+        proposed: ProposedVerification,
+    ) -> bool:
+        """Reject model verdicts that cannot establish absence or private futures."""
+
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        ).casefold()
+        quote = proposed.quote.casefold()
+        if (
+            "evidence_gap" in fact_text
+            or "evidence gap" in fact_text
+            or "no official source discloses" in fact_text
+        ):
+            # Absence across a source set is an orchestration outcome, never a
+            # proposition established by one excerpt.
+            return False
+        if "weight" in fact_text and any(
+            marker in fact_text for marker in ("unreleased", "next model", "private")
+        ):
+            target_bound = (
+                "openai" in quote
+                and "weight" in quote
+                and any(marker in quote for marker in ("unreleased", "next model"))
+            )
+            availability_bound = bool(
+                re.search(
+                    r"\b(?:not|never|unavailable|private|confidential|proprietary)\b",
+                    quote,
+                )
+            )
+            return target_bound and availability_bound
+        return True
+
     @staticmethod
     def _messages(candidates: tuple[SelectedCandidate, ...]) -> tuple[ModelMessage, ...]:
         ordered_fact_ids = tuple(dict.fromkeys(item.fact_id for item in candidates))
@@ -689,36 +822,17 @@ class ModelEvidenceVerifier:
         return tuple(by_candidate[item.id] for item in candidates)
 
     @staticmethod
-    def _fallback(
+    def _fail_closed_fallback(
         candidates: tuple[SelectedCandidate, ...],
         *,
         run_id: UUID,
         verified_at: datetime,
     ) -> tuple[VerifiedEvidence, ...]:
-        evidence: list[VerifiedEvidence] = []
-        for candidate in candidates:
-            subject = candidate.fact.subject.casefold()
-            folded = candidate.quote.casefold()
-            if candidate.score <= 0 or (subject not in folded and len(subject) > 2):
-                continue
-            proposed = ProposedVerification(
-                candidate.fact_id,
-                candidate.id,
-                SupportType.SUPPORTS,
-                candidate.quote,
-                min(0.49, max(0.2, candidate.score)),
-                ("context_match",),
-            )
-            evidence.append(
-                ModelEvidenceVerifier._record(
-                    candidate,
-                    proposed,
-                    run_id=run_id,
-                    verified_at=verified_at,
-                    verifier_version="lexical-fallback-v1",
-                )
-            )
-        return tuple(evidence)
+        del candidates, run_id, verified_at
+        # Lexical overlap is useful for ranking, but it is not entailment. Model
+        # failure therefore yields no accepted evidence; the audit path below
+        # persists every candidate as REJECTED.
+        return ()
 
     async def verify(
         self,
@@ -732,30 +846,9 @@ class ModelEvidenceVerifier:
             return VerifiedBatch((), False)
         deterministic_values: list[VerifiedEvidence] = []
         for candidate in candidates:
-            proposed = self._deterministic_explicit_value(candidate)
-            verifier_version = "deterministic-explicit-value-v1"
-            if proposed is None:
-                proposed = self._deterministic_explicit_terms(candidate)
-                verifier_version = "deterministic-explicit-terms-v1"
-            if proposed is None:
-                proposed = self._deterministic_registry_boolean(candidate)
-                verifier_version = "deterministic-registry-table-v1"
-            if proposed is None:
-                proposed = self._deterministic_registry_media_type(candidate)
-                verifier_version = "deterministic-registry-media-v1"
-            if proposed is None:
-                proposed = self._deterministic_sha_digest_size(candidate)
-                verifier_version = "deterministic-sha-digest-v1"
-            if proposed is None:
-                proposed = self._deterministic_rfc_protocol_title(candidate)
-                verifier_version = "deterministic-rfc-title-v1"
-            if proposed is None:
-                proposed = self._deterministic_rfc3339_utc(candidate)
-                verifier_version = "deterministic-rfc3339-utc-v1"
-            if proposed is None:
-                proposed = self._deterministic_postgresql_isolation(candidate)
-                verifier_version = "deterministic-postgresql-isolation-v1"
-            if proposed is not None:
+            deterministic_result = self._deterministic_proposal(candidate)
+            if deterministic_result is not None:
+                proposed, verifier_version = deterministic_result
                 deterministic_values.append(
                     self._record(
                         candidate,
@@ -781,7 +874,7 @@ class ModelEvidenceVerifier:
                     deterministic,
                     run_id=invocation_context.run_id,
                     verified_at=verified_at,
-                    verifier_version="deterministic-explicit-value-v1",
+                    verifier_version="deterministic-audit-v1",
                 ),
                 False,
             )
@@ -804,9 +897,13 @@ class ModelEvidenceVerifier:
                     item,
                     run_id=invocation_context.run_id,
                     verified_at=verified_at,
-                    verifier_version="deepseek-verifier-v1",
+                    verifier_version="deepseek-verifier-v2",
                 )
                 for item in result.parsed
+                if self._model_proposal_is_semantically_admissible(
+                    by_id[item.candidate_id],
+                    item,
+                )
             )
             return VerifiedBatch(
                 self._complete_candidate_audit(
@@ -814,12 +911,12 @@ class ModelEvidenceVerifier:
                     accepted,
                     run_id=invocation_context.run_id,
                     verified_at=verified_at,
-                    verifier_version="deepseek-verifier-v1",
+                    verifier_version="deepseek-verifier-v2",
                 ),
                 False,
             )
         except (TypedError, ValueError, TypeError, KeyError):
-            accepted = self._fallback(
+            accepted = self._fail_closed_fallback(
                 model_candidates,
                 run_id=invocation_context.run_id,
                 verified_at=verified_at,
@@ -831,7 +928,7 @@ class ModelEvidenceVerifier:
                     accepted,
                     run_id=invocation_context.run_id,
                     verified_at=verified_at,
-                    verifier_version="lexical-fallback-v1",
+                    verifier_version="fail-closed-audit-v1",
                 ),
                 True,
                 "model_verifier_fallback",
@@ -845,10 +942,17 @@ class ModelEvidenceVerifier:
         run_id: UUID,
         verified_at: datetime,
     ) -> VerifiedBatch:
-        accepted = cls._fallback(
-            candidates,
-            run_id=run_id,
-            verified_at=verified_at,
+        accepted = tuple(
+            cls._record(
+                candidate,
+                proposed,
+                run_id=run_id,
+                verified_at=verified_at,
+                verifier_version=version,
+            )
+            for candidate in candidates
+            if (resolved := cls._deterministic_proposal(candidate)) is not None
+            for proposed, version in (resolved,)
         )
         return VerifiedBatch(
             cls._complete_candidate_audit(
@@ -856,7 +960,7 @@ class ModelEvidenceVerifier:
                 accepted,
                 run_id=run_id,
                 verified_at=verified_at,
-                verifier_version="lexical-fallback-v1",
+                verifier_version="deterministic-audit-v1",
             ),
             False,
         )

@@ -29,7 +29,7 @@ class DirectSourceRule:
 class DirectSourcePolicy:
     """Reviewed direct URLs; authority remains owned by SourceAuthorityPolicy."""
 
-    version: str = "direct-sources-v6"
+    version: str = "direct-sources-v7"
     sources: Mapping[str, Mapping[str, tuple[str, ...]]] = field(
         default_factory=lambda: {
             "python": {
@@ -82,8 +82,7 @@ class DirectSourcePolicy:
             },
             "git": {
                 FactType.BACKGROUND.value: (
-                    "https://www.kernel.org/pub/software/scm/git/docs/"
-                    "gitglossary.html",
+                    "https://git-scm.com/docs/gitdatamodel.html",
                 ),
                 FactType.VERSION.value: ("https://git-scm.com/downloads",),
                 FactType.CURRENT_VALUE.value: ("https://git-scm.com/downloads",),
@@ -231,6 +230,18 @@ class DirectSourcePolicy:
                 ),
             ),
             "git": (
+                DirectSourceRule(
+                    frozenset({FactType.BACKGROUND}),
+                    (
+                        "git_object_types",
+                        "blob_purpose",
+                        "tree_purpose",
+                        "commit_purpose",
+                        "tag_purpose",
+                        "object model",
+                    ),
+                    ("https://git-scm.com/docs/gitdatamodel.html",),
+                ),
                 DirectSourceRule(
                     frozenset({FactType.BACKGROUND}),
                     ("file_states", "staging_area", "working_tree", "directory_relation"),

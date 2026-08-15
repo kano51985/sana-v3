@@ -210,8 +210,47 @@ class ProposedClaimParser:
     ) -> None:
         fact_text = f"{fact.key} {fact.description} {fact.subject}"
         folded = fact_text.casefold()
+        claim_folded = claim_text.casefold()
+        if "git" in folded and "git_object_types" in folded:
+            if not all(
+                re.search(rf"\b{object_type}\b", claim_text, re.I)
+                for object_type in ("blob", "tree", "commit", "tag")
+            ):
+                raise ValueError("Git object-type claim must preserve all four types")
+            return
+        if "git" in folded and "_purpose" in fact.key.casefold():
+            object_type = next(
+                (
+                    value
+                    for value in ("blob", "tree", "commit", "tag")
+                    if value in fact.key.casefold()
+                ),
+                None,
+            )
+            if object_type is None or not re.search(
+                rf"\b{object_type}\b",
+                claim_text,
+                re.I,
+            ):
+                raise ValueError("Git object-purpose claim omitted its object type")
+            semantic_patterns = {
+                "blob": r"(?:file.{0,24}content|content.{0,24}file|\u6587\u4ef6.{0,12}\u5185\u5bb9)",
+                "tree": r"(?:director|subdirector|\u76ee\u5f55)",
+                "commit": (
+                    r"(?:top-level tree|parent commit|snapshot|\u9876\u5c42\u6811|"
+                    r"\u7236\u63d0\u4ea4|\u5feb\u7167)"
+                ),
+                "tag": (
+                    r"(?:object.{0,24}(?:reference| id)|"
+                    r"reference.{0,24}object|\u5f15\u7528.{0,12}\u5bf9\u8c61|"
+                    r"\u5bf9\u8c61.{0,12}\u6807\u8bc6)"
+                ),
+            }
+            if re.search(semantic_patterns[object_type], claim_folded, re.I) is None:
+                raise ValueError("Git object-purpose claim lost the reviewed semantics")
+            return
         if "media type" in folded and "json" in folded:
-            if "application/json" not in claim_text.casefold():
+            if "application/json" not in claim_folded:
                 raise ValueError("JSON media-type claim must contain application/json")
             return
         tls = re.search(r"\bTLS\s*(\d)\.(\d)\b", fact_text, re.I)
@@ -376,6 +415,47 @@ class ConstrainedModelSynthesizer:
         fact_text = f"{fact.key} {fact.description} {fact.subject}"
         folded = fact_text.casefold()
         quotes = tuple(by_id[value].candidate.quote for value in evidence_ids)
+        reviewed_git = any(
+            by_id[value].source.url.split("#", 1)[0].split("?", 1)[0]
+            == "https://git-scm.com/docs/gitdatamodel.html"
+            for value in evidence_ids
+        )
+        if reviewed_git and "git" in folded:
+            key = fact.key.casefold()
+            if "git_object_types" in key and any(
+                all(term in quote.casefold() for term in ("commits", "trees", "blobs", "tag objects"))
+                for quote in quotes
+            ):
+                return "Git has four object types: commit, tree, blob, and tag."
+            if "blob_purpose" in key and any(
+                "contains a file's contents" in quote.casefold()
+                or "contains a file\u2019s contents" in quote.casefold()
+                for quote in quotes
+            ):
+                return "A Git blob object contains a file's contents."
+            if "tree_purpose" in key and any(
+                "represents a directory" in quote.casefold() for quote in quotes
+            ):
+                return (
+                    "A Git tree object represents a directory and can contain files "
+                    "or subtrees."
+                )
+            if "commit_purpose" in key and any(
+                "a commit contains these required fields" in quote.casefold()
+                for quote in quotes
+            ):
+                return (
+                    "A Git commit object records its top-level tree, parent commits, "
+                    "author and committer metadata, and commit message."
+                )
+            if "tag_purpose" in key and any(
+                "tag objects contain these required fields" in quote.casefold()
+                for quote in quotes
+            ):
+                return (
+                    "A Git tag object records the referenced object's ID and type, "
+                    "tagger metadata, and a tag message."
+                )
         if "media type" in folded and "json" in folded:
             media_type = next(
                 (

@@ -35,7 +35,7 @@ def test_standards_toolchains_and_reviews_have_direct_fallbacks() -> None:
         "https://www.rfc-editor.org/rfc/rfc9110.html#name-404-not-found",
     )
     assert policy.urls_for("Git object model", FactType.BACKGROUND) == (
-        "https://www.kernel.org/pub/software/scm/git/docs/gitglossary.html",
+        "https://git-scm.com/docs/gitdatamodel.html",
     )
     assert policy.urls_for("Rust", FactType.VERSION) == (
         "https://doc.rust-lang.org/stable/releases.html",

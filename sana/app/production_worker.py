@@ -222,7 +222,7 @@ def _model_stack(
                 request_timeout_seconds=30.0,
                 output_format=OutputFormat(settings.worker_model_output_format),
                 thinking_mode=ThinkingMode(settings.worker_model_thinking),
-                prompt_template_version="planner-v2",
+                prompt_template_version="planner-v3",
                 parser_schema_version="search-intent-v1",
             ),
             ModelRole.VERIFIER: RoleConfig(
@@ -234,7 +234,7 @@ def _model_stack(
                 request_timeout_seconds=30.0,
                 output_format=OutputFormat(settings.worker_model_output_format),
                 thinking_mode=ThinkingMode(settings.worker_model_thinking),
-                prompt_template_version="verifier-v2",
+                prompt_template_version="verifier-v3",
                 parser_schema_version="evidence-verdicts-v1",
             ),
             ModelRole.SYNTHESIZER: RoleConfig(

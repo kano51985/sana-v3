@@ -146,7 +146,7 @@ async def test_model_omission_persists_a_rejected_candidate_audit() -> None:
     assert result.degraded is False
     assert result.evidence[0].verdict is EvidenceVerdict.REJECTED
     assert result.evidence[0].candidate.id == item.id
-    assert result.evidence[0].verifier_version == "deepseek-verifier-v1"
+    assert result.evidence[0].verifier_version == "deepseek-verifier-v2"
 
 
 def test_verifier_prompt_groups_candidates_by_fact_and_requires_compact_output() -> None:
@@ -414,6 +414,20 @@ def reviewed_text_candidate(
     )
 
 
+def git_object_candidate(
+    text: str,
+    *,
+    key: str,
+    description: str,
+) -> SelectedCandidate:
+    item = reviewed_text_candidate(
+        text,
+        FactRequirement(key, FactType.BACKGROUND, description, "Git"),
+        "https://git-scm.com/docs/gitdatamodel.html",
+    )
+    return replace(item, source_identity="git-scm.com")
+
+
 @pytest.mark.asyncio
 async def test_exact_official_numeric_value_skips_model_verification() -> None:
     item = explicit_http_candidate()
@@ -608,6 +622,99 @@ def test_registry_verification_is_bound_to_exact_reviewed_page() -> None:
     )
 
     assert ModelEvidenceVerifier._deterministic_registry_boolean(item) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key", "description", "text", "expected"),
+    (
+        (
+            "git_object_types",
+            "What are the four types of objects in Git's object model?",
+            "There are 4 types of objects: commits, trees, blobs, and tag objects.",
+            "commits, trees, blobs, and tag objects",
+        ),
+        (
+            "blob_purpose",
+            "What is the purpose of the blob object in Git?",
+            "A blob object contains a file's contents.",
+            "file's contents",
+        ),
+        (
+            "tree_purpose",
+            "What is the purpose of the tree object in Git?",
+            "A tree is how Git represents a directory. It can contain files or "
+            "other trees (which are subdirectories).",
+            "represents a directory",
+        ),
+    ),
+)
+async def test_reviewed_git_data_model_skips_model_verification(
+    key: str,
+    description: str,
+    text: str,
+    expected: str,
+) -> None:
+    item = git_object_candidate(
+        text,
+        key=key,
+        description=description,
+    )
+
+    result = await ModelEvidenceVerifier(ForbiddenGateway()).verify(
+        (item,),
+        invocation_context=context(item),
+        deadline=NOW + timedelta(seconds=5),
+        verified_at=NOW,
+    )
+
+    assert result.evidence[0].verdict is EvidenceVerdict.ACCEPTED
+    assert expected in result.evidence[0].candidate.quote
+    assert result.evidence[0].verifier_version == "deterministic-git-object-v1"
+
+
+@pytest.mark.asyncio
+async def test_private_future_weights_cannot_be_inferred_from_open_weight_models() -> None:
+    item = reviewed_text_candidate(
+        "Open-weight models under a permissive Apache 2.0 license.",
+        FactRequirement(
+            "openai_next_model_private_weights_public_availability",
+            FactType.CURRENT_VALUE,
+            "Whether the exact private parameter weights of the next unreleased "
+            "OpenAI model are publicly available",
+            "next unreleased OpenAI model",
+        ),
+        "https://developers.openai.com/api/docs/models/all",
+    )
+    gateway = ParsingGateway(
+        '{"verdicts":[{'
+        f'"fact_id":"{item.fact_id}","candidate_id":"{item.id}",'
+        '"support_type":"CONTRADICTS","quote":"Open-weight models under a '
+        'permissive Apache 2.0 license.","confidence":0.9,'
+        '"reason_codes":["direct_contradiction"]}]}'
+    )
+
+    result = await ModelEvidenceVerifier(gateway).verify(
+        (item,),
+        invocation_context=context(item),
+        deadline=NOW + timedelta(seconds=5),
+        verified_at=NOW,
+    )
+
+    assert result.degraded is False
+    assert result.evidence[0].verdict is EvidenceVerdict.REJECTED
+
+
+def test_deterministic_mode_fails_closed_for_lexical_overlap() -> None:
+    item = candidate()
+
+    result = ModelEvidenceVerifier.deterministic(
+        (item,),
+        run_id=uuid4(),
+        verified_at=NOW,
+    )
+
+    assert result.evidence[0].verdict is EvidenceVerdict.REJECTED
 
 
 @pytest.mark.asyncio

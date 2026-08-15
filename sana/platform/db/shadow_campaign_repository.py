@@ -547,7 +547,7 @@ class SqlShadowCampaignRepository:
             )
 
         request = self._reservation_request(campaign)
-        admission = CampaignBudgetSnapshot(
+        budget_snapshot = CampaignBudgetSnapshot(
             provider_call_admission_ceiling=(
                 campaign.provider_call_admission_ceiling
             ),
@@ -561,9 +561,26 @@ class SqlShadowCampaignRepository:
             observed_estimated_cost=campaign.observed_estimated_cost,
             possibly_billed_cost_charge=campaign.possibly_billed_cost_charge,
             reserved_estimated_cost=campaign.reserved_estimated_cost,
-        ).admit(request)
+        )
+        admission = budget_snapshot.admit(request)
         next_result_version = result.version + 1
         if not admission.allowed:
+            irreversible_admission = (
+                budget_snapshot.admit_after_active_reservations_settle(request)
+            )
+            if irreversible_admission.allowed and (
+                campaign.reserved_provider_calls
+                or campaign.reserved_estimated_cost
+            ):
+                # Another in-flight run owns capacity that will be released or
+                # converted to observed usage. This is backpressure, not a budget
+                # breach, so leave both ledgers and the scheduling lease unchanged.
+                return BudgetReservationReceipt(
+                    False,
+                    StopIntent.NONE,
+                    "active_reservation_capacity",
+                    deferred=True,
+                )
             campaign.status = CampaignStatus.STOPPING.value
             campaign.stop_intent = admission.stop_intent.value
             campaign.stop_reason = f"Budget admission denied: {admission.reason}"

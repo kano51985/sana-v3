@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -121,6 +121,18 @@ class CampaignBudgetSnapshot:
             projected_cost,
         )
 
+    def admit_after_active_reservations_settle(
+        self,
+        request: ReservationRequest,
+    ) -> "BudgetAdmission":
+        """Project durable spend only, excluding transient in-flight holds."""
+
+        return replace(
+            self,
+            reserved_provider_calls=0,
+            reserved_estimated_cost=Decimal(0),
+        ).admit(request)
+
 
 @dataclass(frozen=True, slots=True)
 class BudgetAdmission:
@@ -189,6 +201,13 @@ class BudgetReservationReceipt:
     reason: str | None
     reserved_provider_calls: int = 0
     reserved_estimated_cost: Decimal = Decimal(0)
+    deferred: bool = False
+
+    def __post_init__(self) -> None:
+        if self.allowed and self.deferred:
+            raise ValueError("An allowed budget reservation cannot be deferred")
+        if self.deferred and self.stop_intent is not StopIntent.NONE:
+            raise ValueError("Deferred capacity cannot carry a terminal stop intent")
 
 
 @dataclass(frozen=True, slots=True)

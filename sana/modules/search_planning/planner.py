@@ -145,6 +145,57 @@ class IntentParser:
             return Consequence.MEDIUM
         return consequence
 
+    @staticmethod
+    def _normalize_meta_gap_fact(
+        raw: dict[str, Any],
+    ) -> tuple[str, str, tuple[str, ...]]:
+        key = str(raw["key"])
+        description = str(raw["description"])
+        preferred = tuple(
+            str(item) for item in raw.get("preferred_source_kinds", [])
+        )
+        meta_gap = bool(
+            re.search(
+                r"evidence[_ -]?gap|note the absence|absence of (?:such )?disclosure",
+                f"{key} {description}",
+                re.I,
+            )
+        )
+        if not meta_gap:
+            return key, description, preferred
+        normalized_key = re.sub(
+            r"evidence[_-]?gap",
+            "independent_disclosure_check",
+            key,
+            flags=re.I,
+        )
+        if normalized_key == key:
+            normalized_key = f"{key}_independent_disclosure_check"
+        neutral_description = re.split(
+            r"\bif\s+not\b",
+            description,
+            maxsplit=1,
+            flags=re.I,
+        )[0].strip().rstrip(". ")
+        neutral_description = re.sub(
+            r"\bpublic official sources?\b",
+            "independent public sources",
+            neutral_description,
+            flags=re.I,
+        )
+        neutral_description = re.sub(
+            r"\bpublic official disclosure\b",
+            "independent public disclosure",
+            neutral_description,
+            flags=re.I,
+        )
+        if "independent" not in neutral_description.casefold():
+            neutral_description = (
+                "Whether independent public sources explicitly disclose: "
+                f"{neutral_description}"
+            )
+        return normalized_key, neutral_description, ("independent",)
+
     def parse(self, text: str) -> NormalizedIntent:
         payload: dict[str, Any] = json.loads(text)
         raw_facts = payload["facts"]
@@ -155,11 +206,14 @@ class IntentParser:
             raise ValueError(
                 "facts must satisfy the deterministic minimum and policy maximum"
             )
-        facts = tuple(
-            FactRequirement(
-                key=str(raw["key"]),
+        facts_list: list[FactRequirement] = []
+        for raw in raw_facts:
+            key, description, preferred = self._normalize_meta_gap_fact(raw)
+            facts_list.append(
+                FactRequirement(
+                key=key,
                 fact_type=FactType(str(raw["fact_type"]).strip().lower()),
-                description=str(raw["description"]),
+                description=description,
                 subject=str(raw.get("subject") or payload["entity"]),
                 required=(
                     bool(raw.get("required", True))
@@ -170,12 +224,10 @@ class IntentParser:
                     str(raw.get("freshness", "STABLE")).strip().upper()
                 ),
                 consequence=self._consequence(raw.get("consequence", "LOW")),
-                preferred_source_kinds=tuple(
-                    str(item) for item in raw.get("preferred_source_kinds", [])
-                ),
+                preferred_source_kinds=preferred,
             )
-            for raw in raw_facts
-        )
+            )
+        facts = tuple(facts_list)
         return NormalizedIntent(
             entity=str(payload["entity"]),
             aliases=tuple(str(alias) for alias in payload.get("aliases", [])),
@@ -238,7 +290,10 @@ class SearchPlanner:
             "terms the user explicitly asks to see. "
             "A request to cite a source is an evidence constraint, not a separate "
             "fact; do not emit citation-only, bibliography-only, or source-formatting "
-            "facts. Keep identifiers that express one relationship together, such as "
+            "facts. For unavailable, private, or future information, plan concrete "
+            "public-disclosure checks for the requested source perspectives; never "
+            "turn the instruction to report an evidence gap into an evidence-gap "
+            "Fact. Keep identifiers that express one relationship together, such as "
             "a protocol version and the RFC that specifies it. Consequence describes "
             "real-world harm, not answer strictness: ordinary standards and software "
             "facts are LOW or MEDIUM, never HIGH. "

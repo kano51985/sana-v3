@@ -114,12 +114,36 @@ def test_text_identical_queries_keep_distinct_fact_bindings() -> None:
     queries = QueryCompiler().compile(intent, SearchMode.FAST)
 
     assert len(queries) == 2
-    assert queries[0].text == queries[1].text == "Python 背景"
+    assert queries[0].text == "Python creator 背景"
+    assert queries[1].text == "Python first release year 背景"
     assert queries[0].signature != queries[1].signature
     assert {query.fact_key for query in queries} == {
         "python_creator",
         "python_first_release_year",
     }
+
+
+def test_query_compiler_preserves_private_weight_semantics_from_fact_key() -> None:
+    intent = NormalizedIntent(
+        entity="next unreleased OpenAI model",
+        aliases=(),
+        locale="en",
+        facts=(
+            FactRequirement(
+                key="openai_next_model_private_weights_public_availability",
+                fact_type=FactType.CURRENT_VALUE,
+                description="Whether the exact private parameter weights are public",
+                subject="next unreleased OpenAI model",
+                freshness=Freshness.CURRENT,
+            ),
+        ),
+    )
+
+    query = QueryCompiler().compile(intent, SearchMode.FAST)[0]
+
+    assert query.text == (
+        "next unreleased OpenAI model private weights public availability"
+    )
 
 
 def test_existing_signatures_are_deduplicated_during_expansion() -> None:

@@ -14,6 +14,8 @@ from sana.app.shadow_runner import ShadowCampaignRunner
 from sana.modules.identity.domain import Principal
 from sana.modules.conversation.domain import normalized_content_sha256
 from sana.modules.shadow_campaign.domain import ReservationState, SchedulingState
+from sana.modules.shadow_campaign.budget import BudgetReservationReceipt
+from sana.modules.shadow_campaign.domain import StopIntent
 from sana.modules.shadow_campaign.execution import (
     CampaignExecutionService,
     CampaignSubmissionReceipt,
@@ -270,3 +272,66 @@ async def test_uncertain_post_is_replayed_once_before_possibly_billed_failure() 
     assert len(failures) == 1
     assert failures[0].possibly_billed
     assert stops == ["transport_exhausted", "transport_exhausted"]
+
+
+@pytest.mark.asyncio
+async def test_runner_waits_for_transient_budget_capacity_without_failing_run() -> None:
+    runner = object.__new__(ShadowCampaignRunner)
+    reservations = 0
+    renewals = 0
+    executions = 0
+    failures = []
+
+    class Budget:
+        async def reserve_run(self, lease):
+            nonlocal reservations
+            reservations += 1
+            if reservations == 1:
+                return BudgetReservationReceipt(
+                    False,
+                    StopIntent.NONE,
+                    "active_reservation_capacity",
+                    deferred=True,
+                )
+            lease.reservation_state = ReservationState.ACTIVE
+            return BudgetReservationReceipt(True, StopIntent.NONE, None, 4)
+
+    class Scheduling:
+        async def renew(self, lease):
+            nonlocal renewals
+            renewals += 1
+            return lease
+
+    class Execution:
+        async def execute(self, lease, prompt):
+            nonlocal executions
+            del lease, prompt
+            executions += 1
+
+    async def sleep(_seconds):
+        return None
+
+    async def mark(_lease, failure):
+        failures.append(failure)
+
+    runner._budget = Budget()
+    runner._scheduling = Scheduling()
+    runner._execution = Execution()
+    runner._sleeper = sleep
+    runner._poll_interval = 0.01
+    runner._mark_failure = mark  # type: ignore[method-assign]
+    durable = DurableResult(uuid4(), uuid4(), uuid4())
+    lease = durable.lease()
+    assert lease is not None
+    lease.reservation_state = ReservationState.NONE
+    principal = Principal(lease.tenant_id, uuid4(), "test", "owner")
+    manifest = SimpleNamespace(
+        cases=(SimpleNamespace(id=lease.case_id, prompt=PROMPT),)
+    )
+
+    await runner._submit(principal, lease, manifest)
+
+    assert reservations == 2
+    assert renewals == 1
+    assert executions == 1
+    assert failures == []
