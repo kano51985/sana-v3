@@ -17,6 +17,7 @@ from sana.platform.db.repositories import (
     SqlRunEventRepository,
     SqlStepRepository,
 )
+from sana.platform.db.shadow_campaign_repository import SqlShadowCampaignRepository
 
 
 class TenantUnitOfWork:
@@ -53,6 +54,7 @@ class TenantUnitOfWork:
         self.outbox = SqlOutboxRepository(self._session, self.tenant_id)
         self.attempts = SqlAttemptRepository(self._session, self.tenant_id)
         self.events = SqlRunEventRepository(self._session, self.tenant_id)
+        self.campaigns = SqlShadowCampaignRepository(self._session, self.tenant_id)
         return self
 
     async def commit(self) -> None:

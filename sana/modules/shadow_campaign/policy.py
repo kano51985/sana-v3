@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
+from types import MappingProxyType
 
 from sana.modules.shadow_campaign.domain import canonical_snapshot, snapshot_hash
+from sana.modules.shared.errors import InvariantViolation
 
 
 class GateKind(StrEnum):
@@ -184,6 +187,90 @@ class ReviewRubric:
 
     def snapshot(self) -> dict[str, object]:
         return canonical_snapshot(self)
+
+
+class CampaignPolicyCatalog:
+    """Composition-owned allowlist preventing request-defined release thresholds."""
+
+    def __init__(
+        self,
+        profiles: Iterable[CampaignProfile],
+        policies: Iterable[GatePolicy],
+        review_rubrics: Iterable[ReviewRubric],
+        cost_rates: Iterable[CostRate],
+    ) -> None:
+        profile_items = tuple(profiles)
+        policy_items = tuple(policies)
+        rubric_items = tuple(review_rubrics)
+        rate_items = tuple(cost_rates)
+        profile_map = {item.version: item for item in profile_items}
+        policy_map = {item.version: item for item in policy_items}
+        rubric_map = {item.version: item for item in rubric_items}
+        rate_map = {item.version: item for item in rate_items}
+        if not profile_map or not policy_map or not rubric_map or not rate_map:
+            raise ValueError("Campaign policy catalog cannot be empty")
+        if any(
+            actual != expected
+            for actual, expected in (
+                (len(profile_map), len(profile_items)),
+                (len(policy_map), len(policy_items)),
+                (len(rubric_map), len(rubric_items)),
+                (len(rate_map), len(rate_items)),
+            )
+        ):
+            raise ValueError("Campaign policy catalog versions must be unique")
+        for profile in profile_map.values():
+            if profile.gate_policy_version not in policy_map:
+                raise ValueError(
+                    f"Profile {profile.version} references an unknown gate policy"
+                )
+        self._profiles = MappingProxyType(profile_map)
+        self._policies = MappingProxyType(policy_map)
+        self._review_rubrics = MappingProxyType(rubric_map)
+        self._cost_rates = MappingProxyType(rate_map)
+
+    @classmethod
+    def standard(
+        cls,
+        *,
+        review_rubrics: Iterable[ReviewRubric],
+        cost_rates: Iterable[CostRate],
+    ) -> "CampaignPolicyCatalog":
+        return cls(
+            (DOCKER_SMOKE_V1, SHADOW_FULL_V1),
+            (SHADOW_SMOKE_GATE_V1, SHADOW_FULL_GATE_V2),
+            review_rubrics,
+            cost_rates,
+        )
+
+    def resolve(self, profile_version: str) -> tuple[CampaignProfile, GatePolicy]:
+        profile = self._profiles.get(profile_version)
+        if profile is None:
+            raise InvariantViolation(
+                "Campaign profile is not in the locked policy catalog",
+                code="unknown_campaign_profile",
+                details={"profile_version": profile_version},
+            )
+        return profile, self._policies[profile.gate_policy_version]
+
+    def resolve_evaluation_assets(
+        self,
+        review_rubric: ReviewRubric,
+        cost_rate: CostRate,
+    ) -> tuple[ReviewRubric, CostRate]:
+        registered_rubric = self._review_rubrics.get(review_rubric.version)
+        registered_rate = self._cost_rates.get(cost_rate.version)
+        if (
+            registered_rubric is None
+            or registered_rate is None
+            or registered_rubric.sha256 != review_rubric.sha256
+            or registered_rate.sha256 != cost_rate.sha256
+        ):
+            raise InvariantViolation(
+                "Review rubric or cost rate is not in the locked policy catalog",
+                code="unapproved_evaluation_asset",
+            )
+        return registered_rubric, registered_rate
 
 
 DOCKER_SMOKE_V1 = CampaignProfile(

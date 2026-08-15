@@ -6,13 +6,15 @@ import hashlib
 import json
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
 from uuid import UUID
+
+from sana.modules.shared.errors import InvariantViolation
 
 
 class CampaignStatus(StrEnum):
@@ -76,6 +78,233 @@ class ErrorClass(StrEnum):
     INFRASTRUCTURE = "INFRASTRUCTURE"
     PROVIDER_TRANSIENT = "PROVIDER_TRANSIENT"
     CONTENT_GAP = "CONTENT_GAP"
+
+
+_CAMPAIGN_TRANSITIONS = {
+    CampaignStatus.CREATED: frozenset(
+        {CampaignStatus.RUNNING, CampaignStatus.ABORTED}
+    ),
+    CampaignStatus.RUNNING: frozenset(
+        {
+            CampaignStatus.STOPPING,
+            CampaignStatus.AWAITING_REVIEW,
+            CampaignStatus.COMPLETED,
+        }
+    ),
+    CampaignStatus.STOPPING: frozenset(
+        {
+            CampaignStatus.PAUSED,
+            CampaignStatus.AWAITING_REVIEW,
+            CampaignStatus.COMPLETED,
+            CampaignStatus.ABORTED,
+        }
+    ),
+    CampaignStatus.PAUSED: frozenset(
+        {CampaignStatus.RUNNING, CampaignStatus.ABORTED}
+    ),
+    CampaignStatus.AWAITING_REVIEW: frozenset(
+        {CampaignStatus.COMPLETED, CampaignStatus.ABORTED}
+    ),
+    CampaignStatus.COMPLETED: frozenset(),
+    CampaignStatus.ABORTED: frozenset(),
+}
+
+
+@dataclass(slots=True)
+class CampaignLifecycle:
+    """Optimistically locked campaign state machine independent of persistence."""
+
+    id: UUID
+    tenant_id: UUID
+    created_by_user_id: UUID
+    _status: CampaignStatus = field(
+        default=CampaignStatus.CREATED,
+        init=False,
+        repr=False,
+    )
+    _gate_status: GateStatus = field(
+        default=GateStatus.PENDING,
+        init=False,
+        repr=False,
+    )
+    _stop_intent: StopIntent = field(
+        default=StopIntent.NONE,
+        init=False,
+        repr=False,
+    )
+    stop_reason: str | None = None
+    started_at: datetime | None = None
+    review_deadline_at: datetime | None = None
+    completed_at: datetime | None = None
+    version: int = 0
+    _persisted_version: int = field(default=0, init=False, repr=False)
+
+    @classmethod
+    def rehydrate(
+        cls,
+        *,
+        id: UUID,
+        tenant_id: UUID,
+        created_by_user_id: UUID,
+        status: CampaignStatus,
+        gate_status: GateStatus,
+        stop_intent: StopIntent,
+        stop_reason: str | None,
+        started_at: datetime | None,
+        review_deadline_at: datetime | None,
+        completed_at: datetime | None,
+        version: int,
+    ) -> "CampaignLifecycle":
+        campaign = cls(
+            id=id,
+            tenant_id=tenant_id,
+            created_by_user_id=created_by_user_id,
+            stop_reason=stop_reason,
+            started_at=started_at,
+            review_deadline_at=review_deadline_at,
+            completed_at=completed_at,
+            version=version,
+        )
+        campaign._status = CampaignStatus(status)
+        campaign._gate_status = GateStatus(gate_status)
+        campaign._stop_intent = StopIntent(stop_intent)
+        campaign._persisted_version = version
+        campaign._validate_loaded_state()
+        return campaign
+
+    @property
+    def status(self) -> CampaignStatus:
+        return self._status
+
+    @property
+    def gate_status(self) -> GateStatus:
+        return self._gate_status
+
+    @property
+    def stop_intent(self) -> StopIntent:
+        return self._stop_intent
+
+    @property
+    def persisted_version(self) -> int:
+        return self._persisted_version
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in {CampaignStatus.COMPLETED, CampaignStatus.ABORTED}
+
+    def mark_persisted(self) -> None:
+        self._persisted_version = self.version
+
+    def _validate_loaded_state(self) -> None:
+        for value, name in (
+            (self.started_at, "started_at"),
+            (self.review_deadline_at, "review_deadline_at"),
+            (self.completed_at, "completed_at"),
+        ):
+            if value is not None:
+                require_aware(value, name)
+        if self.version < 0:
+            raise InvariantViolation("Campaign version cannot be negative")
+        if self.status is CampaignStatus.CREATED:
+            if self.started_at is not None or self.completed_at is not None:
+                raise InvariantViolation("Persisted CREATED campaign has run timestamps")
+        elif self.status is not CampaignStatus.ABORTED and self.started_at is None:
+            raise InvariantViolation("Persisted active campaign has no started_at")
+        if self.status is CampaignStatus.STOPPING and (
+            self.stop_intent is StopIntent.NONE or not (self.stop_reason or "").strip()
+        ):
+            raise InvariantViolation("Persisted STOPPING campaign has no stop intent")
+        if self.status is CampaignStatus.AWAITING_REVIEW and self.review_deadline_at is None:
+            raise InvariantViolation("Persisted review campaign has no deadline")
+        if self.is_terminal != (self.completed_at is not None):
+            raise InvariantViolation("Persisted campaign terminal timestamp is inconsistent")
+        if self.status is CampaignStatus.COMPLETED and self.gate_status is GateStatus.PENDING:
+            raise InvariantViolation("Persisted completed campaign has no gate decision")
+        if (
+            self.started_at is not None
+            and self.completed_at is not None
+            and self.completed_at < self.started_at
+        ):
+            raise InvariantViolation("Persisted campaign timestamps move backwards")
+
+    def _require_not_before_start(self, at: datetime, field_name: str) -> None:
+        if self.started_at is not None and at < self.started_at:
+            raise InvariantViolation(f"{field_name} cannot precede campaign start")
+
+    def _transition(self, target: CampaignStatus) -> None:
+        if target not in _CAMPAIGN_TRANSITIONS[self.status]:
+            raise InvariantViolation(
+                f"Illegal campaign transition: {self.status.value} -> {target.value}",
+                code="illegal_state_transition",
+                details={
+                    "entity": "campaign",
+                    "current": self.status.value,
+                    "target": target.value,
+                },
+            )
+        self._status = target
+        self.version += 1
+
+    def start(self, at: datetime) -> None:
+        require_aware(at, "started_at")
+        self._require_not_before_start(at, "started_at")
+        self._transition(CampaignStatus.RUNNING)
+        self.started_at = self.started_at or at
+        self._stop_intent = StopIntent.NONE
+        self.stop_reason = None
+
+    def request_stop(self, intent: StopIntent, reason: str) -> None:
+        normalized_reason = reason.strip()
+        intent = StopIntent(intent)
+        if intent is StopIntent.NONE:
+            raise InvariantViolation("Stopping a campaign requires a stop intent")
+        if not normalized_reason:
+            raise InvariantViolation("Stopping a campaign requires a reason")
+        self._transition(CampaignStatus.STOPPING)
+        self._stop_intent = intent
+        self.stop_reason = normalized_reason
+
+    def settle_stop(self, at: datetime) -> None:
+        require_aware(at, "stop settled_at")
+        self._require_not_before_start(at, "stop settled_at")
+        target = (
+            CampaignStatus.PAUSED
+            if self.stop_intent is StopIntent.PAUSE
+            else CampaignStatus.ABORTED
+        )
+        self._transition(target)
+        if target is CampaignStatus.ABORTED:
+            self.completed_at = at
+
+    def await_review(self, at: datetime, *, deadline: datetime) -> None:
+        require_aware(at, "awaiting_review_at")
+        require_aware(deadline, "review_deadline_at")
+        self._require_not_before_start(at, "awaiting_review_at")
+        if deadline <= at:
+            raise InvariantViolation("Review deadline must be after review start")
+        self._transition(CampaignStatus.AWAITING_REVIEW)
+        self.review_deadline_at = deadline
+
+    def complete(self, decision: GateStatus, at: datetime) -> None:
+        require_aware(at, "completed_at")
+        self._require_not_before_start(at, "completed_at")
+        decision = GateStatus(decision)
+        if decision is GateStatus.PENDING:
+            raise InvariantViolation("Campaign completion requires a final gate decision")
+        self._transition(CampaignStatus.COMPLETED)
+        self._gate_status = decision
+        self.completed_at = at
+
+    def abort(self, reason: str, at: datetime) -> None:
+        require_aware(at, "completed_at")
+        self._require_not_before_start(at, "completed_at")
+        normalized_reason = reason.strip()
+        if not normalized_reason:
+            raise InvariantViolation("Campaign abort requires a reason")
+        self._transition(CampaignStatus.ABORTED)
+        self._stop_intent = StopIntent.ABORT
+        self.stop_reason = normalized_reason
+        self.completed_at = at
 
 
 def require_aware(value: datetime, field_name: str) -> None:
