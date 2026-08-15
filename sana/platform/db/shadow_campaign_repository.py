@@ -359,20 +359,30 @@ class SqlShadowCampaignRepository:
             CampaignStatus.STOPPING.value,
         }:
             return None
-        active_leases = await self._session.scalar(
+        active_units = await self._session.scalar(
             select(func.count(ShadowRunResultRecord.id)).where(
                 ShadowRunResultRecord.tenant_id == tenant_id,
                 ShadowRunResultRecord.campaign_id == campaign_id,
-                ShadowRunResultRecord.scheduling_state.in_(
-                    (
-                        SchedulingState.CLAIMED.value,
-                        SchedulingState.CONVERSATION_BOUND.value,
-                    )
+                or_(
+                    and_(
+                        ShadowRunResultRecord.scheduling_state
+                        == SchedulingState.SUBMITTED.value,
+                        ShadowRunResultRecord.reservation_state
+                        == ReservationState.ACTIVE.value,
+                    ),
+                    and_(
+                        ShadowRunResultRecord.scheduling_state.in_(
+                            (
+                                SchedulingState.CLAIMED.value,
+                                SchedulingState.CONVERSATION_BOUND.value,
+                            )
+                        ),
+                        ShadowRunResultRecord.lease_expires_at > now,
+                    ),
                 ),
-                ShadowRunResultRecord.lease_expires_at > now,
             )
         )
-        if int(active_leases or 0) >= campaign.max_concurrency:
+        if int(active_units or 0) >= campaign.max_concurrency:
             return None
         scheduling_predicate = or_(
             ShadowRunResultRecord.scheduling_state

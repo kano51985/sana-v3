@@ -316,6 +316,12 @@ async def test_campaign_create_retry_and_lifecycle_are_atomic() -> None:
             prompt_by_case[recovered_first.case_id],
         )
         assert submission.result_id == recovered_first.id
+        # A submitted run with an ACTIVE budget reservation remains in-flight.
+        # Together with the still-claimed second unit it must fence a third claim.
+        assert (
+            await scheduler.claim_next(tenant_id, first.id, "worker-overflow")
+            is None
+        )
         async with engine.begin() as connection:
             await connection.execute(
                 text("SELECT set_config('app.tenant_id', :tenant, true)"),
