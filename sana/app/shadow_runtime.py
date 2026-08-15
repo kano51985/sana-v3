@@ -56,7 +56,7 @@ class ShadowRuntimeSettings(SanaSettings):
     shadow_attestation_path: str = "/run/sana/attestation.json"
     campaign_report_root: str = "/var/lib/sana/campaign-reports"
     shadow_review_rubric_path: str = "evals/shadow/review-rubric-v1.json"
-    shadow_cost_rate_path: str = "evals/shadow/cost-rates-v2.json"
+    shadow_cost_rate_path: str = "evals/shadow/cost-rates-v3.json"
 
 
 def _load_json(path: str | Path, maximum: int = 1_000_000) -> dict[str, Any]:

@@ -176,6 +176,10 @@ def test_post_campaign_auditor_is_fail_closed_and_secret_safe() -> None:
     assert "Campaign harness fileset" in auditor
     assert "Campaign environment identity" in auditor
     assert "active_reservation_count" in auditor
+    assert "'COMPLETED', 'ABORTED'" in auditor
+    assert "aborted Campaign planned ledger" in auditor
+    assert "aborted Campaign submitted ledger" in auditor
+    assert "skipped_count" in auditor
     assert "provider_called_count" in auditor
     assert "run_local_lineage_count" in auditor
     assert "document_version_fetches" in auditor

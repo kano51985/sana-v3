@@ -262,3 +262,46 @@ def test_report_gateway_defensively_rejects_paused_final_binding() -> None:
             SqlShadowReportGateway._terminal_status(campaign)
 
         assert captured.value.code == "paused_campaign_finalization_forbidden"
+
+
+def test_report_revalidation_excludes_post_collection_budget_signal() -> None:
+    result = SimpleNamespace(
+        source_snapshot_digest="a" * 64,
+        collector_schema_version="shadow-collector-v2",
+        source_terminal_at=NOW,
+        actual_mode="RESEARCH",
+        run_status="SUCCEEDED",
+        answer_quality="COMPLETE",
+        run_stop_reason=None,
+        latency_ms=1,
+        minimum_required_facts=1,
+        fact_total=1,
+        fact_covered=1,
+        fact_gap=0,
+        plan_completeness_failure=False,
+        factual_claim_count=1,
+        nonfactual_claim_count=0,
+        cited_factual_claim_count=1,
+        valid_citation_chain_count=1,
+        traceability_violation_count=0,
+        oracle_version=None,
+        query_pollution_count=0,
+        model_call_count=1,
+        settled_observed_provider_calls=1,
+        prompt_tokens=1,
+        completion_tokens=1,
+        settled_observed_cost=Decimal("0.001"),
+        possibly_billed_call_charge=0,
+        possibly_billed_cost_charge=Decimal("0"),
+        degraded=False,
+        provider_success_count=1,
+        provider_failure_count=0,
+        error_class="CANDIDATE_DEFECT",
+        error_code="budget_violation",
+        failed_phase=None,
+        error_signal_flags=["budget_violation", "content_gap"],
+    )
+
+    outcome = SqlShadowReportGateway._stored_outcome(result, ())
+
+    assert outcome.error_signal_flags == ("content_gap",)

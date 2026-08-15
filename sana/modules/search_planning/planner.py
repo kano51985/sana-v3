@@ -48,11 +48,28 @@ _EXPLICIT_COUNT = re.compile(
     r"(?P<zh>[二两三四五六七八2-8])(?:种|个|项|类|条)?|"
     r"(?:list|name|explain|compare).{0,16}?"
     r"(?P<en>two|three|four|five|six|seven|eight|[2-8])"
-    r"(?:\s+(?:types?|items?|facts?|objects?|options?))?",
+    r"(?:\s+(?:types?|items?|facts?|objects?|options?))?|"
+    r"(?P<zh_noun>[二两三四五六七八2-8])(?:种|个|项|类|条)"
+    r"(?:性质|状态|类型|术语|值|协议)?|"
+    r"(?:the\s+)?(?P<en_noun>two|three|four|five|six|seven|eight|[2-8])"
+    r"(?:\s+[a-z-]+){0,2}\s+"
+    r"(?:types?|items?|facts?|objects?|options?|properties|states?|literals?|"
+    r"protocols?|levels?|terms?|representations?)",
     re.I,
 )
 _EXPLICIT_CROSS_CHECK = re.compile(
     r"(交叉核实|交叉验证|多源核实|cross[- ]?check|verify across|multiple sources?)",
+    re.I,
+)
+_BOTH = re.compile(r"\bboth\b", re.I)
+_SCALAR_PLUS_ENUMERATION = re.compile(
+    r"\b(?:which|what)\b.{0,64}?(?:,|\band\b).{0,48}?"
+    r"\b(?:two|three|four|five|six|seven|eight|[2-8])\b",
+    re.I,
+)
+_OPEN_SUPPORTED_VERSION_SET = re.compile(
+    r"(?:当前仍受支持|currently supported).{0,48}(?:版本|versions?).{0,96}"
+    r"(?:停止支持|end[- ]of[- ]support|eol|final release)",
     re.I,
 )
 
@@ -64,12 +81,41 @@ def minimum_fact_count(user_message: str, policy_version: str) -> int:
     router_count = len(AutomaticModeRouter(policy_version).infer_fact_types(user_message))
     explicit_counts: list[int] = []
     for match in _EXPLICIT_COUNT.finditer(user_message):
-        raw = (match.group("zh") or match.group("en") or "").casefold()
+        raw = (
+            match.group("zh")
+            or match.group("en")
+            or match.group("zh_noun")
+            or match.group("en_noun")
+            or ""
+        ).casefold()
         explicit_counts.append(int(raw) if raw.isdecimal() else _COUNT_WORDS[raw])
     cross_check_count = 2 if _EXPLICIT_CROSS_CHECK.search(user_message) else 1
+    both_count = 2 if _BOTH.search(user_message) else 1
+    scalar_enumeration_count = 1
+    scalar_match = _SCALAR_PLUS_ENUMERATION.search(user_message)
+    if scalar_match is not None:
+        raw_count = re.search(
+            r"\b(two|three|four|five|six|seven|eight|[2-8])\b",
+            scalar_match.group(0),
+            re.I,
+        )
+        if raw_count is not None:
+            raw = raw_count.group(1).casefold()
+            scalar_enumeration_count = 1 + (
+                int(raw) if raw.isdecimal() else _COUNT_WORDS[raw]
+            )
+    open_set_count = 5 if _OPEN_SUPPORTED_VERSION_SET.search(user_message) else 1
     return min(
         policy.max_facts,
-        max(1, router_count, cross_check_count, *explicit_counts),
+        max(
+            1,
+            router_count,
+            cross_check_count,
+            both_count,
+            scalar_enumeration_count,
+            open_set_count,
+            *explicit_counts,
+        ),
     )
 
 

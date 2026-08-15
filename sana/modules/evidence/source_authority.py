@@ -50,7 +50,7 @@ def _normalized_url(url: str) -> str:
 class SourceAuthorityPolicy:
     """Authority is configuration-owned and entity-specific, never model-owned."""
 
-    version: str = "source-authority-v4"
+    version: str = "source-authority-v5"
     official_domains_by_entity: Mapping[str, frozenset[str]] = field(
         default_factory=lambda: {
             "apex legends": frozenset({"ea.com", "respawn.com"}),
@@ -59,6 +59,15 @@ class SourceAuthorityPolicy:
             "python": frozenset({"python.org"}),
             "http": frozenset({"iana.org", "rfc-editor.org"}),
             "git": frozenset({"git-scm.com"}),
+            "json": frozenset({"iana.org", "rfc-editor.org"}),
+            "sha-256": frozenset({"rfc-editor.org"}),
+            "dns": frozenset({"iana.org"}),
+            "tls 1.3": frozenset({"rfc-editor.org"}),
+            "rfc 3339": frozenset({"rfc-editor.org"}),
+            "sql transaction isolation": frozenset({"postgresql.org"}),
+            "postgresql": frozenset({"postgresql.org"}),
+            "sqlite": frozenset({"sqlite.org"}),
+            "node.js": frozenset({"nodejs.org"}),
             "rust": frozenset({"rust-lang.org"}),
         }
     )

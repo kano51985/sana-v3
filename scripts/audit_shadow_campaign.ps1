@@ -137,10 +137,13 @@ SELECT json_build_object(
   'execution_class', environment_snapshot->>'execution_class',
   'status', status,
   'gate_status', gate_status,
+  'stop_intent', stop_intent,
+  'stop_reason', stop_reason,
   'planned_count', planned_count,
   'submitted_count', submitted_count,
   'collected_count', collected_count,
   'failed_count', failed_count,
+  'skipped_count', skipped_count,
   'observed_provider_calls', observed_provider_calls,
   'observed_prompt_tokens', observed_prompt_tokens,
   'observed_completion_tokens', observed_completion_tokens,
@@ -212,17 +215,30 @@ Assert-Equal $audit.harness_fileset_hash $attestation.harness.fileset_hash 'Camp
 Assert-Equal $audit.environment_identity_hash $attestedEnvironmentIdentity 'Campaign environment identity'
 Assert-Equal $audit.alembic_head $attestation.candidate.alembic_head 'Campaign migration head'
 Assert-Equal $audit.execution_class $expectedExecutionClass 'Campaign execution class'
-Assert-Equal $audit.status 'COMPLETED' 'Campaign status'
+if ($audit.status -notin @('COMPLETED', 'ABORTED')) {
+    throw 'Campaign status is not terminal'
+}
 if ($audit.gate_status -notin @('PASS', 'FAIL', 'INSUFFICIENT_SAMPLE')) {
     throw 'Campaign gate is not final'
 }
 Assert-Equal $audit.report_bound $true 'final report binding'
-Assert-Equal ([int]$audit.submitted_count) ([int]$audit.planned_count) 'submitted count'
-Assert-Equal ([int]$audit.collected_count) ([int]$audit.planned_count) 'collected count'
 Assert-Equal ([int]$audit.result_count) ([int]$audit.planned_count) 'Result count'
-Assert-Equal ([int]$audit.distinct_run_count) ([int]$audit.result_count) 'SearchRun uniqueness'
-Assert-Equal ([int]$audit.max_submission_attempt_count) 1 'submission attempt count'
-Assert-Zero $audit.failed_count 'Campaign failed Result count'
+if ($audit.status -eq 'COMPLETED') {
+    Assert-Equal ([int]$audit.submitted_count) ([int]$audit.planned_count) 'submitted count'
+    Assert-Equal ([int]$audit.collected_count) ([int]$audit.planned_count) 'collected count'
+    Assert-Equal ([int]$audit.distinct_run_count) ([int]$audit.result_count) 'SearchRun uniqueness'
+    Assert-Zero $audit.failed_count 'Campaign failed Result count'
+    Assert-Zero $audit.skipped_count 'Campaign skipped Result count'
+} else {
+    if ($audit.stop_intent -notin @('ABORT', 'FATAL', 'BUDGET', 'CALL_CEILING')) {
+        throw 'Aborted Campaign has no terminal stop intent'
+    }
+    Assert-Equal ([int]$audit.submitted_count + [int]$audit.skipped_count) ([int]$audit.planned_count) 'aborted Campaign planned ledger'
+    Assert-Equal ([int]$audit.collected_count + [int]$audit.failed_count) ([int]$audit.submitted_count) 'aborted Campaign submitted ledger'
+    Assert-Equal ([int]$audit.distinct_run_count) ([int]$audit.submitted_count) 'SearchRun uniqueness'
+}
+$expectedSubmissionAttemptCount = if ([int]$audit.submitted_count -gt 0) { 1 } else { 0 }
+Assert-Equal ([int]$audit.max_submission_attempt_count) $expectedSubmissionAttemptCount 'submission attempt count'
 Assert-Zero $audit.active_reservation_count 'active reservation count'
 Assert-Zero $audit.active_run_count 'active Campaign SearchRun count'
 Assert-Equal ([int]$audit.run_local_lineage_count) ([int]$audit.candidate_evidence_count) 'run-local evidence fetch lineage'

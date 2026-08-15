@@ -187,15 +187,25 @@ def test_runtime_assets_have_locked_semantic_hashes_and_conservative_rate() -> N
         DOCKER_SMOKE_V1.estimated_cost_stop_threshold
     )
 
-    current = load_cost_rate(ASSET_ROOT / "cost-rates-v2.json")
+    legacy = load_cost_rate(ASSET_ROOT / "cost-rates-v2.json")
     assert hashlib.sha256(
         (ASSET_ROOT / "cost-rates-v2.json").read_bytes()
     ).hexdigest() == "c470e7f053f8079e0ebec9d07b0136bbea36dbe18fc3e79f07e4de96c4a277b2"
-    assert current.sha256 == (
+    assert legacy.sha256 == (
         "0597f98036074753d16168e7eaa2e0cc8ac513e917350afa09f23d636f072b01"
     )
-    assert current.version == "deepseek-v4-flash-usd-2026-08-15-v2"
-    assert current.run_reservation_usd == Decimal("0.002")
+    assert legacy.version == "deepseek-v4-flash-usd-2026-08-15-v2"
+    assert legacy.run_reservation_usd == Decimal("0.002")
+
+    current = load_cost_rate(ASSET_ROOT / "cost-rates-v3.json")
+    assert hashlib.sha256(
+        (ASSET_ROOT / "cost-rates-v3.json").read_bytes()
+    ).hexdigest() == "e965f35e2d83eeb598a9c8c6d15af34b046106edb354fd6c6c2382404644c6d9"
+    assert current.sha256 == (
+        "0060df358cbf574820f3df7965b7230a2c9a393050f22229e59d3c2a3e084834"
+    )
+    assert current.version == "deepseek-v4-flash-usd-2026-08-16-v3"
+    assert current.run_reservation_usd == Decimal("0.004")
     assert current.run_reservation_usd > current.possibly_billed_run_reserve_usd
 
 

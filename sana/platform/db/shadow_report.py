@@ -395,7 +395,14 @@ class SqlShadowReportGateway:
             error_class=error_class,
             error_code=result.error_code,
             failed_phase=result.failed_phase,
-            error_signal_flags=tuple(result.error_signal_flags),
+            # Budget settlement is post-collection ledger state. It remains a
+            # hard Result signal, but was not part of the immutable source
+            # snapshot whose digest the Collector sealed.
+            error_signal_flags=tuple(
+                flag
+                for flag in result.error_signal_flags
+                if flag != "budget_violation"
+            ),
         )
 
     @staticmethod

@@ -36,9 +36,13 @@ class AutomaticModeRouter:
     )
     _ENUMERATED_MULTI_FACT = re.compile(
         r"(列出.{0,24}(?:三|四|五|六|七|八|九|[3-9])(?:种|个|项)?.{0,32}(?:分别|逐一)|"
+        r"(?:三|四|五|六|七|八|九|[3-9])(?:种|个|项|类|条)(?:性质|状态|类型|术语|值|协议)?|"
+        r"(?:three|four|five|six|seven|eight|nine|[3-9]).{0,24}"
+        r"(?:types?|items?|facts?|properties|states?|literals?|protocols?|levels?|terms?)|"
         r"(?:three|four|five|six|seven|eight|nine|[3-9]).{0,32}(?:types?|items?|facts?).{0,32}(?:each|explain))",
         re.I,
     )
+    _EXPLICIT_RESEARCH = re.compile(r"(?:研究|调研|\bresearch\b)", re.I)
     _FRESHNESS = re.compile(r"(最近|最新|当前|今天|recent|latest|current|today)", re.I)
 
     def __init__(self, policy_version: str) -> None:
@@ -68,6 +72,8 @@ class AutomaticModeRouter:
             reasons.append("explicit_cross_check")
         if self._ENUMERATED_MULTI_FACT.search(message):
             reasons.append("enumerated_multi_fact")
+        if self._EXPLICIT_RESEARCH.search(message):
+            reasons.append("explicit_research_request")
 
         if reasons:
             return RoutingDecision(

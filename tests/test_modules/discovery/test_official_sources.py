@@ -1,5 +1,5 @@
 from sana.modules.discovery.official_sources import DirectSourcePolicy
-from sana.modules.search_planning.domain import FactType
+from sana.modules.search_planning.domain import FactRequirement, FactType
 
 
 def test_direct_sources_are_entity_and_fact_specific() -> None:
@@ -27,7 +27,7 @@ def test_standards_toolchains_and_reviews_have_direct_fallbacks() -> None:
     policy = DirectSourcePolicy()
 
     assert policy.urls_for("HTTP 404", FactType.BACKGROUND) == (
-        "https://www.rfc-editor.org/rfc/rfc9110.html#name-404-not-found",
+        "https://www.rfc-editor.org/rfc/rfc9110.html",
     )
     assert policy.urls_for("HTTP 404 reason phrase", FactType.CURRENT_VALUE) == (
         "https://www.iana.org/assignments/http-status-codes/"
@@ -52,3 +52,51 @@ def test_standards_toolchains_and_reviews_have_direct_fallbacks() -> None:
         "next unreleased OpenAI model",
         FactType.CURRENT_VALUE,
     ) == ("https://developers.openai.com/api/docs/models/all",)
+
+
+def test_fact_semantics_select_reviewed_primary_pages() -> None:
+    policy = DirectSourcePolicy()
+
+    python_support = FactRequirement(
+        "python_security_support",
+        FactType.CURRENT_VALUE,
+        "Python security support and release date",
+        "Python",
+    )
+    python_maintenance = FactRequirement(
+        "python_latest_maintenance_version",
+        FactType.CURRENT_VALUE,
+        "Latest Python maintenance version",
+        "Python",
+    )
+    git_states = FactRequirement(
+        "git_file_states",
+        FactType.BACKGROUND,
+        "Git working tree, staging area, and file states",
+        "Git",
+    )
+
+    assert policy.urls_for_fact("Python releases", python_support) == (
+        "https://devguide.python.org/versions/",
+    )
+    assert policy.urls_for_fact("Python releases", python_maintenance) == (
+        "https://www.python.org/downloads/",
+    )
+    assert policy.urls_for_fact("Git states", git_states) == (
+        "https://git-scm.com/book/en/v2/Getting-Started-What-is-Git%3F",
+    )
+
+
+def test_full_campaign_standards_have_reviewed_direct_sources() -> None:
+    policy = DirectSourcePolicy()
+
+    assert policy.urls_for("JSON standard", FactType.BACKGROUND)
+    assert policy.urls_for("SHA-256", FactType.CURRENT_VALUE)
+    assert policy.urls_for("DNS", FactType.CURRENT_VALUE)
+    assert policy.urls_for("TLS 1.3", FactType.VERSION)
+    assert policy.urls_for("RFC 3339", FactType.COMPARISON)
+    assert policy.urls_for("SQL transaction isolation", FactType.COMPARISON)
+    assert policy.urls_for("PostgreSQL", FactType.CURRENT_VALUE)
+    assert policy.urls_for("SQLite", FactType.BACKGROUND)
+    assert policy.urls_for("CAP theorem", FactType.BACKGROUND)
+    assert policy.urls_for("database ACID", FactType.BACKGROUND)

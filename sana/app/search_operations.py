@@ -139,7 +139,34 @@ class HeuristicIntentPlanner:
     """Offline local fallback; production configuration rejects this planner."""
 
     _LATIN_ENTITY = re.compile(
-        r"(?:[A-Z][A-Za-z0-9+.-]*)(?:\s+[A-Z][A-Za-z0-9+.-]*){0,4}"
+        r"(?:[A-Z][A-Za-z0-9+.-]*)"
+        r"(?:\s+(?:[A-Z][A-Za-z0-9+.-]*|[0-9][A-Za-z0-9+.-]*)){0,4}"
+    )
+    _QUESTION_WORDS = frozenset(
+        {
+            "according",
+            "compare",
+            "explain",
+            "find",
+            "give",
+            "hey",
+            "how",
+            "list",
+            "name",
+            "please",
+            "prove",
+            "research",
+            "sana",
+            "state",
+            "tell",
+            "under",
+            "what",
+            "when",
+            "where",
+            "which",
+            "who",
+            "why",
+        }
     )
     _QUOTED_ENTITY = re.compile(r"[《\"“](.{1,48}?)[》\"”]")
     _FILLER = re.compile(
@@ -166,9 +193,11 @@ class HeuristicIntentPlanner:
         quoted = cls._QUOTED_ENTITY.search(message)
         if quoted:
             return " ".join(quoted.group(1).split())
-        latin = cls._LATIN_ENTITY.search(message)
-        if latin:
-            return " ".join(latin.group(0).split())[:64]
+        for latin in cls._LATIN_ENTITY.finditer(message):
+            candidate = " ".join(latin.group(0).split())[:64]
+            first = candidate.split(maxsplit=1)[0].casefold().rstrip(".,:;!?")
+            if first not in cls._QUESTION_WORDS:
+                return candidate
         cleaned = cls._FILLER.sub(" ", message)
         cleaned = re.sub(r"[!?！？。,.，:：;；\r\n]+", " ", cleaned)
         cleaned = " ".join(cleaned.split()).strip()
@@ -606,10 +635,10 @@ class SearchStepOperations:
                 "plan_revision": query.plan_revision,
                 "metadata": dict(query.metadata),
                 "direct_urls": list(
-                    self._direct_sources.urls_for(
+                    self._direct_sources.urls_for_fact(
                         intent.entity,
                         next(
-                            fact.fact_type
+                            fact
                             for fact in intent.facts
                             if fact.key == query.fact_key
                         ),

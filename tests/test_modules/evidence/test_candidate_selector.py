@@ -75,6 +75,34 @@ def test_authority_is_entity_specific_and_not_model_controlled() -> None:
     )[1] is SourceAuthority.INDEPENDENT
 
 
+def test_full_campaign_primary_sources_receive_entity_scoped_authority() -> None:
+    policy = SourceAuthorityPolicy()
+    official_pairs = (
+        ("https://www.rfc-editor.org/rfc/rfc8259.html", "JSON standard"),
+        ("https://www.rfc-editor.org/rfc/rfc6234.html", "SHA-256"),
+        (
+            "https://www.iana.org/assignments/service-names-port-numbers/",
+            "DNS",
+        ),
+        ("https://www.rfc-editor.org/rfc/rfc8446.html", "TLS 1.3"),
+        ("https://www.rfc-editor.org/rfc/rfc3339.html", "RFC 3339"),
+        (
+            "https://www.postgresql.org/docs/current/transaction-iso.html",
+            "SQL transaction isolation",
+        ),
+        ("https://www.postgresql.org/support/versioning/", "PostgreSQL"),
+        ("https://www.sqlite.org/copyright.html", "SQLite"),
+    )
+
+    for url, entity in official_pairs:
+        assert policy.classify(url, entity=entity)[1] is SourceAuthority.OFFICIAL
+
+    assert policy.classify(
+        "https://www.ibm.com/think/topics/cap-theorem",
+        entity="CAP theorem",
+    )[1] is SourceAuthority.INDEPENDENT
+
+
 def test_selector_bounds_candidates_and_prefers_distinct_publishers() -> None:
     fact_id = uuid4()
     fact = FactRequirement(
