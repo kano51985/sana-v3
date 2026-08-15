@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select, update
@@ -13,9 +14,18 @@ from sana.modules.shadow_campaign.domain import (
     CampaignLifecycle,
     CampaignStatus,
     GateStatus,
+    ReservationState,
     SchedulingState,
     StopIntent,
     canonical_snapshot,
+)
+from sana.modules.shadow_campaign.budget import (
+    BudgetReleaseReceipt,
+    BudgetReservationReceipt,
+    BudgetSettlementReceipt,
+    CampaignBudgetSnapshot,
+    ReservationRequest,
+    SettlementUsage,
 )
 from sana.modules.shadow_campaign.scheduler import (
     CampaignSchedulingEvidence,
@@ -419,6 +429,7 @@ class SqlShadowCampaignRepository:
             lease_expires_at=lease_expires_at,
             conversation_id=candidate.conversation_id,
             search_run_id=candidate.search_run_id,
+            reservation_state=ReservationState(candidate.reservation_state),
             version=next_version,
             _persisted_version=next_version,
         )
@@ -464,6 +475,384 @@ class SqlShadowCampaignRepository:
                 code="scheduling_lease_fence_lost",
             )
         lease.mark_persisted()
+
+    async def reserve_run_budget(
+        self,
+        lease: RunLease,
+    ) -> BudgetReservationReceipt:
+        self._assert_tenant(lease.tenant_id)
+        now, campaign, result = await self._locked_budget_records(
+            lease.tenant_id,
+            lease.campaign_id,
+            lease.id,
+        )
+        self._assert_active_lease(result, lease, now)
+        if campaign.status != CampaignStatus.RUNNING.value:
+            intent = StopIntent(campaign.stop_intent)
+            return BudgetReservationReceipt(
+                False,
+                intent if intent is not StopIntent.NONE else StopIntent.FATAL,
+                campaign.stop_reason or "campaign_not_running",
+            )
+
+        reservation_state = ReservationState(result.reservation_state)
+        if reservation_state is ReservationState.ACTIVE:
+            raise InvariantViolation(
+                "An active reservation must be reconciled before retrying the run",
+                code="active_reservation_recovery_required",
+            )
+        if reservation_state is not ReservationState.NONE:
+            raise InvariantViolation(
+                "A terminal reservation cannot be reserved again",
+                code="reservation_already_terminal",
+            )
+
+        request = self._reservation_request(campaign)
+        admission = CampaignBudgetSnapshot(
+            provider_call_admission_ceiling=(
+                campaign.provider_call_admission_ceiling
+            ),
+            provider_call_structural_ceiling=(
+                campaign.provider_call_structural_ceiling
+            ),
+            estimated_cost_stop_threshold=campaign.estimated_cost_stop_threshold,
+            observed_provider_calls=campaign.observed_provider_calls,
+            possibly_billed_call_charge=campaign.possibly_billed_call_charge,
+            reserved_provider_calls=campaign.reserved_provider_calls,
+            observed_estimated_cost=campaign.observed_estimated_cost,
+            possibly_billed_cost_charge=campaign.possibly_billed_cost_charge,
+            reserved_estimated_cost=campaign.reserved_estimated_cost,
+        ).admit(request)
+        next_result_version = result.version + 1
+        if not admission.allowed:
+            campaign.status = CampaignStatus.STOPPING.value
+            campaign.stop_intent = admission.stop_intent.value
+            campaign.stop_reason = f"Budget admission denied: {admission.reason}"
+            campaign.version += 1
+            campaign.updated_at = now
+            result.budget_violation = True
+            result.version = next_result_version
+            result.updated_at = now
+            await self._session.flush()
+            lease.accept_budget_fence(next_result_version, ReservationState.NONE)
+            return BudgetReservationReceipt(
+                False,
+                admission.stop_intent,
+                admission.reason,
+            )
+
+        campaign.reserved_provider_calls += request.provider_calls
+        campaign.reserved_estimated_cost += request.estimated_cost
+        campaign.version += 1
+        campaign.updated_at = now
+        result.reserved_provider_calls = request.provider_calls
+        result.reserved_estimated_cost = request.estimated_cost
+        result.reservation_state = ReservationState.ACTIVE.value
+        result.reservation_reserved_at = now
+        result.version = next_result_version
+        result.updated_at = now
+        await self._session.flush()
+        lease.accept_budget_fence(next_result_version, ReservationState.ACTIVE)
+        return BudgetReservationReceipt(
+            True,
+            StopIntent.NONE,
+            None,
+            request.provider_calls,
+            request.estimated_cost,
+        )
+
+    async def settle_run_budget(
+        self,
+        tenant_id: UUID,
+        campaign_id: UUID,
+        result_id: UUID,
+        source_snapshot_digest: str,
+        usage: SettlementUsage,
+    ) -> BudgetSettlementReceipt:
+        self._assert_tenant(tenant_id)
+        digest = source_snapshot_digest.strip()
+        if (
+            len(digest) != 64
+            or digest != digest.lower()
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise ValueError("source_snapshot_digest must be a lowercase SHA-256")
+        now, campaign, result = await self._locked_budget_records(
+            tenant_id,
+            campaign_id,
+            result_id,
+        )
+        reservation_state = ReservationState(result.reservation_state)
+        if reservation_state is ReservationState.SETTLED:
+            if self._settlement_matches(result, digest, usage):
+                return BudgetSettlementReceipt(result.id, True, result.budget_violation)
+            raise InvariantViolation(
+                "A result budget was already settled from different source data",
+                code="settlement_conflict",
+            )
+        if reservation_state is not ReservationState.ACTIVE:
+            raise InvariantViolation(
+                "Only active reservations can be settled",
+                code="reservation_not_active",
+            )
+        if result.scheduling_state not in {
+            SchedulingState.SUBMITTED.value,
+            SchedulingState.COLLECTED.value,
+            SchedulingState.FAILED.value,
+        } or result.source_terminal_at is None:
+            raise InvariantViolation(
+                "Budget settlement requires a terminal source snapshot",
+                code="source_not_terminal",
+            )
+        if result.source_snapshot_digest not in {None, digest}:
+            raise InvariantViolation(
+                "The terminal source snapshot changed before settlement",
+                code="settlement_conflict",
+            )
+
+        reservation = ReservationRequest(
+            result.reserved_provider_calls,
+            Decimal(result.reserved_estimated_cost),
+        )
+        if (
+            campaign.reserved_provider_calls < reservation.provider_calls
+            or campaign.reserved_estimated_cost < reservation.estimated_cost
+        ):
+            raise InvariantViolation(
+                "Campaign reservation ledgers are inconsistent",
+                code="reservation_ledger_underflow",
+            )
+        campaign.reserved_provider_calls -= reservation.provider_calls
+        campaign.reserved_estimated_cost -= reservation.estimated_cost
+        campaign.observed_provider_calls += usage.observed_provider_calls
+        campaign.observed_prompt_tokens += usage.prompt_tokens
+        campaign.observed_completion_tokens += usage.completion_tokens
+        campaign.observed_estimated_cost += usage.observed_estimated_cost
+        campaign.possibly_billed_call_charge += usage.possibly_billed_call_charge
+        campaign.possibly_billed_cost_charge += usage.possibly_billed_cost_charge
+        if usage.possibly_billed_call_charge or usage.possibly_billed_cost_charge:
+            campaign.possibly_billed_count += 1
+
+        result.reservation_state = ReservationState.SETTLED.value
+        result.settled_observed_provider_calls = usage.observed_provider_calls
+        result.prompt_tokens = usage.prompt_tokens
+        result.completion_tokens = usage.completion_tokens
+        result.settled_observed_cost = usage.observed_estimated_cost
+        result.estimated_cost = usage.observed_estimated_cost
+        result.possibly_billed_call_charge = usage.possibly_billed_call_charge
+        result.possibly_billed_cost_charge = usage.possibly_billed_cost_charge
+        result.budget_settled_at = now
+        result.source_snapshot_digest = digest
+        result.budget_violation = usage.exceeds(reservation)
+        result.version += 1
+        result.updated_at = now
+
+        stop_intent, stop_reason = self._budget_breach(campaign, reservation, usage)
+        if (
+            stop_intent is not StopIntent.NONE
+            and campaign.status == CampaignStatus.RUNNING.value
+        ):
+            campaign.status = CampaignStatus.STOPPING.value
+            campaign.stop_intent = stop_intent.value
+            campaign.stop_reason = stop_reason
+        campaign.version += 1
+        campaign.updated_at = now
+        await self._session.flush()
+        return BudgetSettlementReceipt(
+            result.id,
+            False,
+            result.budget_violation,
+        )
+
+    async def release_run_budget(
+        self,
+        lease: RunLease,
+    ) -> BudgetReleaseReceipt:
+        self._assert_tenant(lease.tenant_id)
+        now, campaign, result = await self._locked_budget_records(
+            lease.tenant_id,
+            lease.campaign_id,
+            lease.id,
+        )
+        self._assert_active_lease(result, lease, now)
+        reservation_state = ReservationState(result.reservation_state)
+        if reservation_state is ReservationState.RELEASED:
+            return BudgetReleaseReceipt(result.id, True)
+        if reservation_state is not ReservationState.ACTIVE:
+            raise InvariantViolation(
+                "Only active reservations can be released",
+                code="reservation_not_active",
+            )
+        if (
+            result.submission_attempt_count
+            or result.source_terminal_at is not None
+            or result.source_snapshot_digest is not None
+        ):
+            raise InvariantViolation(
+                "A reservation cannot be released after submission begins",
+                code="reservation_release_too_late",
+            )
+        if (
+            campaign.reserved_provider_calls < result.reserved_provider_calls
+            or campaign.reserved_estimated_cost < result.reserved_estimated_cost
+        ):
+            raise InvariantViolation(
+                "Campaign reservation ledgers are inconsistent",
+                code="reservation_ledger_underflow",
+            )
+        campaign.reserved_provider_calls -= result.reserved_provider_calls
+        campaign.reserved_estimated_cost -= result.reserved_estimated_cost
+        campaign.version += 1
+        campaign.updated_at = now
+        next_result_version = result.version + 1
+        result.reservation_state = ReservationState.RELEASED.value
+        result.reservation_released_at = now
+        result.version = next_result_version
+        result.updated_at = now
+        await self._session.flush()
+        lease.accept_budget_fence(next_result_version, ReservationState.RELEASED)
+        return BudgetReleaseReceipt(result.id, False)
+
+    async def _locked_budget_records(
+        self,
+        tenant_id: UUID,
+        campaign_id: UUID,
+        result_id: UUID,
+    ) -> tuple[datetime, ShadowCampaignRecord, ShadowRunResultRecord]:
+        now = await self._session.scalar(select(func.clock_timestamp()))
+        if now is None:
+            raise InvariantViolation("Database clock was unavailable")
+        campaign = await self._session.scalar(
+            select(ShadowCampaignRecord)
+            .where(
+                ShadowCampaignRecord.tenant_id == tenant_id,
+                ShadowCampaignRecord.id == campaign_id,
+            )
+            .with_for_update()
+        )
+        if campaign is None:
+            raise InvariantViolation(
+                "Shadow campaign does not exist",
+                code="campaign_not_found",
+            )
+        result = await self._session.scalar(
+            select(ShadowRunResultRecord)
+            .where(
+                ShadowRunResultRecord.tenant_id == tenant_id,
+                ShadowRunResultRecord.campaign_id == campaign_id,
+                ShadowRunResultRecord.id == result_id,
+            )
+            .with_for_update()
+        )
+        if result is None:
+            raise InvariantViolation(
+                "Shadow campaign result does not exist",
+                code="campaign_result_not_found",
+            )
+        return now, campaign, result
+
+    @staticmethod
+    def _assert_active_lease(
+        result: ShadowRunResultRecord,
+        lease: RunLease,
+        now: datetime,
+    ) -> None:
+        if (
+            result.scheduling_state
+            not in {
+                SchedulingState.CLAIMED.value,
+                SchedulingState.CONVERSATION_BOUND.value,
+            }
+            or result.scheduling_state != lease.state.value
+            or result.lease_owner != lease.lease_owner
+            or result.lease_expires_at is None
+            or result.lease_expires_at <= now
+            or result.version != lease.persisted_version
+        ):
+            raise InvariantViolation(
+                "Scheduling lease fencing token is stale",
+                code="scheduling_lease_fence_lost",
+            )
+
+    @staticmethod
+    def _reservation_request(campaign: ShadowCampaignRecord) -> ReservationRequest:
+        calls, remainder = divmod(
+            campaign.provider_call_structural_ceiling,
+            campaign.max_runs,
+        )
+        if remainder or calls < 1:
+            raise InvariantViolation(
+                "Campaign structural call envelope is corrupt",
+                code="campaign_budget_snapshot_invalid",
+            )
+        raw_cost = campaign.cost_rate_snapshot.get(
+            "possibly_billed_run_reserve_usd"
+        )
+        if raw_cost is None:
+            raise InvariantViolation(
+                "Campaign cost-rate snapshot has no run reserve",
+                code="campaign_budget_snapshot_invalid",
+            )
+        try:
+            return ReservationRequest(calls, Decimal(str(raw_cost)))
+        except (ValueError, ArithmeticError) as error:
+            raise InvariantViolation(
+                "Campaign cost-rate snapshot has an invalid run reserve",
+                code="campaign_budget_snapshot_invalid",
+            ) from error
+
+    @staticmethod
+    def _settlement_matches(
+        result: ShadowRunResultRecord,
+        digest: str,
+        usage: SettlementUsage,
+    ) -> bool:
+        return (
+            result.source_snapshot_digest == digest
+            and result.settled_observed_provider_calls
+            == usage.observed_provider_calls
+            and result.prompt_tokens == usage.prompt_tokens
+            and result.completion_tokens == usage.completion_tokens
+            and result.settled_observed_cost == usage.observed_estimated_cost
+            and result.possibly_billed_call_charge
+            == usage.possibly_billed_call_charge
+            and result.possibly_billed_cost_charge
+            == usage.possibly_billed_cost_charge
+        )
+
+    @staticmethod
+    def _budget_breach(
+        campaign: ShadowCampaignRecord,
+        reservation: ReservationRequest,
+        usage: SettlementUsage,
+    ) -> tuple[StopIntent, str | None]:
+        total_calls = (
+            campaign.observed_provider_calls
+            + campaign.possibly_billed_call_charge
+            + campaign.reserved_provider_calls
+        )
+        total_cost = (
+            campaign.observed_estimated_cost
+            + campaign.possibly_billed_cost_charge
+            + campaign.reserved_estimated_cost
+        )
+        if total_calls > campaign.provider_call_structural_ceiling:
+            return StopIntent.CALL_CEILING, "provider_call_structural_ceiling"
+        if total_calls > campaign.provider_call_admission_ceiling:
+            return StopIntent.CALL_CEILING, "provider_call_admission_ceiling"
+        if (
+            usage.observed_provider_calls + usage.possibly_billed_call_charge
+            > reservation.provider_calls
+        ):
+            return StopIntent.CALL_CEILING, "run_provider_call_reservation"
+        if total_cost > campaign.estimated_cost_stop_threshold:
+            return StopIntent.BUDGET, "estimated_cost_stop_threshold"
+        if (
+            usage.observed_estimated_cost + usage.possibly_billed_cost_charge
+            > reservation.estimated_cost
+        ):
+            return StopIntent.BUDGET, "run_estimated_cost_reservation"
+        return StopIntent.NONE, None
 
     @staticmethod
     def _lifecycle(record: ShadowCampaignRecord) -> CampaignLifecycle:

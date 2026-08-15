@@ -45,7 +45,10 @@ class CampaignProfile:
             )
         if not 0 < self.provider_call_admission_ceiling <= expected_structural:
             raise ValueError("Provider-call admission ceiling is invalid")
-        if self.estimated_cost_stop_threshold <= 0:
+        if (
+            not self.estimated_cost_stop_threshold.is_finite()
+            or self.estimated_cost_stop_threshold <= 0
+        ):
             raise ValueError("Estimated cost stop threshold must be positive")
 
     def snapshot(self) -> dict[str, object]:
@@ -145,7 +148,7 @@ class CostRate:
         if not self.version.strip():
             raise ValueError("Cost rate version cannot be empty")
         if any(
-            value < 0
+            not value.is_finite() or value < 0
             for value in (
                 self.prompt_per_million_usd,
                 self.completion_per_million_usd,

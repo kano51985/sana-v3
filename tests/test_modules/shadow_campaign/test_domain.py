@@ -19,6 +19,7 @@ from sana.modules.shadow_campaign.policy import (
     DOCKER_SMOKE_V1,
     SHADOW_FULL_V1,
     CampaignProfile,
+    CostRate,
 )
 
 
@@ -98,4 +99,26 @@ def test_profile_rejects_inconsistent_structural_ceiling() -> None:
             estimated_cost_stop_threshold=Decimal("0.01"),
             gate_policy_version="shadow-smoke-gate-v1",
             smoke_only=True,
+        )
+
+
+def test_budget_policy_rejects_non_finite_decimals() -> None:
+    with pytest.raises(ValueError, match="stop threshold"):
+        CampaignProfile(
+            version="bad-budget-v1",
+            max_runs=6,
+            repetitions=1,
+            max_concurrency=2,
+            provider_call_admission_ceiling=32,
+            provider_call_structural_ceiling=48,
+            estimated_cost_stop_threshold=Decimal("NaN"),
+            gate_policy_version="shadow-smoke-gate-v1",
+            smoke_only=True,
+        )
+    with pytest.raises(ValueError, match="Cost rates"):
+        CostRate(
+            "bad-rate-v1",
+            Decimal("Infinity"),
+            Decimal("0"),
+            Decimal("0"),
         )

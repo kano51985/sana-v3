@@ -10,6 +10,12 @@ from sana.modules.shadow_campaign.domain import CampaignLifecycle
 if TYPE_CHECKING:
     from datetime import datetime, timedelta
 
+    from sana.modules.shadow_campaign.budget import (
+        BudgetReleaseReceipt,
+        BudgetReservationReceipt,
+        BudgetSettlementReceipt,
+        SettlementUsage,
+    )
     from sana.modules.shadow_campaign.scheduler import (
         CampaignSchedulingEvidence,
         RunLease,
@@ -72,6 +78,25 @@ class CampaignRepository(Protocol):
         lease: RunLease,
         lease_duration: timedelta,
     ) -> None: ...
+
+    async def reserve_run_budget(
+        self,
+        lease: RunLease,
+    ) -> BudgetReservationReceipt: ...
+
+    async def settle_run_budget(
+        self,
+        tenant_id: UUID,
+        campaign_id: UUID,
+        result_id: UUID,
+        source_snapshot_digest: str,
+        usage: SettlementUsage,
+    ) -> BudgetSettlementReceipt: ...
+
+    async def release_run_budget(
+        self,
+        lease: RunLease,
+    ) -> BudgetReleaseReceipt: ...
 
 
 class CampaignUnitOfWork(Protocol):

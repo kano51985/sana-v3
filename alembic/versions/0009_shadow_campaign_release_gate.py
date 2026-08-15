@@ -237,6 +237,11 @@ def _create_campaigns() -> None:
             "AND observed_completion_tokens >= 0 AND observed_estimated_cost >= 0 "
             "AND possibly_billed_cost_charge >= 0 AND reserved_estimated_cost >= 0 "
             "AND possibly_billed_count >= 0 AND active_wall_clock_ms >= 0 "
+            "AND planned_count <= max_runs AND submitted_count <= max_runs "
+            "AND collected_count <= max_runs AND failed_count <= max_runs "
+            "AND skipped_count <= max_runs AND degraded_count <= max_runs "
+            "AND possibly_billed_count <= max_runs "
+            "AND reserved_provider_calls <= provider_call_structural_ceiling "
             "AND version >= 0",
             name=op.f("ck_shadow_campaigns_nonnegative_ledger"),
         ),
@@ -416,7 +421,8 @@ def _create_results() -> None:
             "reservation_reserved_at IS NOT NULL AND budget_settled_at IS NULL AND "
             "reservation_released_at IS NULL) OR "
             "(reservation_state = 'SETTLED' AND reservation_reserved_at IS NOT NULL "
-            "AND budget_settled_at IS NOT NULL AND reservation_released_at IS NULL) OR "
+            "AND budget_settled_at IS NOT NULL AND reservation_released_at IS NULL "
+            "AND source_terminal_at IS NOT NULL AND source_snapshot_digest IS NOT NULL) OR "
             "(reservation_state = 'RELEASED' AND reservation_reserved_at IS NOT NULL "
             "AND budget_settled_at IS NULL AND reservation_released_at IS NOT NULL)",
             name=op.f("ck_shadow_run_results_reservation_lifecycle"),

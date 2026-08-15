@@ -10,6 +10,7 @@ from uuid import UUID, uuid5
 from sana.modules.orchestration.domain import SearchMode
 from sana.modules.shadow_campaign.domain import (
     CampaignStatus,
+    ReservationState,
     SchedulingState,
     canonical_snapshot,
     require_aware,
@@ -196,6 +197,7 @@ class RunLease:
     lease_expires_at: datetime
     conversation_id: UUID | None
     search_run_id: UUID | None
+    reservation_state: ReservationState
     version: int
     _persisted_version: int
 
@@ -210,6 +212,17 @@ class RunLease:
             )
         if not self.lease_owner.strip() or self.version < 1:
             raise ValueError("A scheduling lease requires an owner and fencing version")
+
+    def accept_budget_fence(
+        self,
+        version: int,
+        reservation_state: ReservationState,
+    ) -> None:
+        if version <= self.version:
+            raise InvariantViolation("Budget fencing token must advance")
+        self.version = version
+        self._persisted_version = version
+        self.reservation_state = ReservationState(reservation_state)
 
     @property
     def persisted_version(self) -> int:

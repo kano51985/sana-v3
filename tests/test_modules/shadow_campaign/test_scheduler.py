@@ -5,7 +5,11 @@ from uuid import UUID
 import pytest
 
 from sana.modules.orchestration.domain import SearchMode
-from sana.modules.shadow_campaign.domain import CampaignStatus, SchedulingState
+from sana.modules.shadow_campaign.domain import (
+    CampaignStatus,
+    ReservationState,
+    SchedulingState,
+)
 from sana.modules.shadow_campaign.manifest import (
     Answerability,
     CaseCategory,
@@ -139,6 +143,7 @@ def test_run_lease_uses_version_as_a_fencing_token() -> None:
         lease_expires_at=NOW + timedelta(seconds=30),
         conversation_id=None,
         search_run_id=None,
+        reservation_state=ReservationState.NONE,
         version=1,
         _persisted_version=1,
     )
