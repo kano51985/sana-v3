@@ -61,6 +61,19 @@ def test_semantic_research_requests_route_without_model_boundary(message: str) -
     assert decision.mode is SearchMode.RESEARCH
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "What are the three lowercase JSON literals?",
+        "JSON 标准规定的三个小写字面量是什么？请原样列出并引用标准来源。",
+    ],
+)
+def test_single_source_enumeration_can_remain_fast(message: str) -> None:
+    decision = AutomaticModeRouter("search-v11").route(message)
+
+    assert decision.mode is SearchMode.FAST
+
+
 class CountingBoundaryClassifier:
     def __init__(self) -> None:
         self.calls = 0

@@ -36,9 +36,10 @@ class AutomaticModeRouter:
     )
     _ENUMERATED_MULTI_FACT = re.compile(
         r"(列出.{0,24}(?:三|四|五|六|七|八|九|[3-9])(?:种|个|项)?.{0,32}(?:分别|逐一)|"
-        r"(?:三|四|五|六|七|八|九|[3-9])(?:种|个|项|类|条)(?:性质|状态|类型|术语|值|协议)?|"
+        r"(?:三|四|五|六|七|八|九|[3-9])(?:种|个|项|类|条)"
+        r"(?:性质|状态|类型|术语|协议)|"
         r"(?:three|four|five|six|seven|eight|nine|[3-9]).{0,24}"
-        r"(?:types?|items?|facts?|properties|states?|literals?|protocols?|levels?|terms?)|"
+        r"(?:properties|states?|protocols?|levels?)|"
         r"(?:three|four|five|six|seven|eight|nine|[3-9]).{0,32}(?:types?|items?|facts?).{0,32}(?:each|explain))",
         re.I,
     )
