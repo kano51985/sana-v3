@@ -1,0 +1,269 @@
+name: sana-shadow-eval
+
+x-shadow-environment: &shadow-environment
+  SANA_ENVIRONMENT: test
+  SANA_DATABASE_URL: postgresql+asyncpg://sana_shadow_app:${SANA_SHADOW_APP_DB_PASSWORD:?set SANA_SHADOW_APP_DB_PASSWORD}@postgres:5432/sana_shadow
+  SANA_REDIS_URL: redis://redis:6379/1
+  SANA_CELERY_BROKER_URL: redis://redis:6379/0
+  SANA_OUTBOX_POLL_INTERVAL_SECONDS: "0.1"
+  SANA_RECONCILIATION_REDELIVERY_GRACE_SECONDS: "5"
+  SANA_AUTH_MODE: dev
+  SANA_DEV_AUTH_ENABLED: "true"
+  SANA_ARTIFACT_ROOT: /var/lib/sana/search-artifacts
+
+x-candidate-image: &candidate-image
+  image: ${SANA_SHADOW_IMAGE:-sana-shadow-eval:local}
+  build:
+    context: ..
+    dockerfile: deployment/Dockerfile
+    args:
+      PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+      OCI_REVISION: ${SANA_CANDIDATE_COMMIT_SHA:?set SANA_CANDIDATE_COMMIT_SHA}
+  pull_policy: never
+  restart: "no"
+  networks: [shadow-eval]
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      POSTGRES_DB: sana_shadow
+      POSTGRES_USER: sana_shadow_owner
+      POSTGRES_PASSWORD: ${SANA_SHADOW_OWNER_DB_PASSWORD:?set SANA_SHADOW_OWNER_DB_PASSWORD}
+    volumes:
+      - shadow-postgres:/var/lib/postgresql/data
+    networks: [shadow-eval]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sana_shadow_owner -d sana_shadow"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 200
+
+  provision-db-role:
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      PGHOST: postgres
+      PGDATABASE: sana_shadow
+      PGUSER: sana_shadow_owner
+      PGPASSWORD: ${SANA_SHADOW_OWNER_DB_PASSWORD:?set SANA_SHADOW_OWNER_DB_PASSWORD}
+    command:
+      - psql
+      - -v
+      - ON_ERROR_STOP=1
+      - -v
+      - app_user=sana_shadow_app
+      - -v
+      - app_password=${SANA_SHADOW_APP_DB_PASSWORD:?set SANA_SHADOW_APP_DB_PASSWORD}
+      - -f
+      - /opt/sana/provision-app-role.sql
+    volumes:
+      - ./postgres/provision-app-role.sql:/opt/sana/provision-app-role.sql:ro
+    networks: [shadow-eval]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 100
+
+  redis:
+    image: redis:7.4-alpine
+    restart: "no"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - shadow-redis:/data
+    networks: [shadow-eval]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 100
+
+  migrate:
+    <<: *candidate-image
+    environment:
+      <<: *shadow-environment
+      SANA_DATABASE_URL: postgresql+asyncpg://sana_shadow_owner:${SANA_SHADOW_OWNER_DB_PASSWORD:?set SANA_SHADOW_OWNER_DB_PASSWORD}@postgres:5432/sana_shadow
+    command:
+      - sh
+      - -c
+      - >-
+        alembic upgrade head && python -c
+        'import asyncio; from sana.app.bootstrap_dev import bootstrap;
+        asyncio.run(bootstrap())'
+    depends_on:
+      provision-db-role:
+        condition: service_completed_successfully
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 100
+
+  artifact-init:
+    <<: *candidate-image
+    user: "0:0"
+    read_only: false
+    command:
+      - sh
+      - -c
+      - >-
+        chown -R sana:sana /var/lib/sana/search-artifacts
+        /var/lib/sana/campaign-reports
+    volumes:
+      - shadow-search-artifacts:/var/lib/sana/search-artifacts
+      - shadow-campaign-reports:/var/lib/sana/campaign-reports
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 50
+
+  api:
+    <<: *candidate-image
+    restart: unless-stopped
+    environment: *shadow-environment
+    command:
+      - python
+      - -m
+      - uvicorn
+      - sana.app.api.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    ports:
+      - 127.0.0.1:${SANA_SHADOW_API_PORT:-18000}:8000
+    volumes:
+      - shadow-search-artifacts:/var/lib/sana/search-artifacts
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      artifact-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://localhost:8000/health/ready', timeout=3)
+      interval: 5s
+      timeout: 5s
+      retries: 24
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 200
+
+  dispatcher:
+    <<: *candidate-image
+    restart: unless-stopped
+    environment: *shadow-environment
+    command: ["python", "-m", "sana.app.outbox_dispatcher"]
+    volumes:
+      - shadow-search-artifacts:/var/lib/sana/search-artifacts
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      artifact-init:
+        condition: service_completed_successfully
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 200
+
+  worker:
+    <<: *candidate-image
+    restart: unless-stopped
+    environment:
+      <<: *shadow-environment
+      SANA_STEP_HANDLER_FACTORY: sana.app.production_worker:create_handler
+      SANA_WORKER_MODEL_PIPELINE_ENABLED: "true"
+      SANA_WORKER_PLANNER_PROVIDER: deepseek
+      SANA_WORKER_PLANNER_MODEL: deepseek-v4-flash
+      SANA_WORKER_VERIFIER_PROVIDER: deepseek
+      SANA_WORKER_VERIFIER_MODEL: deepseek-v4-flash
+      SANA_WORKER_SYNTHESIZER_PROVIDER: deepseek
+      SANA_WORKER_SYNTHESIZER_MODEL: deepseek-v4-flash
+      SANA_WORKER_DEEPSEEK_BASE_URL: ${SANA_WORKER_DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      SANA_WORKER_MODEL_THINKING: disabled
+      SANA_WORKER_MODEL_OUTPUT_FORMAT: json_object
+      SANA_WORKER_LIVE_EVAL_MAX_RUNS: "120"
+      SANA_WORKER_DISCOVERY_PROVIDERS: direct,bing_rss
+      SANA_WORKER_MAX_SELECTED_HITS: "4"
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY}
+    command:
+      - python
+      - -m
+      - celery
+      - -A
+      - sana.app.worker_entrypoint:app
+      - worker
+      - --loglevel
+      - INFO
+      - --queues
+      - fast,research,crawl,maintenance
+      - --concurrency
+      - "2"
+    volumes:
+      - shadow-search-artifacts:/var/lib/sana/search-artifacts
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      artifact-init:
+        condition: service_completed_successfully
+    mem_limit: 2g
+    cpus: 2.0
+    pids_limit: 400
+
+  campaign-runner:
+    <<: *candidate-image
+    profiles: [runner]
+    environment:
+      <<: *shadow-environment
+      SANA_ACCESS_TOKEN: ${SANA_ACCESS_TOKEN:?set SANA_ACCESS_TOKEN}
+      SANA_SHADOW_ATTESTATION_PATH: /run/sana/attestation.json
+      SANA_CAMPAIGN_REPORT_ROOT: /var/lib/sana/campaign-reports
+    command: ["python", "scripts/run_shadow_campaign.py", "--help"]
+    volumes:
+      - ${SANA_SHADOW_ATTESTATION_PATH:?set SANA_SHADOW_ATTESTATION_PATH}:/run/sana/attestation.json:ro
+      - shadow-campaign-reports:/var/lib/sana/campaign-reports
+    depends_on:
+      api:
+        condition: service_healthy
+      dispatcher:
+        condition: service_started
+      worker:
+        condition: service_started
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 200
+
+networks:
+  shadow-eval:
+    name: sana-shadow-eval-net
+
+volumes:
+  shadow-postgres:
+    name: sana-shadow-eval-postgres
+  shadow-redis:
+    name: sana-shadow-eval-redis
+  shadow-search-artifacts:
+    name: sana-shadow-eval-search-artifacts
+  shadow-campaign-reports:
+    name: sana-shadow-eval-campaign-reports

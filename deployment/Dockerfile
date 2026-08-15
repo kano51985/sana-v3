@@ -1,6 +1,9 @@
 FROM python:3.12-slim
 
 ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG OCI_REVISION=unknown
+
+LABEL org.opencontainers.image.revision="${OCI_REVISION}"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -16,6 +19,8 @@ COPY pyproject.toml alembic.ini ./
 COPY alembic ./alembic
 COPY sana ./sana
 COPY interfaces ./interfaces
+COPY scripts ./scripts
+COPY evals ./evals
 COPY .streamlit ./.streamlit
 
 RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation .

@@ -146,7 +146,7 @@ async def test_stopping_recovery_and_unknown_failure_close_the_ledger() -> None:
             "a" * 40,
             True,
             f"candidate@sha256:{'a' * 64}",
-            "a" * 64,
+            "a" * 40,
             "0010_shadow_collector_audit",
             "a" * 64,
             "b" * 40,

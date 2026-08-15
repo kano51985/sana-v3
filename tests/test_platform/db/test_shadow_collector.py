@@ -483,7 +483,7 @@ async def test_collector_is_fenced_atomic_idempotent_and_rls_scoped() -> None:
         candidate_commit_sha="a" * 40,
         candidate_source_clean=True,
         candidate_image_id=f"sana-candidate@sha256:{'a' * 64}",
-        candidate_oci_revision="a" * 64,
+        candidate_oci_revision="a" * 40,
         alembic_head="0010_shadow_collector_audit",
         candidate_config_hash="a" * 64,
         harness_commit_sha="b" * 40,

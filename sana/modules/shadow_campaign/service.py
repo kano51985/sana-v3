@@ -83,7 +83,6 @@ class CampaignProvenance:
             _require_hex(self.harness_commit_sha, "harness_commit_sha", (40, 64)),
         )
         for field_name in (
-            "candidate_oci_revision",
             "candidate_config_hash",
             "harness_fileset_hash",
             "environment_identity_hash",
@@ -93,6 +92,15 @@ class CampaignProvenance:
                 field_name,
                 _require_hex(getattr(self, field_name), field_name, (64,)),
             )
+        object.__setattr__(
+            self,
+            "candidate_oci_revision",
+            _require_hex(
+                self.candidate_oci_revision,
+                "candidate_oci_revision",
+                (40, 64),
+            ),
+        )
         if not isinstance(self.candidate_source_clean, bool) or not isinstance(
             self.harness_source_clean,
             bool,
@@ -103,12 +111,17 @@ class CampaignProvenance:
             "candidate_image_id",
             _require_text(self.candidate_image_id, "candidate_image_id", 200),
         )
-        if not self.candidate_image_id.endswith(
-            f"sha256:{self.candidate_oci_revision}"
+        image_digest = self.candidate_image_id.rsplit("sha256:", 1)[-1]
+        if (
+            image_digest == self.candidate_image_id
+            or len(image_digest) != 64
+            or any(character not in _HEX for character in image_digest)
         ):
             raise ValueError(
-                "candidate_image_id must bind the immutable OCI revision digest"
+                "candidate_image_id must contain an immutable SHA-256 digest"
             )
+        if self.candidate_oci_revision != self.candidate_commit_sha:
+            raise ValueError("candidate_oci_revision must equal candidate_commit_sha")
         object.__setattr__(
             self,
             "alembic_head",

@@ -17,6 +17,7 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from sana.app.shadow_api_client import ShadowAPIError, ShadowCandidateAPI
+from sana.app.shadow_runtime import shadow_runtime
 from sana.modules.identity.domain import Principal
 from sana.modules.shadow_campaign.manifest import parse_manifest_bytes
 from sana.modules.shared.errors import InvariantViolation
@@ -222,7 +223,7 @@ def main(
     argv: Sequence[str] | None = None,
     *,
     client_factory=ShadowCandidateAPI,
-    runtime_factory=_unconfigured_runtime,
+    runtime_factory=shadow_runtime,
     environ: Mapping[str, str] | None = None,
     token_prompt: Callable[[str], str] = getpass.getpass,
 ) -> int:

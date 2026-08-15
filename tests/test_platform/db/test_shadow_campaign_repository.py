@@ -137,7 +137,7 @@ async def test_campaign_create_retry_and_lifecycle_are_atomic() -> None:
         candidate_commit_sha="a" * 40,
         candidate_source_clean=True,
         candidate_image_id=f"sana-candidate@sha256:{'a' * 64}",
-        candidate_oci_revision="a" * 64,
+        candidate_oci_revision="a" * 40,
         alembic_head="0009_shadow_campaign_gate",
         candidate_config_hash="a" * 64,
         harness_commit_sha="b" * 40,

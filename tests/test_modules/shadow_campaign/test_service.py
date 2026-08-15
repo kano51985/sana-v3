@@ -56,7 +56,7 @@ def _provenance(*, suffix: str = "a", clean: bool = True) -> CampaignProvenance:
         candidate_commit_sha=suffix * 40,
         candidate_source_clean=clean,
         candidate_image_id=f"sana-candidate@sha256:{digest}",
-        candidate_oci_revision=digest,
+        candidate_oci_revision=suffix * 40,
         alembic_head="0009_shadow_campaign_gate",
         candidate_config_hash=digest,
         harness_commit_sha=suffix * 40,
