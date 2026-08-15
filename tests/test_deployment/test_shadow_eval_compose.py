@@ -106,8 +106,11 @@ def test_worker_concurrency_and_image_revision_are_frozen() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
 
     assert worker_command[worker_command.index("--concurrency") + 1] == "2"
+    worker_health = config["services"]["worker"]["healthcheck"]
+    assert worker_health["test"][:3] == ["CMD", "python", "-c"]
+    assert "app.control.ping" in worker_health["test"][3]
+    assert "CMD-SHELL" not in worker_health["test"]
     assert "SANA_WORKER_LIVE_EVAL_MAX_RUNS" not in worker["environment"]
-    assert "inspect ping" in worker["healthcheck"]["test"][1]
     assert services["campaign-runner"]["depends_on"]["worker"] == {
         "condition": "service_healthy"
     }

@@ -228,13 +228,18 @@ services:
         condition: service_completed_successfully
     healthcheck:
       test:
-        - CMD-SHELL
+        - CMD
+        - python
+        - -c
         - >-
-          celery -A sana.app.worker_entrypoint:app inspect ping
-          --destination "celery@$$HOSTNAME" --timeout 3 | grep -q pong
-      interval: 5s
-      timeout: 5s
-      retries: 24
+          import os;
+          from sana.app.worker_entrypoint import app;
+          replies = app.control.ping(
+          destination=[f"celery@{os.environ['HOSTNAME']}"], timeout=3);
+          raise SystemExit(0 if replies else 1)
+      interval: 10s
+      timeout: 8s
+      retries: 12
     mem_limit: 2g
     cpus: 2.0
     pids_limit: 400
