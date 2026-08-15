@@ -108,7 +108,9 @@ def test_worker_concurrency_and_image_revision_are_frozen() -> None:
     assert worker_command[worker_command.index("--concurrency") + 1] == "2"
     worker_health = config["services"]["worker"]["healthcheck"]
     assert worker_health["test"][:3] == ["CMD", "python", "-c"]
-    assert "app.control.ping" in worker_health["test"][3]
+    assert "socket.create_connection(('redis', 6379)" in worker_health["test"][3]
+    assert "PING" in worker_health["test"][3]
+    assert "celery" not in worker_health["test"][3]
     assert "CMD-SHELL" not in worker_health["test"]
     assert "SANA_WORKER_LIVE_EVAL_MAX_RUNS" not in worker["environment"]
     assert services["campaign-runner"]["depends_on"]["worker"] == {

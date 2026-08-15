@@ -232,13 +232,14 @@ services:
         - python
         - -c
         - >-
-          import os;
-          from sana.app.worker_entrypoint import app;
-          replies = app.control.ping(
-          destination=[f"celery@{os.environ['HOSTNAME']}"], timeout=3);
-          raise SystemExit(0 if replies else 1)
+          import socket;
+          connection = socket.create_connection(('redis', 6379), timeout=2);
+          connection.sendall(b'*1\r\n$4\r\nPING\r\n');
+          response = connection.recv(16);
+          connection.close();
+          raise SystemExit(0 if response.startswith(b'+PONG') else 1)
       interval: 10s
-      timeout: 8s
+      timeout: 5s
       retries: 12
     mem_limit: 2g
     cpus: 2.0
