@@ -1,7 +1,6 @@
 FROM python:3.12-slim
 
 ARG PIP_INDEX_URL=https://pypi.org/simple
-ARG OCI_REVISION=unknown
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -28,6 +27,7 @@ RUN groupadd --system sana \
     && mkdir -p /var/lib/sana/artifacts \
     && chown -R sana:sana /app /var/lib/sana
 
+ARG OCI_REVISION=unknown
 LABEL org.opencontainers.image.revision="${OCI_REVISION}"
 
 USER sana
