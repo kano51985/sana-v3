@@ -190,6 +190,8 @@ class RunLease:
     reservation_state: ReservationState
     version: int
     _persisted_version: int
+    conversation_attempt_count: int = 0
+    submission_attempt_count: int = 0
 
     def __post_init__(self) -> None:
         require_aware(self.lease_expires_at, "lease_expires_at")
@@ -202,6 +204,8 @@ class RunLease:
             )
         if not self.lease_owner.strip() or self.version < 1:
             raise ValueError("A scheduling lease requires an owner and fencing version")
+        if self.conversation_attempt_count < 0 or self.submission_attempt_count < 0:
+            raise ValueError("Scheduling attempt counters cannot be negative")
         if not self.conversation_idempotency_key.strip():
             raise ValueError("A scheduling lease requires a Conversation key")
         if not self.message_idempotency_key.strip():

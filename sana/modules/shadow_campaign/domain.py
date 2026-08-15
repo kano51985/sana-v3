@@ -264,6 +264,16 @@ class CampaignLifecycle:
         self._stop_intent = StopIntent.NONE
         self.stop_reason = None
 
+    def resume(self, at: datetime) -> None:
+        """Resume a drained PAUSED campaign without rewriting its first start."""
+
+        require_aware(at, "resumed_at")
+        self._require_not_before_start(at, "resumed_at")
+        self._transition(CampaignStatus.RUNNING)
+        self._stop_intent = StopIntent.NONE
+        self.stop_reason = None
+        self.review_deadline_at = None
+
     def request_stop(self, intent: StopIntent, reason: str) -> None:
         normalized_reason = reason.strip()
         intent = StopIntent(intent)
@@ -274,6 +284,30 @@ class CampaignLifecycle:
         self._transition(CampaignStatus.STOPPING)
         self._stop_intent = intent
         self.stop_reason = normalized_reason
+
+    def escalate_stop(self, intent: StopIntent, reason: str) -> None:
+        """Upgrade a pending PAUSE drain to a terminal stop intent."""
+
+        normalized_reason = reason.strip()
+        intent = StopIntent(intent)
+        if self.status is not CampaignStatus.STOPPING:
+            raise InvariantViolation(
+                "Only a STOPPING campaign can escalate its stop intent",
+                code="campaign_not_stopping",
+            )
+        if self.stop_intent is not StopIntent.PAUSE or intent in {
+            StopIntent.NONE,
+            StopIntent.PAUSE,
+        }:
+            raise InvariantViolation(
+                "Campaign stop intent cannot be downgraded or replaced",
+                code="stop_intent_escalation_invalid",
+            )
+        if not normalized_reason:
+            raise InvariantViolation("Stop escalation requires a reason")
+        self._stop_intent = intent
+        self.stop_reason = normalized_reason
+        self.version += 1
 
     def settle_stop(self, at: datetime) -> None:
         require_aware(at, "stop settled_at")

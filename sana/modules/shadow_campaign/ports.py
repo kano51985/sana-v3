@@ -46,6 +46,13 @@ if TYPE_CHECKING:
         FinalReportBinding,
         FinalReportReceipt,
     )
+    from sana.modules.shadow_campaign.runner import (
+        CampaignReviewCandidate,
+        CampaignRunState,
+        CampaignRunSummary,
+        RunnerFailure,
+        RunnerFailureReceipt,
+    )
 
 
 class CampaignRepository(Protocol):
@@ -177,11 +184,53 @@ class CampaignReviewProjectionReader(Protocol):
     ) -> ReviewProjection | None: ...
 
 
+class CampaignRunnerRepository(Protocol):
+    async def list_owned(
+        self,
+        tenant_id: UUID,
+        user_id: UUID,
+    ) -> tuple[CampaignRunSummary, ...]: ...
+
+    async def read_owned_state(
+        self,
+        tenant_id: UUID,
+        user_id: UUID,
+        campaign_id: UUID,
+    ) -> CampaignRunState | None: ...
+
+    async def mark_failure(
+        self,
+        lease: RunLease,
+        failure: RunnerFailure,
+    ) -> RunnerFailureReceipt: ...
+
+    async def mark_collector_failure(
+        self,
+        lease: CollectorLease,
+        failure: RunnerFailure,
+    ) -> RunnerFailureReceipt: ...
+
+    async def skip_pending(
+        self,
+        tenant_id: UUID,
+        campaign_id: UUID,
+        reason: str,
+    ) -> int: ...
+
+    async def review_candidates(
+        self,
+        tenant_id: UUID,
+        user_id: UUID,
+        campaign_id: UUID,
+    ) -> tuple[CampaignReviewCandidate, ...]: ...
+
+
 class CampaignUnitOfWork(Protocol):
     campaigns: CampaignRepository
     campaign_execution: CampaignExecutionRepository
     campaign_collector: CampaignCollectorRepository
     campaign_reviews: CampaignReviewRepository
+    campaign_runner: CampaignRunnerRepository
 
     async def __aenter__(self) -> "CampaignUnitOfWork": ...
 

@@ -420,8 +420,14 @@ async def test_review_projection_and_submission_are_exact_owner_only_and_immutab
         projection = await review_service.projection(owner, campaign.id, result_id)
         assert projection is not None
         assert projection.result_id == result_id
+        assert projection.answer_text == "private stable answer"
+        assert projection.claims[0].claim_text == "private stable claim"
         assert projection.claims[0].citations[0].source_authority == "OFFICIAL"
-        assert not hasattr(projection.claims[0], "claim_text")
+        assert projection.claims[0].citations[0].quote == "stable"
+        assert (
+            projection.claims[0].citations[0].rendered_url
+            == "https://example.test/stable?credential=private"
+        )
         assert await review_service.projection(other, campaign.id, result_id) is None
 
         submission = ReviewSubmission(

@@ -720,6 +720,43 @@ class CampaignReportBuilder:
             "possibly_billed_run_reserve_usd",
         )
         for item in settled:
+            if item.get("search_run_id") is None:
+                result_id = str(item.get("result_id"))
+                valid_unknown_outbound = (
+                    item.get("scheduling_state") == "FAILED"
+                    and _integer(
+                        item.get("settled_observed_provider_calls", 0),
+                        "settled calls",
+                    )
+                    == 0
+                    and _integer(item.get("prompt_tokens", 0), "prompt tokens") == 0
+                    and _integer(
+                        item.get("completion_tokens", 0),
+                        "completion tokens",
+                    )
+                    == 0
+                    and _integer(item.get("model_call_count", 0), "model_call_count")
+                    == 0
+                    and _integer(
+                        item.get("possibly_billed_call_charge", 0),
+                        "possibly billed calls",
+                    )
+                    == _integer(
+                        item.get("reserved_provider_calls", 0),
+                        "reserved calls",
+                    )
+                    and _decimal(
+                        item.get("possibly_billed_cost_charge", "0"),
+                        "possibly billed cost",
+                    )
+                    == _decimal(
+                        item.get("reserved_estimated_cost", "0"),
+                        "reserved cost",
+                    )
+                )
+                if not valid_unknown_outbound:
+                    mismatches.append(f"result:{result_id}:unknown_outbound_settlement")
+                continue
             run_items = invocation_by_run.get(str(item.get("search_run_id")), [])
             billed = tuple(
                 row

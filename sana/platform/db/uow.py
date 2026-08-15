@@ -21,6 +21,7 @@ from sana.platform.db.shadow_campaign_repository import SqlShadowCampaignReposit
 from sana.platform.db.shadow_execution_repository import SqlShadowExecutionRepository
 from sana.platform.db.shadow_collector import SqlShadowCollectorRepository
 from sana.platform.db.shadow_review import SqlShadowReviewRepository
+from sana.platform.db.shadow_runner import SqlShadowRunnerRepository
 
 
 class TenantUnitOfWork:
@@ -67,6 +68,10 @@ class TenantUnitOfWork:
             self.tenant_id,
         )
         self.campaign_reviews = SqlShadowReviewRepository(
+            self._session,
+            self.tenant_id,
+        )
+        self.campaign_runner = SqlShadowRunnerRepository(
             self._session,
             self.tenant_id,
         )

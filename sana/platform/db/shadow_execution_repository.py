@@ -45,7 +45,11 @@ class SqlShadowExecutionRepository:
         now, campaign, result = await self._locked_records(lease)
         self._assert_active_lease(result, lease, now)
         self._assert_active_reservation(result)
-        self._assert_outbound_allowed(campaign, result)
+        self._assert_outbound_allowed(
+            campaign,
+            result,
+            prior_attempt_count=result.conversation_attempt_count,
+        )
         if (
             result.scheduling_state != SchedulingState.CLAIMED.value
             or result.conversation_id is not None
@@ -137,7 +141,11 @@ class SqlShadowExecutionRepository:
     async def prepare_submission_attempt(self, lease: RunLease) -> None:
         now, campaign, result = await self._locked_records(lease)
         self._assert_active_lease(result, lease, now)
-        self._assert_outbound_allowed(campaign, result)
+        self._assert_outbound_allowed(
+            campaign,
+            result,
+            prior_attempt_count=result.submission_attempt_count,
+        )
         if (
             result.scheduling_state
             != SchedulingState.CONVERSATION_BOUND.value
@@ -282,10 +290,19 @@ class SqlShadowExecutionRepository:
     def _assert_outbound_allowed(
         campaign: ShadowCampaignRecord,
         result: ShadowRunResultRecord,
+        *,
+        prior_attempt_count: int,
     ) -> None:
-        if campaign.status != CampaignStatus.RUNNING.value:
+        recovery_replay = (
+            campaign.status == CampaignStatus.STOPPING.value
+            and prior_attempt_count > 0
+        )
+        if (
+            campaign.status != CampaignStatus.RUNNING.value
+            and not recovery_replay
+        ):
             raise InvariantViolation(
-                "Campaign is not accepting new candidate API calls",
+                "Campaign is not accepting a new candidate API attempt",
                 code="campaign_not_running",
             )
         SqlShadowExecutionRepository._assert_active_reservation(result)

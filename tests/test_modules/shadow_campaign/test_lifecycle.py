@@ -21,7 +21,7 @@ def test_campaign_lifecycle_supports_pause_resume_review_and_completion() -> Non
     campaign.start(NOW)
     campaign.request_stop(StopIntent.PAUSE, "operator pause")
     campaign.settle_stop(NOW + timedelta(minutes=1))
-    campaign.start(NOW + timedelta(minutes=2))
+    campaign.resume(NOW + timedelta(minutes=2))
     campaign.await_review(
         NOW + timedelta(minutes=3),
         deadline=NOW + timedelta(days=7),
@@ -51,6 +51,18 @@ def test_non_pause_stop_settles_to_aborted_and_terminal_state_is_immutable() -> 
             NOW + timedelta(seconds=2),
             deadline=NOW + timedelta(days=1),
         )
+
+
+def test_operator_abort_can_escalate_an_in_progress_pause_drain() -> None:
+    campaign = CampaignLifecycle(uuid4(), uuid4(), uuid4(), 6, 6)
+    campaign.start(NOW)
+    campaign.request_stop(StopIntent.PAUSE, "operator pause")
+
+    campaign.escalate_stop(StopIntent.ABORT, "operator abort")
+    campaign.settle_stop(NOW + timedelta(seconds=1))
+
+    assert campaign.status is CampaignStatus.ABORTED
+    assert campaign.stop_intent is StopIntent.ABORT
 
 
 def test_campaign_cannot_complete_with_a_pending_gate() -> None:

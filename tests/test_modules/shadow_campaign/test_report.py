@@ -253,3 +253,49 @@ def test_ledger_or_source_drift_is_a_fatal_gate_failure() -> None:
     }
     assert "hard_campaign_ledger_mismatch" in failed
     assert "hard_source_snapshot_mismatch" in failed
+
+
+def test_unknown_outbound_without_search_run_uses_frozen_reserve_audit() -> None:
+    original = report_snapshot()
+    payload = canonical_snapshot(original.decision_input)
+    payload["campaign"] = deepcopy(dict(payload["campaign"]))
+    payload["results"] = [deepcopy(dict(item)) for item in payload["results"]]
+    failed = payload["results"][0]
+    failed.update(
+        {
+            "search_run_id": None,
+            "scheduling_state": "FAILED",
+            "actual_mode": None,
+            "run_status": None,
+            "answer_quality": None,
+            "error_class": "PROVIDER_TRANSIENT",
+            "error_code": "transport_exhausted",
+            "failed_phase": "candidate_api",
+            "error_signal_flags": ("transport_exhausted",),
+            "reserved_provider_calls": 8,
+            "reserved_estimated_cost": "0.006",
+            "possibly_billed_call_charge": 8,
+            "possibly_billed_cost_charge": "0.006",
+            "source_snapshot_digest": "8" * 64,
+            "current_source_digest": None,
+            "collector_schema_version": None,
+        }
+    )
+    counts = payload["campaign"]["counts"]
+    counts["submitted_count"] = 5
+    counts["collected_count"] = 5
+    counts["failed_count"] = 1
+    ledger = payload["campaign"]["ledger"]
+    ledger["possibly_billed_call_charge"] = 8
+    ledger["possibly_billed_cost_charge"] = "0.006"
+    ledger["possibly_billed_count"] = 1
+    snapshot = replace(original, decision_input=payload)
+
+    prepared = CampaignReportBuilder().prepare(snapshot)
+
+    ledger_rule = next(
+        rule
+        for rule in prepared.decision.rules
+        if rule.rule_id == "hard_campaign_ledger_mismatch"
+    )
+    assert ledger_rule.passed

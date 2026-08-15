@@ -545,6 +545,34 @@ class CampaignLifecycleService:
             lambda campaign: campaign.request_stop(intent, reason),
         )
 
+    async def resume(
+        self,
+        tenant_id: UUID,
+        user_id: UUID,
+        campaign_id: UUID,
+    ) -> CampaignLifecycle | None:
+        return await self._owned_mutation(
+            tenant_id,
+            user_id,
+            campaign_id,
+            lambda campaign: campaign.resume(self._clock.now()),
+        )
+
+    async def escalate_stop(
+        self,
+        tenant_id: UUID,
+        user_id: UUID,
+        campaign_id: UUID,
+        intent: StopIntent,
+        reason: str,
+    ) -> CampaignLifecycle | None:
+        return await self._owned_mutation(
+            tenant_id,
+            user_id,
+            campaign_id,
+            lambda campaign: campaign.escalate_stop(intent, reason),
+        )
+
     async def abort(
         self,
         tenant_id: UUID,

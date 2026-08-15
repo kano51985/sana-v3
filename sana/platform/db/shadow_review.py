@@ -35,6 +35,8 @@ from sana.platform.db.models.shadow_campaign import (
     ShadowManualReviewRecord,
     ShadowRunResultRecord,
 )
+from sana.platform.db.models.conversation import Message, ResponseRun
+from sana.platform.db.models.orchestration import SearchRunRecord
 
 
 class SqlShadowReviewProjectionReader:
@@ -99,6 +101,33 @@ class SqlShadowReviewProjectionReader:
                 raise InvariantViolation(
                     "Review projection is not available for this Result",
                     code="review_result_not_eligible",
+                )
+
+            answer_text = await session.scalar(
+                select(Message.content)
+                .join(
+                    ResponseRun,
+                    (ResponseRun.tenant_id == Message.tenant_id)
+                    & (ResponseRun.output_message_id == Message.id),
+                )
+                .join(
+                    SearchRunRecord,
+                    (SearchRunRecord.tenant_id == ResponseRun.tenant_id)
+                    & (SearchRunRecord.response_run_id == ResponseRun.id),
+                )
+                .where(
+                    SearchRunRecord.tenant_id == tenant_id,
+                    SearchRunRecord.id == binding.search_run_id,
+                    SearchRunRecord.conversation_id == binding.conversation_id,
+                    ResponseRun.conversation_id == binding.conversation_id,
+                    Message.conversation_id == binding.conversation_id,
+                    Message.role == "ASSISTANT",
+                )
+            )
+            if answer_text is None:
+                raise InvariantViolation(
+                    "Review answer material is unavailable",
+                    code="review_projection_invalid",
                 )
 
             claims = tuple(
@@ -222,6 +251,9 @@ class SqlShadowReviewProjectionReader:
                         version.fetched_at,
                         citation.start_offset,
                         citation.end_offset,
+                        citation.label,
+                        citation.rendered_url,
+                        citation.quote,
                     )
                 )
 
@@ -242,6 +274,7 @@ class SqlShadowReviewProjectionReader:
                         claim.fact_requirement_id,
                         claim.support_status,
                         tuple(citations_by_claim[claim.id]),
+                        claim.claim_text,
                     )
                 )
             return ReviewProjection(
@@ -254,6 +287,7 @@ class SqlShadowReviewProjectionReader:
                 binding.repetition,
                 binding.review_rubric_version,
                 tuple(projection_claims),
+                answer_text,
             )
         finally:
             await session.rollback()

@@ -181,11 +181,16 @@ class ReviewCitationProjection:
     document_fetched_at: datetime
     start_offset: int
     end_offset: int
+    label: str
+    rendered_url: str
+    quote: str
 
     def __post_init__(self) -> None:
         require_aware(self.document_fetched_at, "document_fetched_at")
         if self.ordinal < 1 or self.end_offset <= self.start_offset:
             raise ValueError("Review Citation projection is invalid")
+        if not self.label.strip() or not self.rendered_url.strip() or not self.quote:
+            raise ValueError("Review Citation material is incomplete")
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +200,7 @@ class ReviewClaimProjection:
     fact_requirement_id: UUID | None
     support_status: str
     citations: tuple[ReviewCitationProjection, ...]
+    claim_text: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +214,7 @@ class ReviewProjection:
     repetition: int
     rubric_version: str
     claims: tuple[ReviewClaimProjection, ...]
+    answer_text: str
 
 
 __all__ = [

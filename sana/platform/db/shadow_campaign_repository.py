@@ -354,7 +354,10 @@ class SqlShadowCampaignRepository:
             )
             .with_for_update()
         )
-        if campaign is None or campaign.status != CampaignStatus.RUNNING.value:
+        if campaign is None or campaign.status not in {
+            CampaignStatus.RUNNING.value,
+            CampaignStatus.STOPPING.value,
+        }:
             return None
         active_leases = await self._session.scalar(
             select(func.count(ShadowRunResultRecord.id)).where(
@@ -371,24 +374,40 @@ class SqlShadowCampaignRepository:
         )
         if int(active_leases or 0) >= campaign.max_concurrency:
             return None
+        scheduling_predicate = or_(
+            ShadowRunResultRecord.scheduling_state
+            == SchedulingState.PENDING.value,
+            and_(
+                ShadowRunResultRecord.scheduling_state.in_(
+                    (
+                        SchedulingState.CLAIMED.value,
+                        SchedulingState.CONVERSATION_BOUND.value,
+                    )
+                ),
+                ShadowRunResultRecord.lease_expires_at <= now,
+            ),
+        )
+        if campaign.status == CampaignStatus.STOPPING.value:
+            # STOPPING drains only attempts that crossed a durable outbound fence.
+            scheduling_predicate = and_(
+                ShadowRunResultRecord.scheduling_state.in_(
+                    (
+                        SchedulingState.CLAIMED.value,
+                        SchedulingState.CONVERSATION_BOUND.value,
+                    )
+                ),
+                ShadowRunResultRecord.lease_expires_at <= now,
+                or_(
+                    ShadowRunResultRecord.conversation_attempt_count > 0,
+                    ShadowRunResultRecord.submission_attempt_count > 0,
+                ),
+            )
         candidate = await self._session.scalar(
             select(ShadowRunResultRecord)
             .where(
                 ShadowRunResultRecord.tenant_id == tenant_id,
                 ShadowRunResultRecord.campaign_id == campaign_id,
-                or_(
-                    ShadowRunResultRecord.scheduling_state
-                    == SchedulingState.PENDING.value,
-                    and_(
-                        ShadowRunResultRecord.scheduling_state.in_(
-                            (
-                                SchedulingState.CLAIMED.value,
-                                SchedulingState.CONVERSATION_BOUND.value,
-                            )
-                        ),
-                        ShadowRunResultRecord.lease_expires_at <= now,
-                    ),
-                ),
+                scheduling_predicate,
             )
             .order_by(ShadowRunResultRecord.schedule_ordinal)
             .limit(1)
@@ -440,6 +459,8 @@ class SqlShadowCampaignRepository:
             reservation_state=ReservationState(candidate.reservation_state),
             version=next_version,
             _persisted_version=next_version,
+            conversation_attempt_count=candidate.conversation_attempt_count,
+            submission_attempt_count=candidate.submission_attempt_count,
         )
 
     async def renew_result_lease(

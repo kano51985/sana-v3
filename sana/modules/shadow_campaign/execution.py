@@ -96,6 +96,7 @@ class CampaignExecutionService:
         async with self._uow_factory(lease.tenant_id) as uow:
             await uow.campaign_execution.prepare_conversation_attempt(lease)
             await uow.commit()
+        lease.conversation_attempt_count += 1
 
     async def _bind_conversation(
         self,
@@ -113,6 +114,7 @@ class CampaignExecutionService:
         async with self._uow_factory(lease.tenant_id) as uow:
             await uow.campaign_execution.prepare_submission_attempt(lease)
             await uow.commit()
+        lease.submission_attempt_count += 1
 
     async def _bind_submission(
         self,
