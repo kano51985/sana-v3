@@ -68,7 +68,7 @@ async def test_report_gateway_fences_stale_input_and_binds_one_final_report(tmp_
         harness_commit_sha="b" * 40,
         harness_source_clean=True,
         harness_fileset_hash="b" * 64,
-        collector_schema_version="shadow-collector-v1",
+        collector_schema_version="shadow-collector-v2",
         environment_identity_hash=snapshot_hash(environment),
         environment_snapshot=environment,
     )

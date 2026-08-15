@@ -29,6 +29,7 @@ EXPECTED_TABLES = {
     "fetch_artifacts",
     "documents",
     "document_versions",
+    "document_version_fetches",
     "document_chunks",
     "evidence_candidates",
     "verified_evidence",
@@ -104,6 +105,7 @@ def test_document_and_memory_rows_have_tenant_local_identity_constraints() -> No
     for table_name in (
         "documents",
         "document_versions",
+        "document_version_fetches",
         "document_chunks",
         "evidence_candidates",
         "verified_evidence",

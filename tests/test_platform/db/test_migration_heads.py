@@ -5,4 +5,4 @@ from alembic.script import ScriptDirectory
 def test_alembic_has_exactly_one_upgrade_head() -> None:
     scripts = ScriptDirectory.from_config(Config("alembic.ini"))
 
-    assert scripts.get_heads() == ["0010_shadow_collector_audit"]
+    assert scripts.get_heads() == ["0011_document_fetch_lineage"]

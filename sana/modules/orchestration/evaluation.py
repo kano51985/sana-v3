@@ -115,7 +115,7 @@ def _intent(case: dict[str, Any]) -> NormalizedIntent:
 def evaluate_case(case: dict[str, Any]) -> EvalCaseResult:
     case_id = str(case["id"])
     intent = _intent(case)
-    router = AutomaticModeRouter("search-v1")
+    router = AutomaticModeRouter("search-v2")
     routing = router.route(str(case["user_message"]))
     queries = QueryCompiler().compile(intent, routing.mode)
     forbidden = tuple(str(item).casefold() for item in case.get("forbidden_query_terms", ()))

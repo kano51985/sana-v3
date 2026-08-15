@@ -21,12 +21,12 @@ from sana.modules.shadow_campaign.domain import (
     require_aware,
 )
 from sana.modules.shadow_campaign.evaluator import evaluate_gold_assertion
-from sana.modules.shadow_campaign.manifest import OracleType, ShadowCase
+from sana.modules.shadow_campaign.manifest import Answerability, OracleType, ShadowCase
 from sana.modules.shadow_campaign.policy import CostRate
 from sana.modules.shared.errors import InvariantViolation
 
 
-COLLECTOR_SCHEMA_VERSION = "shadow-collector-v1"
+COLLECTOR_SCHEMA_VERSION = "shadow-collector-v2"
 
 _TERMINAL_RUN_STATUSES = frozenset(
     {RunStatus.SUCCEEDED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}
@@ -892,10 +892,18 @@ def collect_run_snapshot(
         candidate_signals.add("gold_assertion_failure")
     if case.must_not_complete and snapshot.answer_quality == "COMPLETE":
         candidate_signals.add("unanswerable_marked_complete")
+    source_class_evidence = (
+        tuple(item for item in snapshot.evidence if item.document_chain_valid)
+        if case.answerability is Answerability.INTENTIONALLY_UNANSWERABLE
+        else valid_evidence
+    )
     if (
         case.required_source_classes
         and not all(
-            any(item.source_authority == required.value for item in valid_evidence)
+            any(
+                item.source_authority == required.value
+                for item in source_class_evidence
+            )
             for required in case.required_source_classes
         )
     ):

@@ -640,8 +640,21 @@ class SearchStepOperations:
                 for hit in response.get("hits", []):
                     canonical = str(hit["canonical_url"])
                     previous = candidates.get(canonical)
-                    if previous is None or float(hit["score"]) > float(previous["score"]):
-                        candidates[canonical] = dict(hit)
+                    fact_id = str(hit["fact_id"])
+                    if previous is None:
+                        merged = dict(hit)
+                        merged["fact_ids"] = [fact_id]
+                        candidates[canonical] = merged
+                        continue
+                    fact_ids = list(map(str, previous.get("fact_ids", ())))
+                    if fact_id not in fact_ids:
+                        fact_ids.append(fact_id)
+                    if float(hit["score"]) > float(previous["score"]):
+                        merged = dict(hit)
+                        merged["fact_ids"] = fact_ids
+                        candidates[canonical] = merged
+                    else:
+                        previous["fact_ids"] = fact_ids
         selected = _select_ranked_hits(
             tuple(candidates.values()),
             authority_policy=self._authority,
@@ -721,7 +734,11 @@ class SearchStepOperations:
             extracted.canonical_url.encode("utf-8")
         ).hexdigest()
         document_id = uuid5(context.tenant_id, f"document:{canonical_hash}")
-        version_id = uuid5(document_id, f"version:{hashlib.sha256(extracted.text.encode('utf-8')).hexdigest()}")
+        version_id = uuid5(
+            document_id,
+            "version:"
+            f"{hashlib.sha256(extracted.text.encode('utf-8')).hexdigest()}",
+        )
         chunks = self._chunker.chunk(extracted.text)
         return await self._result(
             context,
@@ -826,7 +843,13 @@ class SearchStepOperations:
                     chunks,
                     str(extracted["document"]["canonical_url"]),
                     str(extracted["document"]["title"]),
-                    UUID(str(extracted["hit"]["fact_id"])),
+                    tuple(
+                        UUID(str(value))
+                        for value in (
+                            extracted["hit"].get("fact_ids")
+                            or (extracted["hit"]["fact_id"],)
+                        )
+                    ),
                 )
             )
         candidates = self._candidate_selector.select(

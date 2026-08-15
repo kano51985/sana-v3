@@ -61,6 +61,8 @@ async def test_planner_makes_one_primary_call_and_returns_semantic_facts() -> No
     assert intent.entity == "Apex Legends"
     assert len(gateway.calls) == 1
     assert "never copy it as a query suffix" in gateway.calls[0][1][1].content
+    assert "Never collapse separately requested subquestions" in gateway.calls[0][1][0].content
+    assert "required=true" in gateway.calls[0][1][0].content
 
 
 def test_intent_parser_normalizes_enum_casing_but_keeps_schema_strict() -> None:

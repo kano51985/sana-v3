@@ -32,13 +32,16 @@ def registrable_domain(url: str) -> str:
 class SourceAuthorityPolicy:
     """Authority is configuration-owned and entity-specific, never model-owned."""
 
-    version: str = "source-authority-v1"
+    version: str = "source-authority-v2"
     official_domains_by_entity: Mapping[str, frozenset[str]] = field(
         default_factory=lambda: {
             "apex legends": frozenset({"ea.com", "respawn.com"}),
             "deepseek": frozenset({"deepseek.com"}),
             "openai": frozenset({"openai.com"}),
             "python": frozenset({"python.org"}),
+            "http": frozenset({"rfc-editor.org"}),
+            "git": frozenset({"git-scm.com"}),
+            "rust": frozenset({"rust-lang.org"}),
         }
     )
 

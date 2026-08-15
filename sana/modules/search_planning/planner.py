@@ -102,6 +102,12 @@ class SearchPlanner:
         system = (
             "Normalize the current request into a canonical entity and atomic fact "
             "requirements. Do not turn conversational filler into search terms. "
+            "Never collapse separately requested subquestions into one background "
+            "fact. When the request names N items and asks about each, emit at least "
+            "N distinct facts; use one fact per named or enumerated item. Cross-check "
+            "requests need separate facts for the source perspectives being checked. "
+            "Mark every requested fact required=true unless the user explicitly says "
+            "that part is optional. "
             "Return one JSON object only with entity, aliases, locale, "
             "requires_comparison, requires_complete_sources, and facts. Each fact "
             "must contain key, fact_type, description, subject, required, freshness, "

@@ -188,6 +188,22 @@ def test_0010_adds_collector_fencing_and_gold_assertion_rls() -> None:
     assert "FORCE ROW LEVEL SECURITY" in source
 
 
+def test_0011_adds_run_local_document_fetch_lineage() -> None:
+    migration = (
+        Path(__file__).parents[3]
+        / "alembic"
+        / "versions"
+        / "0011_document_fetch_lineage.py"
+    )
+    source = migration.read_text(encoding="utf-8")
+
+    assert 'down_revision = "0010_shadow_collector_audit"' in source
+    assert '"document_version_fetches"' in source
+    assert '"uq_fetch_artifacts_tenant_id_id"' in source
+    assert "ENABLE ROW LEVEL SECURITY" in source
+    assert "FORCE ROW LEVEL SECURITY" in source
+
+
 def test_manual_review_is_structured_and_has_actor_invariant() -> None:
     review = Base.metadata.tables["shadow_manual_reviews"]
     assert {

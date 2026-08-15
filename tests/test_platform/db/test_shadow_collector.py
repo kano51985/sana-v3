@@ -53,8 +53,10 @@ from sana.platform.db.models.search import (
     Document,
     DocumentChunk,
     DocumentVersion,
+    DocumentVersionFetch,
     EvidenceCandidate,
     FactRequirement,
+    FetchArtifact,
     ProviderAttempt,
     QuerySpec,
     VerifiedEvidence,
@@ -133,6 +135,7 @@ async def _seed_terminal_source(
     fact_id = uuid4()
     query_id = uuid4()
     provider_attempt_id = uuid4()
+    fetch_artifact_id = uuid4()
     document_id = uuid4()
     document_version_id = uuid4()
     chunk_id = uuid4()
@@ -333,10 +336,31 @@ async def _seed_terminal_source(
             )
         )
         await connection.execute(
+            insert(FetchArtifact).values(
+                id=fetch_artifact_id,
+                tenant_id=tenant_id,
+                run_id=search_run_id,
+                search_hit_id=None,
+                url="https://example.test/release",
+                url_hash="3" * 64,
+                attempt_no=1,
+                fetcher="test",
+                status="SUCCEEDED",
+                http_status=200,
+                media_type="text/plain",
+                content_hash="4" * 64,
+                storage_uri="artifact://fetch",
+                response_bytes=6,
+                fetched_at=NOW,
+                fetch_metadata={},
+            )
+        )
+        await connection.execute(
             insert(DocumentVersion).values(
                 id=document_version_id,
                 tenant_id=tenant_id,
                 document_id=document_id,
+                fetch_artifact_id=fetch_artifact_id,
                 content_hash="4" * 64,
                 storage_uri="artifact://document",
                 media_type="text/plain",
@@ -344,6 +368,16 @@ async def _seed_terminal_source(
                 text_length=6,
                 fetched_at=NOW,
                 document_metadata={},
+            )
+        )
+        await connection.execute(
+            insert(DocumentVersionFetch).values(
+                id=uuid4(),
+                tenant_id=tenant_id,
+                run_id=search_run_id,
+                document_version_id=document_version_id,
+                fetch_artifact_id=fetch_artifact_id,
+                created_at=NOW,
             )
         )
         await connection.execute(
@@ -489,7 +523,7 @@ async def test_collector_is_fenced_atomic_idempotent_and_rls_scoped() -> None:
         harness_commit_sha="b" * 40,
         harness_source_clean=True,
         harness_fileset_hash="b" * 64,
-        collector_schema_version="shadow-collector-v1",
+        collector_schema_version="shadow-collector-v2",
         environment_identity_hash=snapshot_hash(environment),
         environment_snapshot=environment,
     )

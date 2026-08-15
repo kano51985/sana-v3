@@ -35,7 +35,7 @@
 
 - build OCI revision 与 candidate commit 完全一致；
 - 所有候选服务 image ID 相同；
-- Alembic head 为 `0010_shadow_collector_audit`；
+- Alembic head 为 `0011_document_fetch_lineage`；
 - API 只绑定 loopback，DB/Redis 无宿主端口；
 - worker concurrency 固定为 2，队列固定为 fast/research/crawl/maintenance；
 - 无非 Campaign active SearchRun、未发布 outbox 或初始队列消息；

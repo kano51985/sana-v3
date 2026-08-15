@@ -124,3 +124,22 @@ async def test_forged_quote_cannot_become_accepted_model_evidence() -> None:
     assert result.degraded is True
     assert all(evidence.candidate.quote != "forged value 99" for evidence in result.evidence)
     assert all(evidence.confidence <= 0.49 for evidence in result.evidence)
+
+
+@pytest.mark.asyncio
+async def test_model_omission_persists_a_rejected_candidate_audit() -> None:
+    item = candidate()
+    result = await ModelEvidenceVerifier(ParsingGateway('{"verdicts":[]}')).verify(
+        (item,),
+        invocation_context=context(item),
+        deadline=NOW + timedelta(seconds=5),
+        verified_at=NOW,
+    )
+
+    assert len(result.evidence) == 1
+    assert result.evidence[0].candidate.id == item.id
+    assert result.evidence[0].verdict is EvidenceVerdict.REJECTED
+    assert result.evidence[0].reason_codes == (
+        "exact_source_span",
+        "insufficient_direct_support",
+    )

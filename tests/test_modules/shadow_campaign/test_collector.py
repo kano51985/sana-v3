@@ -390,10 +390,66 @@ def test_unknown_collector_schema_version_is_rejected() -> None:
             _case(),
             _rate(),
             oracle_version="shadow-cases-v1",
-            collector_schema_version="shadow-collector-v2",
+            collector_schema_version="shadow-collector-v999",
         )
 
     assert captured.value.code == "collector_schema_version_mismatch"
+
+
+def test_unanswerable_source_audit_accepts_rejected_examined_authority() -> None:
+    rejected = replace(
+        _snapshot().evidence[0],
+        verdict="REJECTED",
+        confidence=0.0,
+    )
+    snapshot = replace(
+        _snapshot(),
+        answer_quality="PARTIAL",
+        stop_reason="INSUFFICIENT_EVIDENCE",
+        facts=(replace(_snapshot().facts[0], status="OPEN"),),
+        evidence=(rejected,),
+        claims=(),
+        citations=(),
+    )
+    case = replace(
+        _case(deterministic=False),
+        answerability=Answerability.INTENTIONALLY_UNANSWERABLE,
+        oracle_type=OracleType.NOT_APPLICABLE,
+        must_not_complete=True,
+    )
+
+    outcome = collect_run_snapshot(snapshot, case, _rate(), oracle_version=None)
+
+    assert "required_source_class_missing" not in outcome.error_signal_flags
+    assert outcome.answer_quality == "PARTIAL"
+
+
+def test_unanswerable_rejected_source_requires_valid_fetch_lineage() -> None:
+    rejected = replace(
+        _snapshot().evidence[0],
+        verdict="REJECTED",
+        confidence=0.0,
+        document_chain_valid=False,
+    )
+    snapshot = replace(
+        _snapshot(),
+        answer_quality="PARTIAL",
+        stop_reason="INSUFFICIENT_EVIDENCE",
+        facts=(replace(_snapshot().facts[0], status="OPEN"),),
+        evidence=(rejected,),
+        claims=(),
+        citations=(),
+    )
+    case = replace(
+        _case(deterministic=False),
+        answerability=Answerability.INTENTIONALLY_UNANSWERABLE,
+        oracle_type=OracleType.NOT_APPLICABLE,
+        must_not_complete=True,
+    )
+
+    outcome = collect_run_snapshot(snapshot, case, _rate(), oracle_version=None)
+
+    assert "required_source_class_missing" in outcome.error_signal_flags
 
 
 def test_fatal_candidate_signal_overrides_other_error_classes() -> None:

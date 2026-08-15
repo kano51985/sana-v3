@@ -11,7 +11,7 @@ from sana.modules.search_planning.domain import FactType
 
 @dataclass(frozen=True, slots=True)
 class OfficialSourcePolicy:
-    version: str = "official-sources-v1"
+    version: str = "official-sources-v2"
     sources: Mapping[str, Mapping[str, tuple[str, ...]]] = field(
         default_factory=lambda: {
             "python": {
@@ -40,6 +40,36 @@ class OfficialSourcePolicy:
                 FactType.CHARACTER_CHANGES.value: (
                     "https://www.ea.com/games/apex-legends/apex-legends/news"
                     "?page=1&type=game-updates",
+                ),
+            },
+            "http": {
+                FactType.BACKGROUND.value: (
+                    "https://www.rfc-editor.org/rfc/rfc9110.html#name-404-not-found",
+                ),
+            },
+            "git": {
+                FactType.BACKGROUND.value: (
+                    "https://git-scm.com/book/en/v2/Git-Internals-Git-Objects",
+                ),
+            },
+            "rust": {
+                FactType.VERSION.value: (
+                    "https://doc.rust-lang.org/stable/releases.html",
+                ),
+                FactType.CURRENT_VALUE.value: (
+                    "https://doc.rust-lang.org/stable/releases.html",
+                ),
+                FactType.BACKGROUND.value: (
+                    "https://doc.rust-lang.org/stable/releases.html",
+                ),
+            },
+            "openai": {
+                FactType.BACKGROUND.value: ("https://openai.com/",),
+                FactType.VERSION.value: ("https://openai.com/news/",),
+                FactType.CURRENT_VALUE.value: ("https://openai.com/",),
+                FactType.COMPARISON.value: (
+                    "https://openai.com/",
+                    "https://openai.com/news/",
                 ),
             },
         }

@@ -29,7 +29,7 @@
 | 跨 tenant/run Claim/Citation/Evidence、无 Fact factual Claim、非法 offset | collector/review PostgreSQL integration；`tests/test_modules/shadow_campaign/test_collector.py::test_invalid_citation_chain_is_a_fail_closed_candidate_defect`；schema/RLS tests | 四张 shadow 表 `relrowsecurity=true` 且 `relforcerowsecurity=true`；projection join 同时绑定 tenant/run | PASS：错链 fail closed，跨 tenant 不可见 |
 | token/key/password/prompt/answer/query/quote 泄漏 | CLI serializer/redaction/provenance/privacy guard tests；post-Campaign auditor | API/dispatcher/worker logs 与 JSON/Markdown artifacts 扫描当前口令、token/key 和 40 个 manifest prompt，未命中；CLI bytes 只输出 byte length/hash | PASS：只输出稳定 code、计数、hash 和 PASS 断言 |
 | worker health probe 超时/进程泄漏 | Compose structural test；post-Campaign auditor | Celery inspect 探针已替换为有界 direct-exec Redis PING；常驻进程严格为 main+2 prefork，采样时只允许至多一个命令行完全匹配的短生命周期探针 | PASS：无未知或累积 probe；Campaign/queue 审计另证实际消费能力 |
-| 镜像/迁移/网络/volume 混用 | provenance/Compose tests；post-Campaign auditor | API/dispatcher/worker 与 attestation image ID 一致；唯一 head `0010_shadow_collector_audit`；DB/Redis 无宿主端口；独立 network/四个 volume | PASS：identity 或 topology 任一不一致均在 Provider 调用前失败 |
+| 镜像/迁移/网络/volume 混用 | provenance/Compose tests；post-Campaign auditor | API/dispatcher/worker 与 attestation image ID 一致；唯一 head `0011_document_fetch_lineage`；DB/Redis 无宿主端口；独立 network/四个 volume | PASS：identity 或 topology 任一不一致均在 Provider 调用前失败 |
 
 ## 已发现并关闭的问题
 

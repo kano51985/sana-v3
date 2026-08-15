@@ -8,7 +8,7 @@
 
 设计基线：6c15fb3 docs: complete shadow campaign architecture audit
 
-实施收口：实际迁移保持线性 `0009_shadow_campaign_gate -> 0010_shadow_collector_audit`，当前唯一 Alembic head 为 `0010_shadow_collector_audit`。任务 11/12 的可重复测试映射、Docker 故障证据与已修复反例记录在 `docs/operations/shadow-campaign-fault-matrix.md`。离线 gate 不能替代任务 13 的真实 DeepSeek smoke。
+实施收口：实际迁移保持线性 `0009_shadow_campaign_gate -> 0010_shadow_collector_audit -> 0011_document_fetch_lineage`，当前唯一 Alembic head 为 `0011_document_fetch_lineage`。任务 11/12 的可重复测试映射、Docker 故障证据与已修复反例记录在 `docs/operations/shadow-campaign-fault-matrix.md`。离线 gate 不能替代任务 13 的真实 DeepSeek smoke。
 
 ## 1. 执行边界
 

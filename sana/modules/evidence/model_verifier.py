@@ -159,6 +159,7 @@ class ModelEvidenceVerifier:
         run_id: UUID,
         verified_at: datetime,
         verifier_version: str,
+        verdict: EvidenceVerdict = EvidenceVerdict.ACCEPTED,
     ) -> VerifiedEvidence:
         quote_start = candidate.chunk.text.index(proposed.quote)
         builder = EvidenceBuilder(
@@ -186,12 +187,44 @@ class ModelEvidenceVerifier:
             verifier_version=verifier_version,
         ).record(
             grounded,
-            verdict=EvidenceVerdict.ACCEPTED,
+            verdict=verdict,
             confidence=proposed.confidence,
             reason_codes=("exact_source_span", *proposed.reason_codes),
             verified_at=verified_at,
         )
         return replace(verified, id=uuid5(candidate.id, f"verified:{verifier_version}"))
+
+    @classmethod
+    def _complete_candidate_audit(
+        cls,
+        candidates: tuple[SelectedCandidate, ...],
+        accepted: tuple[VerifiedEvidence, ...],
+        *,
+        run_id: UUID,
+        verified_at: datetime,
+        verifier_version: str,
+    ) -> tuple[VerifiedEvidence, ...]:
+        by_candidate = {item.candidate.id: item for item in accepted}
+        for candidate in candidates:
+            if candidate.id in by_candidate:
+                continue
+            rejected = cls._record(
+                candidate,
+                ProposedVerification(
+                    candidate.fact_id,
+                    candidate.id,
+                    SupportType.SUPPORTS,
+                    candidate.quote,
+                    0.0,
+                    ("insufficient_direct_support",),
+                ),
+                run_id=run_id,
+                verified_at=verified_at,
+                verifier_version=verifier_version,
+                verdict=EvidenceVerdict.REJECTED,
+            )
+            by_candidate[candidate.id] = rejected
+        return tuple(by_candidate[item.id] for item in candidates)
 
     @staticmethod
     def _fallback(
@@ -248,7 +281,7 @@ class ModelEvidenceVerifier:
             if not isinstance(result.parsed, tuple):
                 raise TypeError("Verifier output did not contain parsed verdicts")
             by_id = {candidate.id: candidate for candidate in candidates}
-            evidence = tuple(
+            accepted = tuple(
                 self._record(
                     by_id[item.candidate_id],
                     item,
@@ -258,13 +291,29 @@ class ModelEvidenceVerifier:
                 )
                 for item in result.parsed
             )
-            return VerifiedBatch(evidence, False)
-        except (TypedError, ValueError, TypeError, KeyError):
             return VerifiedBatch(
-                self._fallback(
+                self._complete_candidate_audit(
                     candidates,
+                    accepted,
                     run_id=invocation_context.run_id,
                     verified_at=verified_at,
+                    verifier_version="deepseek-verifier-v1",
+                ),
+                False,
+            )
+        except (TypedError, ValueError, TypeError, KeyError):
+            accepted = self._fallback(
+                candidates,
+                run_id=invocation_context.run_id,
+                verified_at=verified_at,
+            )
+            return VerifiedBatch(
+                self._complete_candidate_audit(
+                    candidates,
+                    accepted,
+                    run_id=invocation_context.run_id,
+                    verified_at=verified_at,
+                    verifier_version="lexical-fallback-v1",
                 ),
                 True,
                 "model_verifier_fallback",
@@ -278,11 +327,18 @@ class ModelEvidenceVerifier:
         run_id: UUID,
         verified_at: datetime,
     ) -> VerifiedBatch:
+        accepted = cls._fallback(
+            candidates,
+            run_id=run_id,
+            verified_at=verified_at,
+        )
         return VerifiedBatch(
-            cls._fallback(
+            cls._complete_candidate_audit(
                 candidates,
+                accepted,
                 run_id=run_id,
                 verified_at=verified_at,
+                verifier_version="lexical-fallback-v1",
             ),
             False,
         )

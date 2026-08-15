@@ -45,8 +45,11 @@ from sana.platform.db.models.search import (
     AnswerClaim,
     Citation,
     DocumentChunk,
+    DocumentVersion,
+    DocumentVersionFetch,
     EvidenceCandidate,
     FactRequirement,
+    FetchArtifact,
     ProviderAttempt,
     QuerySpec,
     VerifiedEvidence,
@@ -296,7 +299,12 @@ class SqlShadowSnapshotReader:
 
             evidence_rows = (
                 await session.execute(
-                    select(VerifiedEvidence, EvidenceCandidate, DocumentChunk)
+                    select(
+                        VerifiedEvidence,
+                        EvidenceCandidate,
+                        DocumentChunk,
+                        DocumentVersion,
+                    )
                     .outerjoin(
                         EvidenceCandidate,
                         (EvidenceCandidate.tenant_id == VerifiedEvidence.tenant_id)
@@ -307,14 +315,46 @@ class SqlShadowSnapshotReader:
                         (DocumentChunk.tenant_id == EvidenceCandidate.tenant_id)
                         & (DocumentChunk.id == EvidenceCandidate.document_chunk_id),
                     )
+                    .outerjoin(
+                        DocumentVersion,
+                        (DocumentVersion.tenant_id == EvidenceCandidate.tenant_id)
+                        & (
+                            DocumentVersion.id
+                            == EvidenceCandidate.document_version_id
+                        ),
+                    )
                     .where(
                         VerifiedEvidence.tenant_id == lease.tenant_id,
                         VerifiedEvidence.run_id == lease.search_run_id,
                     )
                 )
             ).all()
+            valid_lineage_versions = set(
+                (
+                    await session.scalars(
+                        select(DocumentVersionFetch.document_version_id)
+                        .join(
+                            FetchArtifact,
+                            (
+                                FetchArtifact.tenant_id
+                                == DocumentVersionFetch.tenant_id
+                            )
+                            & (
+                                FetchArtifact.id
+                                == DocumentVersionFetch.fetch_artifact_id
+                            ),
+                        )
+                        .where(
+                            DocumentVersionFetch.tenant_id == lease.tenant_id,
+                            DocumentVersionFetch.run_id == lease.search_run_id,
+                            FetchArtifact.run_id == lease.search_run_id,
+                            FetchArtifact.status == "SUCCEEDED",
+                        )
+                    )
+                ).all()
+            )
             evidence_items: list[SourceEvidence] = []
-            for verified, candidate, chunk in evidence_rows:
+            for verified, candidate, chunk, version in evidence_rows:
                 if candidate is None:
                     raise InvariantViolation(
                         "VerifiedEvidence has no tenant-visible candidate",
@@ -342,6 +382,10 @@ class SqlShadowSnapshotReader:
                             and chunk is not None
                             and chunk.document_version_id
                             == candidate.document_version_id
+                            and version is not None
+                            and version.id == candidate.document_version_id
+                            and candidate.document_version_id
+                            in valid_lineage_versions
                         ),
                     )
                 )

@@ -23,7 +23,16 @@ class CandidateDocument:
     chunks: tuple[tuple[UUID, DocumentChunk], ...]
     url: str
     title: str
-    mapped_fact_id: UUID
+    mapped_fact_ids: tuple[UUID, ...]
+
+    def __post_init__(self) -> None:
+        if not self.mapped_fact_ids:
+            raise ValueError("Candidate document must remain bound to at least one fact")
+        object.__setattr__(
+            self,
+            "mapped_fact_ids",
+            tuple(dict.fromkeys(self.mapped_fact_ids)),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,42 +114,43 @@ class CandidateSelector:
     ) -> tuple[SelectedCandidate, ...]:
         by_fact: dict[UUID, list[SelectedCandidate]] = {key: [] for key in facts}
         for document in documents:
-            fact = facts.get(document.mapped_fact_id)
-            if fact is None:
-                continue
             source_identity, authority = self._authority.classify(
                 document.url,
                 entity=entity,
             )
-            terms = self._terms(entity, fact)
-            for chunk_id, chunk in document.chunks:
-                folded = chunk.text.casefold()
-                matched = {term for term in terms if term in folded}
-                if not matched:
+            for mapped_fact_id in document.mapped_fact_ids:
+                fact = facts.get(mapped_fact_id)
+                if fact is None:
                     continue
-                score = min(1.0, len(matched) / max(1, len(terms)))
-                quote = self._quote_window(chunk.text, terms)
-                quote_hash = hashlib.sha256(quote.encode("utf-8")).hexdigest()
-                by_fact[document.mapped_fact_id].append(
-                    SelectedCandidate(
-                        id=uuid5(
-                            run_id,
-                            f"candidate:{document.mapped_fact_id}:{chunk_id}:{quote_hash}",
-                        ),
-                        fact_id=document.mapped_fact_id,
-                        fact=fact,
-                        document_id=document.document_id,
-                        version=document.version,
-                        chunk_id=chunk_id,
-                        chunk=chunk,
-                        url=document.url,
-                        title=document.title,
-                        source_identity=source_identity,
-                        source_authority=authority,
-                        quote=quote,
-                        score=score,
+                terms = self._terms(entity, fact)
+                for chunk_id, chunk in document.chunks:
+                    folded = chunk.text.casefold()
+                    matched = {term for term in terms if term in folded}
+                    if not matched:
+                        continue
+                    score = min(1.0, len(matched) / max(1, len(terms)))
+                    quote = self._quote_window(chunk.text, terms)
+                    quote_hash = hashlib.sha256(quote.encode("utf-8")).hexdigest()
+                    by_fact[mapped_fact_id].append(
+                        SelectedCandidate(
+                            id=uuid5(
+                                run_id,
+                                f"candidate:{mapped_fact_id}:{chunk_id}:{quote_hash}",
+                            ),
+                            fact_id=mapped_fact_id,
+                            fact=fact,
+                            document_id=document.document_id,
+                            version=document.version,
+                            chunk_id=chunk_id,
+                            chunk=chunk,
+                            url=document.url,
+                            title=document.title,
+                            source_identity=source_identity,
+                            source_authority=authority,
+                            quote=quote,
+                            score=score,
+                        )
                     )
-                )
 
         selected: list[SelectedCandidate] = []
         for fact_id in facts:

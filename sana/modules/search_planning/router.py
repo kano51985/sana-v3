@@ -30,6 +30,15 @@ class AutomaticModeRouter:
         r"(完整来源|全部来源|逐项核实|研究报告|complete sources?|full report)",
         re.I,
     )
+    _CROSS_CHECK = re.compile(
+        r"(交叉核实|交叉验证|多源核实|cross[- ]?check|verify across|multiple sources?)",
+        re.I,
+    )
+    _ENUMERATED_MULTI_FACT = re.compile(
+        r"(列出.{0,24}(?:三|四|五|六|七|八|九|[3-9])(?:种|个|项)?.{0,32}(?:分别|逐一)|"
+        r"(?:three|four|five|six|seven|eight|nine|[3-9]).{0,32}(?:types?|items?|facts?).{0,32}(?:each|explain))",
+        re.I,
+    )
     _FRESHNESS = re.compile(r"(最近|最新|当前|今天|recent|latest|current|today)", re.I)
 
     def __init__(self, policy_version: str) -> None:
@@ -55,6 +64,10 @@ class AutomaticModeRouter:
             reasons.append("high_consequence_cross_check")
         if self._COMPLETE_SOURCES.search(message):
             reasons.append("complete_source_requirement")
+        if self._CROSS_CHECK.search(message):
+            reasons.append("explicit_cross_check")
+        if self._ENUMERATED_MULTI_FACT.search(message):
+            reasons.append("enumerated_multi_fact")
 
         if reasons:
             return RoutingDecision(

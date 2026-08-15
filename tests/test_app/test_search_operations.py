@@ -63,6 +63,81 @@ def test_fast_selection_prioritizes_official_and_diverse_sources() -> None:
 
 
 @pytest.mark.asyncio
+async def test_selection_preserves_all_fact_bindings_for_one_canonical_url() -> None:
+    tenant_id, run_id = uuid4(), uuid4()
+    first_fact, second_fact = uuid4(), uuid4()
+    plan_ref = ArtifactRef("artifact://plan", "1" * 64)
+    first_ref = ArtifactRef("artifact://discovery-1", "2" * 64)
+    second_ref = ArtifactRef("artifact://discovery-2", "3" * 64)
+    input_ref = ArtifactRef("artifact://selection-input", "4" * 64)
+    shared_url = "https://git-scm.com/book/en/v2/Git-Internals-Git-Objects"
+
+    def discovery(fact_id, hit_id):
+        return {
+            "responses": [
+                {
+                    "error": None,
+                    "hits": [
+                        {
+                            "id": str(hit_id),
+                            "fact_id": str(fact_id),
+                            "canonical_url": shared_url,
+                            "score": 1.0,
+                            "rank": 1,
+                        }
+                    ],
+                }
+            ]
+        }
+
+    artifacts = MemoryArtifacts(
+        {
+            input_ref.uri: {
+                "plan_ref": {"uri": plan_ref.uri, "sha256": plan_ref.sha256},
+                "discovery_refs": [
+                    {"uri": first_ref.uri, "sha256": first_ref.sha256},
+                    {"uri": second_ref.uri, "sha256": second_ref.sha256},
+                ],
+            },
+            plan_ref.uri: {"mode": "RESEARCH", "intent": {"entity": "Git"}},
+            first_ref.uri: discovery(first_fact, uuid4()),
+            second_ref.uri: discovery(second_fact, uuid4()),
+        }
+    )
+    operations = SearchStepOperations(
+        uow_factory=None,  # type: ignore[arg-type]
+        artifacts=artifacts,  # type: ignore[arg-type]
+        planner=None,  # type: ignore[arg-type]
+        discovery=None,  # type: ignore[arg-type]
+        fetcher=None,  # type: ignore[arg-type]
+        provider_names=("direct",),
+    )
+    context = StepExecutionContext(
+        tenant_id=tenant_id,
+        run_id=run_id,
+        step_id=uuid4(),
+        step_key="select",
+        step_type=StepType.SELECT,
+        attempt_id=uuid4(),
+        attempt_no=1,
+        trace_context=TraceContext.create(),
+        deadline_at=NOW + timedelta(seconds=5),
+        input_ref=input_ref,
+        cancellation=NeverCancelled(),
+        clock=FrozenClock(NOW),
+    )
+
+    await operations.select(context)
+
+    assert artifacts.last_payload is not None
+    assert len(artifacts.last_payload["selected"]) == 1
+    assert set(artifacts.last_payload["selected"][0]["fact_ids"]) == {
+        str(first_fact),
+        str(second_fact),
+    }
+
+
+@pytest.mark.asyncio
 async def test_synthesis_reports_pipeline_deadline_degradation() -> None:
     tenant_id = uuid4()
     run_id = uuid4()

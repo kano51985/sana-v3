@@ -40,7 +40,7 @@ def document(url: str, fact_id, text: str) -> CandidateDocument:
         ((uuid4(), chunk),),
         url,
         "title",
-        fact_id,
+        (fact_id,),
     )
 
 
@@ -115,3 +115,33 @@ def test_selector_centers_quote_on_relevant_term_cluster() -> None:
     assert "Python 3.14.2 is the latest stable version" in selected[0].quote
     assert selected[0].quote in text
     assert len(selected[0].quote) <= 600
+
+
+def test_one_fetched_document_can_ground_multiple_planned_facts() -> None:
+    first, second = uuid4(), uuid4()
+    facts = {
+        first: FactRequirement("blob", FactType.BACKGROUND, "Git blob object", "Git"),
+        second: FactRequirement("tree", FactType.BACKGROUND, "Git tree object", "Git"),
+    }
+    candidate_document = document(
+        "https://git-scm.com/book/en/v2/Git-Internals-Git-Objects",
+        first,
+        "Git blob object stores content. Git tree object stores directory entries.",
+    )
+    candidate_document = CandidateDocument(
+        candidate_document.document_id,
+        candidate_document.version,
+        candidate_document.chunks,
+        candidate_document.url,
+        candidate_document.title,
+        (first, second),
+    )
+
+    selected = CandidateSelector(max_per_fact=1, max_total=2).select(
+        run_id=uuid4(),
+        entity="Git",
+        facts=facts,
+        documents=(candidate_document,),
+    )
+
+    assert {item.fact_id for item in selected} == {first, second}

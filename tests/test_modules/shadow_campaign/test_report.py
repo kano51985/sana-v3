@@ -97,7 +97,7 @@ def _result(index: int) -> dict[str, object]:
         "source_terminal_at": NOW,
         "source_snapshot_digest": digest,
         "current_source_digest": digest,
-        "collector_schema_version": "shadow-collector-v1",
+        "collector_schema_version": "shadow-collector-v2",
     }
 
 
@@ -133,7 +133,7 @@ def report_snapshot(*, result_count: int = 6) -> CampaignReportSnapshot:
         "harness_commit_sha": "e" * 40,
         "harness_source_clean": True,
         "harness_fileset_hash": "f" * 64,
-        "collector_schema_version": "shadow-collector-v1",
+        "collector_schema_version": "shadow-collector-v2",
         "environment_identity_hash": "1" * 64,
         "environment_snapshot": {
             "compose_project": "shadow-test",

@@ -36,6 +36,7 @@ from sana.platform.db.models.search import (
     Document,
     DocumentChunk,
     DocumentVersion,
+    DocumentVersionFetch,
     EvidenceCandidate,
     FactRequirement,
     FetchArtifact,
@@ -71,6 +72,12 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
         self._artifacts = artifacts
         self._clock = clock
         self._ids = id_factory
+
+    @staticmethod
+    def _fetch_artifact_id(run_id: UUID, fetch_step_key: str) -> UUID:
+        if not fetch_step_key.startswith("fetch:"):
+            raise ValueError("Fetch artifact identity requires a FETCH step key")
+        return uuid5(run_id, f"fetch:{fetch_step_key}")
 
     async def _payload(
         self,
@@ -468,7 +475,7 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
     ) -> None:
         hit = dict(payload["hit"])
         canonical = str(hit["canonical_url"])
-        record_id = uuid5(run.id, f"fetch:{step.step_key}")
+        record_id = self._fetch_artifact_id(run.id, step.step_key)
         await uow.session.execute(
             insert(FetchArtifact)
             .values(
@@ -496,10 +503,15 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
         self,
         uow: TenantUnitOfWork,
         run: SearchRun,
+        step: SearchStep,
         payload: dict[str, Any],
     ) -> None:
         document = dict(payload["document"])
         version = dict(payload["version"])
+        fetch_step_key = step.step_key.replace("extract:", "fetch:", 1)
+        if fetch_step_key == step.step_key:
+            raise ValueError("Extract lineage requires an EXTRACT step key")
+        fetch_artifact_id = self._fetch_artifact_id(run.id, fetch_step_key)
         await uow.session.execute(
             insert(Document)
             .values(
@@ -518,7 +530,7 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
                 id=UUID(str(version["id"])),
                 tenant_id=run.tenant_id,
                 document_id=UUID(str(document["id"])),
-                fetch_artifact_id=None,
+                fetch_artifact_id=fetch_artifact_id,
                 content_hash=str(version["content_hash"]),
                 storage_uri=str(version["text_ref"]["uri"]),
                 media_type=str(version["media_type"]),
@@ -526,6 +538,22 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
                 text_length=int(version["text_length"]),
                 fetched_at=datetime.fromisoformat(str(version["fetched_at"])),
                 document_metadata={},
+            )
+            .on_conflict_do_nothing()
+        )
+        version_id = UUID(str(version["id"]))
+        await uow.session.execute(
+            insert(DocumentVersionFetch)
+            .values(
+                id=uuid5(
+                    run.id,
+                    f"document-version-fetch:{version_id}:{fetch_artifact_id}",
+                ),
+                tenant_id=run.tenant_id,
+                run_id=run.id,
+                document_version_id=version_id,
+                fetch_artifact_id=fetch_artifact_id,
+                created_at=self._clock.now(),
             )
             .on_conflict_do_nothing()
         )
@@ -781,7 +809,7 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
             )
             return
         if step.step_type is StepType.EXTRACT:
-            await self._persist_extract(uow, run, payload)
+            await self._persist_extract(uow, run, step, payload)
             await self._maybe_verify(uow, run, step, trace_context)
             return
         if step.step_type is StepType.VERIFY:

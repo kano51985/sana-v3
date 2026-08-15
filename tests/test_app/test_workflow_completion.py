@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
+from uuid import uuid5
 
 import pytest
 from sqlalchemy.dialects import postgresql
@@ -75,7 +76,7 @@ def _run() -> SearchRun:
         uuid4(),
         uuid4(),
         uuid4(),
-        RoutingDecision(SearchMode.FAST, ("test",), "search-v1", 1.0),
+        RoutingDecision(SearchMode.FAST, ("test",), "search-v2", 1.0),
         SearchPolicy.default().snapshot(SearchMode.FAST, NOW),
     )
 
@@ -234,3 +235,59 @@ async def test_answer_persistence_records_claim_measurement_and_replays_legacy_a
     assert current["fact_requirement_id"] == fact_id
     assert legacy["claim_kind"] is None
     assert legacy["fact_requirement_id"] == fact_id
+
+
+@pytest.mark.asyncio
+async def test_extract_persistence_binds_run_local_fetch_lineage() -> None:
+    run = _run()
+    coordinator = RecordingCoordinator(
+        RecordingArtifacts(),
+        ArtifactRef("artifact://plan", "1" * 64),
+    )
+    session = RecordingSession()
+    document_id, version_id = uuid4(), uuid4()
+    extract = _successful_step(
+        run,
+        "extract:1:hit-id",
+        StepType.EXTRACT,
+        ArtifactRef("artifact://extract", "2" * 64),
+    )
+    payload = {
+        "document": {
+            "id": str(document_id),
+            "canonical_url": "https://example.test/source",
+            "canonical_url_hash": "a" * 64,
+            "title": "Source",
+            "source_host": "example.test",
+        },
+        "version": {
+            "id": str(version_id),
+            "content_hash": "b" * 64,
+            "text_ref": {"uri": "artifact://text", "sha256": "c" * 64},
+            "media_type": "text/plain",
+            "language": "en",
+            "text_length": 10,
+            "fetched_at": NOW.isoformat(),
+        },
+        "chunks": [],
+    }
+
+    await coordinator._persist_extract(
+        SimpleNamespace(session=session),
+        run,
+        extract,
+        payload,
+    )
+
+    version_insert = session.statements[1].compile(dialect=postgresql.dialect())
+    assert version_insert.params["fetch_artifact_id"] == uuid5(
+        run.id,
+        "fetch:fetch:1:hit-id",
+    )
+    lineage_insert = session.statements[2].compile(dialect=postgresql.dialect())
+    assert lineage_insert.params["run_id"] == run.id
+    assert lineage_insert.params["document_version_id"] == version_id
+    assert lineage_insert.params["fetch_artifact_id"] == uuid5(
+        run.id,
+        "fetch:fetch:1:hit-id",
+    )

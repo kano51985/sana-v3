@@ -116,6 +116,7 @@ class FetchArtifact(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "fetch_artifacts"
     __table_args__ = (
         UniqueConstraint("run_id", "url_hash", "attempt_no", name="uq_fetch_artifacts_run_url_attempt"),
+        UniqueConstraint("tenant_id", "id", name="uq_fetch_artifacts_tenant_id_id"),
         Index("ix_fetch_artifacts_tenant_run_status", "tenant_id", "run_id", "status"),
     )
 
@@ -169,6 +170,77 @@ class DocumentVersion(UUIDPrimaryKeyMixin, Base):
     text_length: Mapped[int] = mapped_column(Integer, nullable=False)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     document_metadata: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+
+
+class DocumentVersionFetch(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "document_version_fetches"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id"],
+            ["search_runs.tenant_id", "search_runs.id"],
+            name="fk_document_version_fetches_run",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "document_version_id"],
+            ["document_versions.tenant_id", "document_versions.id"],
+            name="fk_document_version_fetches_version",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "fetch_artifact_id"],
+            ["fetch_artifacts.tenant_id", "fetch_artifacts.id"],
+            name="fk_document_version_fetches_fetch",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "id",
+            name="uq_document_version_fetches_tenant_id_id",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "run_id",
+            "document_version_id",
+            "fetch_artifact_id",
+            name="uq_document_version_fetches_run_version_fetch",
+        ),
+        Index(
+            "ix_document_version_fetches_tenant_run",
+            "tenant_id",
+            "run_id",
+        ),
+        Index(
+            "ix_document_version_fetches_tenant_version",
+            "tenant_id",
+            "document_version_id",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    run_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    document_version_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        nullable=False,
+    )
+    fetch_artifact_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
 
 
 class DocumentChunk(UUIDPrimaryKeyMixin, Base):
