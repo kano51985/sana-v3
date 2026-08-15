@@ -112,6 +112,10 @@ def test_worker_concurrency_and_image_revision_are_frozen() -> None:
     }
     assert "ARG OCI_REVISION=unknown" in dockerfile
     assert 'org.opencontainers.image.revision="${OCI_REVISION}"' in dockerfile
+    assert dockerfile.startswith(
+        "FROM python:3.12-slim@sha256:"
+        "dd29372629eeba2dd003fd9e9d35a5b8236c44727875a0364254b5127af88e65"
+    )
     assert "COPY scripts ./scripts" in dockerfile
     assert "COPY evals ./evals" in dockerfile
 
