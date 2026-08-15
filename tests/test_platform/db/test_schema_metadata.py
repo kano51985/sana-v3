@@ -41,6 +41,7 @@ EXPECTED_TABLES = {
     "model_invocations",
     "shadow_campaigns",
     "shadow_run_results",
+    "shadow_gold_assertion_results",
     "shadow_manual_reviews",
 }
 TENANT_TABLES = EXPECTED_TABLES - {"tenants"}
@@ -110,6 +111,7 @@ def test_document_and_memory_rows_have_tenant_local_identity_constraints() -> No
         "model_invocations",
         "shadow_campaigns",
         "shadow_run_results",
+        "shadow_gold_assertion_results",
         "shadow_manual_reviews",
     ):
         table = Base.metadata.tables[table_name]
@@ -173,7 +175,7 @@ def test_provider_attempt_identity_includes_provider() -> None:
 
 def test_migrations_cover_every_tenant_table_with_forced_rls() -> None:
     versions = Path(__file__).parents[3] / "alembic" / "versions"
-    migration_paths = sorted(versions.glob("000*.py"))
+    migration_paths = sorted(versions.glob("0*.py"))
     modules = [_load_migration(path) for path in migration_paths]
     protected = {
         table

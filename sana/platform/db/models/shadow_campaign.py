@@ -21,7 +21,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from sana.platform.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -287,6 +287,12 @@ class ShadowRunResultRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             name="lease_binding",
         ),
         CheckConstraint(
+            "(collector_lease_owner IS NULL AND collector_lease_expires_at IS NULL) OR "
+            "(scheduling_state = 'SUBMITTED' AND collector_lease_owner IS NOT NULL "
+            "AND collector_lease_expires_at IS NOT NULL)",
+            name="collector_lease_binding",
+        ),
+        CheckConstraint(
             "(reservation_state = 'NONE' AND reserved_provider_calls = 0 AND "
             "reserved_estimated_cost = 0 AND reservation_reserved_at IS NULL AND "
             "budget_settled_at IS NULL AND reservation_released_at IS NULL) OR "
@@ -326,6 +332,13 @@ class ShadowRunResultRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ),
         Index("ix_shadow_results_run", "tenant_id", "search_run_id"),
         Index(
+            "ix_shadow_results_collector_claim",
+            "tenant_id",
+            "campaign_id",
+            "scheduling_state",
+            "collector_lease_expires_at",
+        ),
+        Index(
             "ix_shadow_results_review_selected",
             "tenant_id",
             "campaign_id",
@@ -355,6 +368,8 @@ class ShadowRunResultRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     conversation_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     submission_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     collector_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    collector_lease_owner: Mapped[str | None] = mapped_column(String(200))
+    collector_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     conversation_idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
     message_idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
     submission_request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -391,6 +406,12 @@ class ShadowRunResultRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     error_class: Mapped[str | None] = mapped_column(String(64))
     error_code: Mapped[str | None] = mapped_column(String(200))
     failed_phase: Mapped[str | None] = mapped_column(String(100))
+    error_signal_flags: Mapped[list[str]] = mapped_column(
+        ARRAY(String(100)),
+        nullable=False,
+        default=list,
+        server_default="{}",
+    )
     stable_skip_reason: Mapped[str | None] = mapped_column(String(100))
 
     reserved_provider_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
@@ -411,6 +432,66 @@ class ShadowRunResultRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     collector_schema_version: Mapped[str | None] = mapped_column(String(100))
     retention_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+
+class ShadowGoldAssertionResultRecord(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "shadow_gold_assertion_results"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "id",
+            name="uq_shadow_gold_assertions_tenant_id_id",
+        ),
+        UniqueConstraint(
+            "result_id",
+            "assertion_id",
+            name="uq_shadow_gold_assertions_result_assertion",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "campaign_id"],
+            ["shadow_campaigns.tenant_id", "shadow_campaigns.id"],
+            name="fk_shadow_gold_assertions_campaign",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "campaign_id", "result_id"],
+            [
+                "shadow_run_results.tenant_id",
+                "shadow_run_results.campaign_id",
+                "shadow_run_results.id",
+            ],
+            name="fk_shadow_gold_assertions_result",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        CheckConstraint(
+            "status IN ('PASS', 'FAIL', 'NOT_APPLICABLE')",
+            name="status",
+        ),
+        Index(
+            "ix_shadow_gold_assertions_campaign",
+            "tenant_id",
+            "campaign_id",
+            "status",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    campaign_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    result_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    assertion_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    critical: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    retention_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class ShadowManualReviewRecord(UUIDPrimaryKeyMixin, Base):

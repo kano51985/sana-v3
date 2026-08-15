@@ -32,6 +32,7 @@ from sana.platform.db.models.search import (
 )
 from sana.platform.db.models.shadow_campaign import (
     ShadowCampaignRecord,
+    ShadowGoldAssertionResultRecord,
     ShadowManualReviewRecord,
     ShadowRunResultRecord,
 )
@@ -61,6 +62,7 @@ __all__ = [
     "SearchRunRecord",
     "SearchStepRecord",
     "ShadowCampaignRecord",
+    "ShadowGoldAssertionResultRecord",
     "ShadowManualReviewRecord",
     "ShadowRunResultRecord",
     "StepAttemptRecord",

@@ -105,6 +105,9 @@ def test_result_schema_has_recovery_measurement_and_exactly_once_settlement() ->
         "budget_settled_at",
         "source_snapshot_digest",
         "collector_schema_version",
+        "collector_lease_owner",
+        "collector_lease_expires_at",
+        "error_signal_flags",
         "stable_skip_reason",
     }
     assert expected <= set(result.c.keys())
@@ -137,6 +140,52 @@ def test_result_schema_has_recovery_measurement_and_exactly_once_settlement() ->
         _constraint("shadow_run_results", "ck_shadow_run_results_lease_binding"),
         CheckConstraint,
     )
+    assert isinstance(
+        _constraint(
+            "shadow_run_results",
+            "ck_shadow_run_results_collector_lease_binding",
+        ),
+        CheckConstraint,
+    )
+
+
+def test_gold_assertions_are_structured_without_source_content() -> None:
+    assertion = Base.metadata.tables["shadow_gold_assertion_results"]
+    assert {
+        "tenant_id",
+        "campaign_id",
+        "result_id",
+        "assertion_id",
+        "critical",
+        "status",
+        "reason_code",
+        "created_at",
+        "retention_until",
+    } <= set(assertion.c.keys())
+    assert _column_names(
+        _constraint(
+            "shadow_gold_assertion_results",
+            "uq_shadow_gold_assertions_result_assertion",
+        )
+    ) == {"result_id", "assertion_id"}
+    for forbidden in ("prompt", "answer", "query", "quote", "actual", "expected"):
+        assert forbidden not in assertion.c
+
+
+def test_0010_adds_collector_fencing_and_gold_assertion_rls() -> None:
+    migration = (
+        Path(__file__).parents[3]
+        / "alembic"
+        / "versions"
+        / "0010_shadow_collector_audit.py"
+    )
+    source = migration.read_text(encoding="utf-8")
+
+    assert 'down_revision = "0009_shadow_campaign_gate"' in source
+    assert '"collector_lease_owner"' in source
+    assert '"shadow_gold_assertion_results"' in source
+    assert "ENABLE ROW LEVEL SECURITY" in source
+    assert "FORCE ROW LEVEL SECURITY" in source
 
 
 def test_manual_review_is_structured_and_has_actor_invariant() -> None:

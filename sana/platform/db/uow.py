@@ -19,6 +19,7 @@ from sana.platform.db.repositories import (
 )
 from sana.platform.db.shadow_campaign_repository import SqlShadowCampaignRepository
 from sana.platform.db.shadow_execution_repository import SqlShadowExecutionRepository
+from sana.platform.db.shadow_collector import SqlShadowCollectorRepository
 
 
 class TenantUnitOfWork:
@@ -57,6 +58,10 @@ class TenantUnitOfWork:
         self.events = SqlRunEventRepository(self._session, self.tenant_id)
         self.campaigns = SqlShadowCampaignRepository(self._session, self.tenant_id)
         self.campaign_execution = SqlShadowExecutionRepository(
+            self._session,
+            self.tenant_id,
+        )
+        self.campaign_collector = SqlShadowCollectorRepository(
             self._session,
             self.tenant_id,
         )

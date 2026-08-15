@@ -101,8 +101,10 @@ class GoldAssertion:
 
     def __post_init__(self) -> None:
         assertion_id = self.id.strip()
-        if not assertion_id:
-            raise ValueError("Gold assertion ID cannot be empty")
+        if not assertion_id or len(assertion_id) > 100:
+            raise ValueError(
+                "Gold assertion ID must contain between 1 and 100 characters"
+            )
         if not isinstance(self.critical, bool):
             raise ValueError("Gold assertion critical must be boolean")
         if self.operator not in ALLOWED_OPERATORS:

@@ -20,6 +20,12 @@ if TYPE_CHECKING:
         CampaignSubmissionReceipt,
         CandidateSubmissionReceipt,
     )
+    from sana.modules.shadow_campaign.collector import (
+        CollectionOutcome,
+        CollectionReceipt,
+        CollectorLease,
+        RunSourceSnapshot,
+    )
     from sana.modules.shadow_campaign.scheduler import (
         CampaignSchedulingEvidence,
         RunLease,
@@ -121,9 +127,36 @@ class CampaignExecutionRepository(Protocol):
     ) -> CampaignSubmissionReceipt: ...
 
 
+class CampaignCollectorRepository(Protocol):
+    async def claim_next(
+        self,
+        tenant_id: UUID,
+        campaign_id: UUID,
+        worker_id: str,
+        lease_duration: timedelta,
+    ) -> CollectorLease | None: ...
+
+    async def renew(
+        self,
+        lease: CollectorLease,
+        lease_duration: timedelta,
+    ) -> None: ...
+
+    async def persist(
+        self,
+        lease: CollectorLease,
+        outcome: CollectionOutcome,
+    ) -> CollectionReceipt: ...
+
+
+class CampaignSnapshotReader(Protocol):
+    async def read(self, lease: CollectorLease) -> RunSourceSnapshot: ...
+
+
 class CampaignUnitOfWork(Protocol):
     campaigns: CampaignRepository
     campaign_execution: CampaignExecutionRepository
+    campaign_collector: CampaignCollectorRepository
 
     async def __aenter__(self) -> "CampaignUnitOfWork": ...
 
