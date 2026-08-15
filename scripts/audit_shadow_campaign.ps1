@@ -18,7 +18,8 @@ $RlsTables = @(
     'shadow_campaigns',
     'shadow_run_results',
     'shadow_gold_assertion_results',
-    'shadow_manual_reviews'
+    'shadow_manual_reviews',
+    'document_version_fetches'
 )
 
 function Invoke-DockerText([string[]]$DockerArguments, [string]$Operation) {
@@ -159,6 +160,32 @@ SELECT json_build_object(
   'result_estimated_cost', (SELECT coalesce(sum(estimated_cost), 0)::text FROM shadow_run_results r WHERE r.campaign_id = c.id),
   'invocation_count', (SELECT count(*) FROM model_invocations m WHERE m.run_id IN (SELECT search_run_id FROM shadow_run_results r WHERE r.campaign_id = c.id)),
   'provider_called_count', (SELECT count(*) FROM model_invocations m WHERE m.provider_called AND m.run_id IN (SELECT search_run_id FROM shadow_run_results r WHERE r.campaign_id = c.id)),
+  'candidate_evidence_count', (
+    SELECT count(*)
+    FROM evidence_candidates e
+    JOIN shadow_run_results r
+      ON r.tenant_id = e.tenant_id AND r.search_run_id = e.run_id
+    WHERE r.campaign_id = c.id
+  ),
+  'run_local_lineage_count', (
+    SELECT count(*)
+    FROM evidence_candidates e
+    JOIN shadow_run_results r
+      ON r.tenant_id = e.tenant_id AND r.search_run_id = e.run_id
+    WHERE r.campaign_id = c.id
+      AND EXISTS (
+        SELECT 1
+        FROM document_version_fetches dvf
+        JOIN fetch_artifacts f
+          ON f.tenant_id = dvf.tenant_id
+         AND f.run_id = dvf.run_id
+         AND f.id = dvf.fetch_artifact_id
+        WHERE dvf.tenant_id = e.tenant_id
+          AND dvf.run_id = e.run_id
+          AND dvf.document_version_id = e.document_version_id
+          AND f.status = 'SUCCEEDED'
+      )
+  ),
   'active_run_count', (SELECT count(*) FROM search_runs s WHERE s.status IN ('QUEUED', 'RUNNING', 'WAITING') AND s.id IN (SELECT search_run_id FROM shadow_run_results r WHERE r.campaign_id = c.id))
 )::text
 FROM shadow_campaigns c
@@ -198,14 +225,15 @@ Assert-Equal ([int]$audit.max_submission_attempt_count) 1 'submission attempt co
 Assert-Zero $audit.failed_count 'Campaign failed Result count'
 Assert-Zero $audit.active_reservation_count 'active reservation count'
 Assert-Zero $audit.active_run_count 'active Campaign SearchRun count'
+Assert-Equal ([int]$audit.run_local_lineage_count) ([int]$audit.candidate_evidence_count) 'run-local evidence fetch lineage'
 
 $globalSql = @"
 SELECT json_build_object(
   'pending_outbox', (SELECT count(*) FROM outbox_events WHERE published_at IS NULL),
   'active_runs', (SELECT count(*) FROM search_runs WHERE status IN ('QUEUED', 'RUNNING', 'WAITING')),
   'active_reservations', (SELECT count(*) FROM shadow_run_results WHERE reservation_state = 'ACTIVE'),
-  'rls_table_count', (SELECT count(*) FROM pg_class WHERE relname = ANY(ARRAY['shadow_campaigns','shadow_run_results','shadow_gold_assertion_results','shadow_manual_reviews'])),
-  'rls_enabled_count', (SELECT count(*) FROM pg_class WHERE relname = ANY(ARRAY['shadow_campaigns','shadow_run_results','shadow_gold_assertion_results','shadow_manual_reviews']) AND relrowsecurity AND relforcerowsecurity)
+  'rls_table_count', (SELECT count(*) FROM pg_class WHERE relname = ANY(ARRAY['shadow_campaigns','shadow_run_results','shadow_gold_assertion_results','shadow_manual_reviews','document_version_fetches'])),
+  'rls_enabled_count', (SELECT count(*) FROM pg_class WHERE relname = ANY(ARRAY['shadow_campaigns','shadow_run_results','shadow_gold_assertion_results','shadow_manual_reviews','document_version_fetches']) AND relrowsecurity AND relforcerowsecurity)
 )::text;
 "@
 $globalAudit = (Invoke-DockerText @(
@@ -345,6 +373,7 @@ Write-Output "result_run_uniqueness=PASS ($($audit.result_count)/$($audit.distin
 Write-Output 'ledger_and_idle_state=PASS'
 Write-Output 'image_and_worker_health=PASS'
 Write-Output 'force_rls=PASS'
+Write-Output 'run_local_fetch_lineage=PASS'
 Write-Output 'report_integrity=PASS'
 Write-Output 'privacy_scan=PASS'
 if ($OfflineFixture) {

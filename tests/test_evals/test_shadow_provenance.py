@@ -56,7 +56,7 @@ def _attestation() -> dict[str, object]:
             "source_clean": True,
             "image_id": IMAGE,
             "oci_revision": "a" * 40,
-            "alembic_head": "0011_document_fetch_lineage",
+            "alembic_head": "0012_fetch_run_binding",
             "config_hash": "c" * 64,
         },
         "harness": {
@@ -82,7 +82,7 @@ def _attestation() -> dict[str, object]:
             "initial_queue_depth": 0,
             "active_non_campaign_runs": 0,
             "pending_outbox": 0,
-            "migration_head": "0011_document_fetch_lineage",
+            "migration_head": "0012_fetch_run_binding",
             "config_hash": "c" * 64,
             "topology_hash": snapshot_hash(topology_source),
         },

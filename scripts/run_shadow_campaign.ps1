@@ -206,7 +206,7 @@ function Prepare-ShadowEnvironment {
     }
 
     $migrationHead = Get-ComposeOutput @('exec', '-T', 'postgres', 'psql', '-U', 'sana_shadow_owner', '-d', 'sana_shadow', '-Atc', 'SELECT version_num FROM alembic_version')
-    if ($migrationHead -ne '0011_document_fetch_lineage') {
+    if ($migrationHead -ne '0012_fetch_run_binding') {
         throw "Unexpected migration head: $migrationHead"
     }
     $activeRuns = [int](Get-ComposeOutput @('exec', '-T', 'postgres', 'psql', '-U', 'sana_shadow_owner', '-d', 'sana_shadow', '-Atc', "SELECT count(*) FROM search_runs r WHERE r.status IN ('QUEUED','RUNNING') AND NOT EXISTS (SELECT 1 FROM shadow_run_results s WHERE s.tenant_id=r.tenant_id AND s.search_run_id=r.id)"))

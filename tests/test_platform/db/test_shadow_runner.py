@@ -147,7 +147,7 @@ async def test_stopping_recovery_and_unknown_failure_close_the_ledger() -> None:
             True,
             f"candidate@sha256:{'a' * 64}",
             "a" * 40,
-            "0011_document_fetch_lineage",
+            "0012_fetch_run_binding",
             "a" * 64,
             "b" * 40,
             True,

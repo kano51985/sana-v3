@@ -204,6 +204,21 @@ def test_0011_adds_run_local_document_fetch_lineage() -> None:
     assert "FORCE ROW LEVEL SECURITY" in source
 
 
+def test_0012_enforces_fetch_and_observation_run_binding() -> None:
+    migration = (
+        Path(__file__).parents[3]
+        / "alembic"
+        / "versions"
+        / "0012_fetch_run_binding.py"
+    )
+    source = migration.read_text(encoding="utf-8")
+
+    assert 'down_revision = "0011_document_fetch_lineage"' in source
+    assert '"uq_fetch_artifacts_tenant_run_id"' in source
+    assert '["tenant_id", "run_id", "fetch_artifact_id"]' in source
+    assert '["tenant_id", "run_id", "id"]' in source
+
+
 def test_manual_review_is_structured_and_has_actor_invariant() -> None:
     review = Base.metadata.tables["shadow_manual_reviews"]
     assert {

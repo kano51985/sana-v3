@@ -177,6 +177,8 @@ def test_post_campaign_auditor_is_fail_closed_and_secret_safe() -> None:
     assert "Campaign environment identity" in auditor
     assert "active_reservation_count" in auditor
     assert "provider_called_count" in auditor
+    assert "run_local_lineage_count" in auditor
+    assert "document_version_fetches" in auditor
     assert "relforcerowsecurity" in auditor
     assert "LLEN" in auditor
     assert "{{.State.Status}}|{{.State.Health.Status}}|{{.State.Paused}}" in auditor
@@ -185,4 +187,5 @@ def test_post_campaign_auditor_is_fail_closed_and_secret_safe() -> None:
     assert "@('logs', $container)" in auditor
     assert "Campaign report integrity/privacy scan failed" in auditor
     assert "privacy_scan=PASS" in auditor
+    assert "run_local_fetch_lineage=PASS" in auditor
     assert "Write-Output $protectedValues" not in auditor

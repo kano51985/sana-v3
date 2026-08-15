@@ -117,6 +117,12 @@ class FetchArtifact(UUIDPrimaryKeyMixin, Base):
     __table_args__ = (
         UniqueConstraint("run_id", "url_hash", "attempt_no", name="uq_fetch_artifacts_run_url_attempt"),
         UniqueConstraint("tenant_id", "id", name="uq_fetch_artifacts_tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "run_id",
+            "id",
+            name="uq_fetch_artifacts_tenant_run_id",
+        ),
         Index("ix_fetch_artifacts_tenant_run_status", "tenant_id", "run_id", "status"),
     )
 
@@ -192,8 +198,12 @@ class DocumentVersionFetch(UUIDPrimaryKeyMixin, Base):
             initially="DEFERRED",
         ),
         ForeignKeyConstraint(
-            ["tenant_id", "fetch_artifact_id"],
-            ["fetch_artifacts.tenant_id", "fetch_artifacts.id"],
+            ["tenant_id", "run_id", "fetch_artifact_id"],
+            [
+                "fetch_artifacts.tenant_id",
+                "fetch_artifacts.run_id",
+                "fetch_artifacts.id",
+            ],
             name="fk_document_version_fetches_fetch",
             ondelete="CASCADE",
             deferrable=True,
