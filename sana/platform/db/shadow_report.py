@@ -709,6 +709,14 @@ class SqlShadowReportGateway:
 
     @staticmethod
     def _terminal_status(campaign: ShadowCampaignRecord) -> CampaignStatus:
+        if (
+            campaign.status == CampaignStatus.PAUSED.value
+            or campaign.stop_intent == "PAUSE"
+        ):
+            raise InvariantViolation(
+                "Paused Campaign cannot bind a final release report",
+                code="paused_campaign_finalization_forbidden",
+            )
         if campaign.status == CampaignStatus.COMPLETED.value:
             raise InvariantViolation(
                 "Completed Campaign is missing its final report binding",

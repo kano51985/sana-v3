@@ -4,6 +4,7 @@ from datetime import timedelta
 from decimal import Decimal
 import hashlib
 import os
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -250,3 +251,14 @@ async def test_report_gateway_fences_stale_input_and_binds_one_final_report(tmp_
                 {"tenant": tenant_id},
             )
         await engine.dispose()
+
+
+def test_report_gateway_defensively_rejects_paused_final_binding() -> None:
+    for campaign in (
+        SimpleNamespace(status="PAUSED", stop_intent="PAUSE"),
+        SimpleNamespace(status="STOPPING", stop_intent="PAUSE"),
+    ):
+        with pytest.raises(InvariantViolation) as captured:
+            SqlShadowReportGateway._terminal_status(campaign)
+
+        assert captured.value.code == "paused_campaign_finalization_forbidden"

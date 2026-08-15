@@ -226,6 +226,32 @@ def test_paused_campaign_never_turns_a_snapshot_into_a_final_gate() -> None:
     assert prepared.finalizable is False
 
 
+def test_paused_campaign_with_hard_failure_still_remains_resumable() -> None:
+    original = report_snapshot()
+    payload = canonical_snapshot(original.decision_input)
+    payload["campaign"] = deepcopy(dict(payload["campaign"]))
+    payload["campaign"]["stop_intent"] = "PAUSE"
+    payload["results"] = [deepcopy(dict(item)) for item in payload["results"]]
+    payload["results"][0]["current_source_digest"] = "0" * 64
+    paused = CampaignReportSnapshot(
+        original.tenant_id,
+        original.campaign_id,
+        original.owner_user_id,
+        CampaignStatus.PAUSED,
+        original.campaign_version,
+        original.database_now,
+        original.review_deadline_at,
+        payload,
+    )
+
+    prepared = CampaignReportBuilder().prepare(paused)
+
+    assert prepared.decision.status is GateStatus.PENDING
+    assert prepared.decision.decision_state == "PENDING_EXECUTION"
+    assert prepared.finalizable is False
+    assert prepared.finalization_reason is None
+
+
 def test_ledger_or_source_drift_is_a_fatal_gate_failure() -> None:
     original = report_snapshot()
     payload = canonical_snapshot(original.decision_input)

@@ -1016,6 +1016,13 @@ class CampaignReportBuilder:
         provisional: GateDecision,
         policy: GatePolicy,
     ) -> tuple[bool, str | None]:
+        # PAUSE is a non-terminal operator checkpoint even when the partial
+        # snapshot contains a hard candidate defect. Persist the defect in the
+        # provisional report, but never bind a final gate or consume resume.
+        if snapshot.campaign_status is CampaignStatus.PAUSED or campaign.get(
+            "stop_intent"
+        ) == "PAUSE":
+            return False, None
         hard_failure = any(
             rule.rule_id == "hard_safety" and not rule.passed
             for rule in provisional.rules
@@ -1027,10 +1034,6 @@ class CampaignReportBuilder:
             CampaignStatus.ABORTED,
         }:
             return True, "terminal_campaign"
-        if snapshot.campaign_status is CampaignStatus.PAUSED or campaign.get(
-            "stop_intent"
-        ) == "PAUSE":
-            return False, None
         max_runs = _integer(campaign.get("max_runs", 0), "max_runs")
         execution_sealed = (
             len(results) == max_runs
