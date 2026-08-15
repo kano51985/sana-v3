@@ -76,7 +76,7 @@ def _run() -> SearchRun:
         uuid4(),
         uuid4(),
         uuid4(),
-        RoutingDecision(SearchMode.FAST, ("test",), "search-v8", 1.0),
+        RoutingDecision(SearchMode.FAST, ("test",), "search-v9", 1.0),
         SearchPolicy.default().snapshot(SearchMode.FAST, NOW),
     )
 

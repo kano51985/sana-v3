@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -24,6 +25,11 @@ class ParsingGateway:
 
     async def generate(self, role, messages, *, parser, **kwargs):
         return ModelResult("", "model", parsed=parser.parse(self.text))
+
+
+class ForbiddenGateway:
+    async def generate(self, *args, **kwargs):
+        raise AssertionError("exact official values must not require a model call")
 
 
 def candidate() -> SelectedCandidate:
@@ -135,6 +141,96 @@ async def test_model_omission_persists_a_rejected_candidate_audit() -> None:
         deadline=NOW + timedelta(seconds=5),
         verified_at=NOW,
     )
+
+
+def explicit_http_candidate() -> SelectedCandidate:
+    base = candidate()
+    text = '404,Not Found,"[RFC9110, Section 15.5.5]"'
+    version = replace(
+        base.version,
+        content_hash=hashlib.sha256(text.encode()).hexdigest(),
+        text=text,
+    )
+    chunk = DocumentChunk(
+        0,
+        text,
+        hashlib.sha256(text.encode()).hexdigest(),
+        8,
+        0,
+        len(text),
+    )
+    return replace(
+        base,
+        fact_id=uuid4(),
+        fact=FactRequirement(
+            "http_404_reason_phrase",
+            FactType.CURRENT_VALUE,
+            "The English reason phrase for HTTP status code 404",
+            "HTTP",
+        ),
+        version=version,
+        chunk_id=uuid4(),
+        chunk=chunk,
+        url=(
+            "https://www.iana.org/assignments/http-status-codes/"
+            "http-status-codes-1.csv"
+        ),
+        source_identity="iana.org",
+        quote=text,
+        score=0.84,
+    )
+
+
+@pytest.mark.asyncio
+async def test_exact_official_numeric_value_skips_model_verification() -> None:
+    item = explicit_http_candidate()
+
+    result = await ModelEvidenceVerifier(ForbiddenGateway()).verify(
+        (item,),
+        invocation_context=context(item),
+        deadline=NOW + timedelta(seconds=5),
+        verified_at=NOW,
+    )
+
+    assert result.degraded is False
+    assert result.evidence[0].verdict is EvidenceVerdict.ACCEPTED
+    assert result.evidence[0].candidate.quote == "404,Not Found"
+    assert result.evidence[0].verifier_version == "deterministic-explicit-value-v1"
+
+
+@pytest.mark.asyncio
+async def test_numeric_mention_without_adjacent_value_still_uses_model() -> None:
+    item = explicit_http_candidate()
+    text = "Heuristically cacheable codes include 404, 405, and 410."
+    version = replace(
+        item.version,
+        content_hash=hashlib.sha256(text.encode()).hexdigest(),
+        text=text,
+    )
+    item = replace(
+        item,
+        version=version,
+        chunk=DocumentChunk(
+            0,
+            text,
+            hashlib.sha256(text.encode()).hexdigest(),
+            8,
+            0,
+            len(text),
+        ),
+        quote=text,
+    )
+
+    result = await ModelEvidenceVerifier(
+        ParsingGateway('{"verdicts":[]}')
+    ).verify(
+        (item,),
+        invocation_context=context(item),
+        deadline=NOW + timedelta(seconds=5),
+        verified_at=NOW,
+    )
+
+    assert result.evidence[0].verdict is EvidenceVerdict.REJECTED
 
     assert len(result.evidence) == 1
     assert result.evidence[0].candidate.id == item.id

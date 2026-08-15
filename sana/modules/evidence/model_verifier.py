@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Protocol
@@ -28,6 +29,7 @@ from sana.modules.model_gateway.domain import (
     ModelResult,
     ModelRole,
 )
+from sana.modules.search_planning.domain import FactType
 from sana.modules.shared.errors import TypedError
 from sana.modules.shared.ids import DeterministicIdFactory
 
@@ -118,8 +120,53 @@ class VerificationParser:
 
 
 class ModelEvidenceVerifier:
+    _NUMERIC_IDENTIFIER = re.compile(r"\d+(?:[.-]\d+)*")
+
     def __init__(self, gateway: VerificationGateway) -> None:
         self._gateway = gateway
+
+    @classmethod
+    def _deterministic_explicit_value(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        if (
+            candidate.fact.fact_type is not FactType.CURRENT_VALUE
+            or candidate.source_authority is not SourceAuthority.OFFICIAL
+            or candidate.score < 0.8
+        ):
+            return None
+        identifiers = tuple(
+            dict.fromkeys(
+                cls._NUMERIC_IDENTIFIER.findall(
+                    f"{candidate.fact.key} {candidate.fact.description} "
+                    f"{candidate.fact.subject}"
+                )
+            )
+        )
+        if not identifiers:
+            return None
+        exact_spans: list[tuple[int, int]] = []
+        for identifier in identifiers:
+            match = re.search(
+                rf"(?<!\d){re.escape(identifier)}(?!\d)\s*"
+                r"(?:,\s*|\(\s*|:\s*|=\s*|[-–—]\s*)"
+                r"[A-Za-z]+(?:[ -][A-Za-z]+){0,5}",
+                candidate.quote,
+            )
+            if match is None:
+                return None
+            exact_spans.append(match.span())
+        quote_start = min(start for start, _ in exact_spans)
+        quote_end = max(end for _, end in exact_spans)
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            candidate.quote[quote_start:quote_end].strip(),
+            0.99,
+            ("direct_support", "explicit_value"),
+        )
 
     @staticmethod
     def _messages(candidates: tuple[SelectedCandidate, ...]) -> tuple[ModelMessage, ...]:
@@ -268,11 +315,41 @@ class ModelEvidenceVerifier:
     ) -> VerifiedBatch:
         if not candidates:
             return VerifiedBatch((), False)
-        parser = VerificationParser(candidates)
+        deterministic = tuple(
+            self._record(
+                candidate,
+                proposed,
+                run_id=invocation_context.run_id,
+                verified_at=verified_at,
+                verifier_version="deterministic-explicit-value-v1",
+            )
+            for candidate in candidates
+            if (proposed := self._deterministic_explicit_value(candidate)) is not None
+        )
+        resolved_fact_ids = {
+            item.fact_requirement_id for item in deterministic
+        }
+        model_candidates = tuple(
+            candidate
+            for candidate in candidates
+            if candidate.fact_id not in resolved_fact_ids
+        )
+        if not model_candidates:
+            return VerifiedBatch(
+                self._complete_candidate_audit(
+                    candidates,
+                    deterministic,
+                    run_id=invocation_context.run_id,
+                    verified_at=verified_at,
+                    verifier_version="deterministic-explicit-value-v1",
+                ),
+                False,
+            )
+        parser = VerificationParser(model_candidates)
         try:
             result = await self._gateway.generate(
                 ModelRole.VERIFIER,
-                self._messages(candidates),
+                self._messages(model_candidates),
                 deadline=deadline,
                 budget=ModelCallBudget(2, 24_000),
                 parser=parser,
@@ -280,8 +357,8 @@ class ModelEvidenceVerifier:
             )
             if not isinstance(result.parsed, tuple):
                 raise TypeError("Verifier output did not contain parsed verdicts")
-            by_id = {candidate.id: candidate for candidate in candidates}
-            accepted = tuple(
+            by_id = {candidate.id: candidate for candidate in model_candidates}
+            accepted = deterministic + tuple(
                 self._record(
                     by_id[item.candidate_id],
                     item,
@@ -303,10 +380,11 @@ class ModelEvidenceVerifier:
             )
         except (TypedError, ValueError, TypeError, KeyError):
             accepted = self._fallback(
-                candidates,
+                model_candidates,
                 run_id=invocation_context.run_id,
                 verified_at=verified_at,
             )
+            accepted = deterministic + accepted
             return VerifiedBatch(
                 self._complete_candidate_audit(
                     candidates,
