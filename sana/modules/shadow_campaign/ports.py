@@ -36,6 +36,11 @@ if TYPE_CHECKING:
         CampaignParentEvidence,
         ExistingCampaign,
     )
+    from sana.modules.shadow_campaign.review import (
+        ReviewProjection,
+        ReviewReceipt,
+        ReviewSubmission,
+    )
 
 
 class CampaignRepository(Protocol):
@@ -153,10 +158,25 @@ class CampaignSnapshotReader(Protocol):
     async def read(self, lease: CollectorLease) -> RunSourceSnapshot: ...
 
 
+class CampaignReviewRepository(Protocol):
+    async def add(self, submission: ReviewSubmission) -> ReviewReceipt: ...
+
+
+class CampaignReviewProjectionReader(Protocol):
+    async def read(
+        self,
+        tenant_id: UUID,
+        user_id: UUID,
+        campaign_id: UUID,
+        result_id: UUID,
+    ) -> ReviewProjection | None: ...
+
+
 class CampaignUnitOfWork(Protocol):
     campaigns: CampaignRepository
     campaign_execution: CampaignExecutionRepository
     campaign_collector: CampaignCollectorRepository
+    campaign_reviews: CampaignReviewRepository
 
     async def __aenter__(self) -> "CampaignUnitOfWork": ...
 
