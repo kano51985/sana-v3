@@ -99,10 +99,17 @@ def test_runner_has_read_only_attestation_and_no_docker_socket() -> None:
 
 def test_worker_concurrency_and_image_revision_are_frozen() -> None:
     config = _config()
-    worker_command = config["services"]["worker"]["command"]
+    services = config["services"]
+    worker = services["worker"]
+    worker_command = worker["command"]
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
 
     assert worker_command[worker_command.index("--concurrency") + 1] == "2"
+    assert "SANA_WORKER_LIVE_EVAL_MAX_RUNS" not in worker["environment"]
+    assert "inspect ping" in worker["healthcheck"]["test"][1]
+    assert services["campaign-runner"]["depends_on"]["worker"] == {
+        "condition": "service_healthy"
+    }
     assert "ARG OCI_REVISION=unknown" in dockerfile
     assert 'org.opencontainers.image.revision="${OCI_REVISION}"' in dockerfile
     assert "COPY scripts ./scripts" in dockerfile
@@ -118,6 +125,8 @@ def test_host_launcher_hashes_sanitized_inputs_and_never_accepts_token_argv() ->
     assert "config', '--no-interpolate', '--format', 'json'" in launcher
     assert "status --porcelain=v1 --untracked-files=all" in launcher
     assert "org.opencontainers.image.revision" in launcher
+    assert ".HostConfig.PortBindings" in launcher
+    assert " compose @ComposeArgs port " not in launcher
     assert "docker.sock" in launcher
     assert "down', '--remove-orphans'" in launcher
     assert "down', '--volumes'" not in launcher

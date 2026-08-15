@@ -201,7 +201,6 @@ services:
       SANA_WORKER_DEEPSEEK_BASE_URL: ${SANA_WORKER_DEEPSEEK_BASE_URL:-https://api.deepseek.com}
       SANA_WORKER_MODEL_THINKING: disabled
       SANA_WORKER_MODEL_OUTPUT_FORMAT: json_object
-      SANA_WORKER_LIVE_EVAL_MAX_RUNS: "120"
       SANA_WORKER_DISCOVERY_PROVIDERS: direct,bing_rss
       SANA_WORKER_MAX_SELECTED_HITS: "4"
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY}
@@ -227,6 +226,15 @@ services:
         condition: service_healthy
       artifact-init:
         condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          celery -A sana.app.worker_entrypoint:app inspect ping
+          --destination "celery@$$HOSTNAME" --timeout 3 | grep -q pong
+      interval: 5s
+      timeout: 5s
+      retries: 24
     mem_limit: 2g
     cpus: 2.0
     pids_limit: 400
@@ -249,7 +257,7 @@ services:
       dispatcher:
         condition: service_started
       worker:
-        condition: service_started
+        condition: service_healthy
     mem_limit: 512m
     cpus: 1.0
     pids_limit: 200

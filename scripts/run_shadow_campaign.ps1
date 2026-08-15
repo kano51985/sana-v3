@@ -60,8 +60,11 @@ function Get-ComposeOutput([string[]]$Arguments) {
 }
 
 function Assert-NoPublishedPort([string]$Service, [string]$Port) {
-    $output = & docker compose @ComposeArgs port $Service $Port 2>$null
-    if ($LASTEXITCODE -eq 0 -and (($output -join "`n").Trim())) {
+    $containerId = Get-ComposeOutput @('ps', '-q', $Service)
+    if (-not $containerId) { throw "$Service container is not running" }
+    $bindings = (& docker inspect --format '{{json .HostConfig.PortBindings}}' $containerId).Trim()
+    Assert-LastExitCode "docker inspect $Service port bindings"
+    if ($bindings -notin @('{}', 'null', '')) {
         throw "$Service must not publish port $Port"
     }
 }
