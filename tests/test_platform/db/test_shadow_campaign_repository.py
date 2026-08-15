@@ -10,7 +10,14 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import text
 
-from sana.modules.orchestration.domain import SearchMode
+from sana.app.api.services import DatabaseConversationCatalogService
+from sana.modules.conversation.domain import (
+    ConversationService,
+    SubmitMessageCommand,
+)
+from sana.modules.identity.domain import Principal
+from sana.modules.orchestration.domain import RoutingDecision, SearchMode
+from sana.modules.orchestration.policy import SearchPolicy
 from sana.modules.shadow_campaign.budget import (
     CampaignBudgetService,
     SettlementUsage,
@@ -19,6 +26,10 @@ from sana.modules.shadow_campaign.domain import (
     CampaignStatus,
     ReservationState,
     snapshot_hash,
+)
+from sana.modules.shadow_campaign.execution import (
+    CampaignExecutionService,
+    CandidateSubmissionReceipt,
 )
 from sana.modules.shadow_campaign.manifest import (
     Answerability,
@@ -40,13 +51,77 @@ from sana.modules.shadow_campaign.service import (
 from sana.modules.shadow_campaign.scheduler import CampaignSchedulingService
 from sana.modules.shared.clock import FrozenClock
 from sana.modules.shared.errors import InvariantViolation
-from sana.modules.shared.ids import DeterministicIdFactory
+from sana.modules.shared.ids import (
+    DeterministicIdFactory,
+    RandomIdFactory,
+    TraceContext,
+)
 from sana.platform.db.session import create_database_engine, create_session_factory
 from sana.platform.db.uow import TenantUnitOfWorkFactory
 
 
 DATABASE_URL = os.environ.get("SANA_TEST_DATABASE_URL")
 NOW = datetime(2026, 8, 15, tzinfo=UTC)
+
+
+class InProcessCandidateGateway:
+    def __init__(
+        self,
+        principal: Principal,
+        catalog: DatabaseConversationCatalogService,
+        conversations: ConversationService,
+        policy_version: str,
+    ) -> None:
+        self._principal = principal
+        self._catalog = catalog
+        self._conversations = conversations
+        self._policy_version = policy_version
+        self.fail_next_submission = False
+
+    async def create_conversation(
+        self,
+        *,
+        title: str,
+        idempotency_key: str,
+    ):
+        created = await self._catalog.create(
+            self._principal,
+            title,
+            idempotency_key,
+        )
+        return created.id
+
+    async def submit_message(
+        self,
+        *,
+        conversation_id,
+        content: str,
+        idempotency_key: str,
+    ) -> CandidateSubmissionReceipt:
+        if self.fail_next_submission:
+            self.fail_next_submission = False
+            raise TimeoutError("simulated failure before Message API acceptance")
+        receipt = await self._conversations.submit_message(
+            SubmitMessageCommand(
+                tenant_id=self._principal.tenant_id,
+                user_id=self._principal.user_id,
+                conversation_id=conversation_id,
+                content=content,
+                idempotency_key=idempotency_key,
+                routing=RoutingDecision(
+                    SearchMode.FAST,
+                    ("shadow_integration",),
+                    self._policy_version,
+                    1.0,
+                ),
+                trace_context=TraceContext.create(),
+            )
+        )
+        return CandidateSubmissionReceipt(
+            receipt.message_id,
+            receipt.response_run_id,
+            receipt.search_run_id,
+        )
 
 
 @pytest.mark.postgres
@@ -101,7 +176,7 @@ async def test_campaign_create_retry_and_lifecycle_are_atomic() -> None:
             "test-rate-v1",
             Decimal("0.1"),
             Decimal("0.2"),
-            Decimal("0.004"),
+            Decimal("0.006"),
         ),
         provenance=provenance,
         retention_until=NOW + timedelta(days=30),
@@ -183,14 +258,99 @@ async def test_campaign_create_retry_and_lifecycle_are_atomic() -> None:
         first_lease = next(item for item in active if item.schedule_ordinal == 1)
         second_lease = next(item for item in active if item.schedule_ordinal == 2)
         first_reservation = await budget.reserve_run(first_lease)
+        assert first_reservation.allowed is True
+        assert first_reservation.reserved_provider_calls == 8
+        assert first_reservation.reserved_estimated_cost == Decimal("0.006")
+        assert first_lease.reservation_state is ReservationState.ACTIVE
+
+        search_policy = SearchPolicy.default()
+        principal = Principal(tenant_id, user_id, "integration", str(user_id))
+        candidate = InProcessCandidateGateway(
+            principal,
+            DatabaseConversationCatalogService(
+                uow_factory,
+                clock,
+                RandomIdFactory(),
+            ),
+            ConversationService(
+                uow_factory,
+                RandomIdFactory(),
+                clock,
+                search_policy,
+            ),
+            search_policy.version,
+        )
+        execution = CampaignExecutionService(uow_factory, candidate)
+        prompt_by_case = {item.id: item.prompt for item in cases}
+        candidate.fail_next_submission = True
+        with pytest.raises(TimeoutError, match="before Message API"):
+            await execution.execute(
+                first_lease,
+                prompt_by_case[first_lease.case_id],
+            )
+        assert first_lease.state.value == "CONVERSATION_BOUND"
+        bound_conversation_id = first_lease.conversation_id
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("SELECT set_config('app.tenant_id', :tenant, true)"),
+                {"tenant": str(tenant_id)},
+            )
+            await connection.execute(
+                text(
+                    "UPDATE shadow_run_results "
+                    "SET lease_expires_at = clock_timestamp() - interval '1 second' "
+                    "WHERE id = :result"
+                ),
+                {"result": first_lease.id},
+            )
+        recovered_first = await scheduler.claim_next(
+            tenant_id,
+            first.id,
+            "worker-recovery",
+        )
+        assert recovered_first is not None
+        assert recovered_first.state.value == "CONVERSATION_BOUND"
+        assert recovered_first.conversation_id == bound_conversation_id
+        submission = await execution.execute(
+            recovered_first,
+            prompt_by_case[recovered_first.case_id],
+        )
+        assert submission.result_id == recovered_first.id
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("SELECT set_config('app.tenant_id', :tenant, true)"),
+                {"tenant": str(tenant_id)},
+            )
+            await connection.execute(
+                text(
+                    "UPDATE search_runs SET status = 'FAILED', "
+                    "stop_reason = 'INTEGRATION_TERMINAL', completed_at = clock_timestamp() "
+                    "WHERE id = :run"
+                ),
+                {"run": submission.search_run_id},
+            )
+            await connection.execute(
+                text(
+                    "UPDATE shadow_run_results "
+                    "SET source_terminal_at = clock_timestamp(), "
+                    "version = version + 1, updated_at = clock_timestamp() "
+                    "WHERE id = :result"
+                ),
+                {"result": recovered_first.id},
+            )
+        first_settlement = await budget.settle_result(
+            tenant_id,
+            first.id,
+            recovered_first.id,
+            source_snapshot_digest="c" * 64,
+            usage=SettlementUsage(0, 0, 0, Decimal("0")),
+        )
+        assert first_settlement.duplicate is False
+
         second_reservation = await budget.reserve_run(second_lease)
         released = await budget.release_run(second_lease)
         duplicate_release = await budget.release_run(second_lease)
-        assert first_reservation.allowed is True
         assert second_reservation.allowed is True
-        assert first_reservation.reserved_provider_calls == 8
-        assert first_reservation.reserved_estimated_cost == Decimal("0.004")
-        assert first_lease.reservation_state is ReservationState.ACTIVE
         assert released.duplicate is False
         assert duplicate_release.duplicate is True
         assert second_lease.reservation_state is ReservationState.RELEASED
@@ -202,19 +362,50 @@ async def test_campaign_create_retry_and_lifecycle_are_atomic() -> None:
             await connection.execute(
                 text(
                     "UPDATE shadow_run_results "
-                    "SET lease_expires_at = clock_timestamp() - interval '1 second' "
-                    "WHERE campaign_id = :campaign AND scheduling_state = 'CLAIMED'"
+                    "SET scheduling_state = 'SKIPPED', lease_owner = NULL, "
+                    "lease_expires_at = NULL, version = version + 1, "
+                    "updated_at = clock_timestamp() "
+                    "WHERE id = :result"
+                ),
+                {"result": second_lease.id},
+            )
+            await connection.execute(
+                text(
+                    "UPDATE shadow_campaigns SET skipped_count = skipped_count + 1, "
+                    "version = version + 1, updated_at = clock_timestamp() "
+                    "WHERE id = :campaign"
                 ),
                 {"campaign": first.id},
             )
-        reclaimed = await scheduler.claim_next(
-            tenant_id,
-            first.id,
-            "worker-c",
+        next_claims = await asyncio.gather(
+            scheduler.claim_next(tenant_id, first.id, "worker-d"),
+            scheduler.claim_next(tenant_id, first.id, "worker-e"),
         )
-        assert reclaimed is not None
-        assert reclaimed.schedule_ordinal == 1
-        assert reclaimed.version > first_lease.version
+        next_active = sorted(
+            (item for item in next_claims if item is not None),
+            key=lambda item: item.schedule_ordinal,
+        )
+        assert [item.schedule_ordinal for item in next_active] == [3, 4]
+        third_lease, fourth_lease = next_active
+        third_reservation = await budget.reserve_run(third_lease)
+        assert third_reservation.allowed is True
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("SELECT set_config('app.tenant_id', :tenant, true)"),
+                {"tenant": str(tenant_id)},
+            )
+            await connection.execute(
+                text(
+                    "UPDATE shadow_run_results "
+                    "SET lease_expires_at = clock_timestamp() - interval '1 second' "
+                    "WHERE campaign_id = :campaign "
+                    "AND scheduling_state IN ('CLAIMED', 'CONVERSATION_BOUND')"
+                ),
+                {"campaign": first.id},
+            )
+        reclaimed = await scheduler.claim_next(tenant_id, first.id, "worker-f")
+        assert reclaimed is not None and reclaimed.schedule_ordinal == 3
+        assert reclaimed.version > third_lease.version
         assert reclaimed.reservation_state is ReservationState.ACTIVE
         with pytest.raises(InvariantViolation) as reservation_error:
             await budget.reserve_run(reclaimed)
@@ -234,13 +425,21 @@ async def test_campaign_create_retry_and_lifecycle_are_atomic() -> None:
                 ),
                 {"result": reclaimed.id},
             )
+            await connection.execute(
+                text(
+                    "UPDATE shadow_campaigns SET failed_count = failed_count + 1, "
+                    "version = version + 1, updated_at = clock_timestamp() "
+                    "WHERE id = :campaign"
+                ),
+                {"campaign": first.id},
+            )
         uncertain_usage = SettlementUsage(
             observed_provider_calls=0,
             prompt_tokens=0,
             completion_tokens=0,
             observed_estimated_cost=Decimal("0"),
             possibly_billed_call_charge=8,
-            possibly_billed_cost_charge=Decimal("0.004"),
+            possibly_billed_cost_charge=Decimal("0.006"),
         )
         settled = await budget.settle_result(
             tenant_id,
@@ -268,37 +467,17 @@ async def test_campaign_create_retry_and_lifecycle_are_atomic() -> None:
                 usage=uncertain_usage,
             )
         assert settlement_error.value.code == "settlement_conflict"
-        async with engine.begin() as connection:
-            await connection.execute(
-                text("SELECT set_config('app.tenant_id', :tenant, true)"),
-                {"tenant": str(tenant_id)},
-            )
-            await connection.execute(
-                text(
-                    "UPDATE shadow_run_results "
-                    "SET scheduling_state = 'SKIPPED', lease_owner = NULL, "
-                    "lease_expires_at = NULL, version = version + 1, "
-                    "updated_at = clock_timestamp() "
-                    "WHERE campaign_id = :campaign AND schedule_ordinal = 2"
-                ),
-                {"campaign": first.id},
-            )
-        next_claims = await asyncio.gather(
-            scheduler.claim_next(tenant_id, first.id, "worker-d"),
-            scheduler.claim_next(tenant_id, first.id, "worker-e"),
+        reclaimed_fourth = await scheduler.claim_next(
+            tenant_id,
+            first.id,
+            "worker-g",
         )
-        next_active = sorted(
-            (item for item in next_claims if item is not None),
-            key=lambda item: item.schedule_ordinal,
-        )
-        assert [item.schedule_ordinal for item in next_active] == [3, 4]
-        third_reservation = await budget.reserve_run(next_active[0])
-        denied_reservation = await budget.reserve_run(next_active[1])
-        assert third_reservation.allowed is True
+        assert reclaimed_fourth is not None
+        assert reclaimed_fourth.id == fourth_lease.id
+        denied_reservation = await budget.reserve_run(reclaimed_fourth)
         assert denied_reservation.allowed is False
         assert denied_reservation.stop_intent.value == "BUDGET"
         assert denied_reservation.reason == "estimated_cost_stop_threshold"
-        await budget.release_run(next_active[0])
         async with engine.begin() as connection:
             await connection.execute(
                 text("SELECT set_config('app.tenant_id', :tenant, true)"),
@@ -309,7 +488,8 @@ async def test_campaign_create_retry_and_lifecycle_are_atomic() -> None:
                     text(
                         "SELECT status, stop_intent, stop_reason, "
                         "creation_request_hash, profile_hash, "
-                        "planned_count, version, reserved_provider_calls, "
+                        "planned_count, submitted_count, failed_count, skipped_count, "
+                        "version, reserved_provider_calls, "
                         "reserved_estimated_cost, observed_provider_calls, "
                         "possibly_billed_call_charge, possibly_billed_cost_charge, "
                         "possibly_billed_count, "
@@ -327,12 +507,15 @@ async def test_campaign_create_retry_and_lifecycle_are_atomic() -> None:
             first.request_hash,
             DOCKER_SMOKE_V1.sha256,
             6,
-            9,
+            1,
+            1,
+            1,
+            12,
             0,
             Decimal("0E-10"),
             0,
             8,
-            Decimal("0.0040000000"),
+            Decimal("0.0060000000"),
             1,
             6,
         )
@@ -344,15 +527,22 @@ async def test_campaign_create_retry_and_lifecycle_are_atomic() -> None:
             reservation_states = (
                 await connection.execute(
                     text(
-                        "SELECT schedule_ordinal, reservation_state "
+                        "SELECT schedule_ordinal, scheduling_state, reservation_state, "
+                        "conversation_attempt_count, submission_attempt_count, "
+                        "conversation_id IS NOT NULL, search_run_id IS NOT NULL "
                         "FROM shadow_run_results "
-                        "WHERE campaign_id = :id AND schedule_ordinal IN (1, 2) "
+                        "WHERE campaign_id = :id AND schedule_ordinal IN (1, 2, 3, 4) "
                         "ORDER BY schedule_ordinal"
                     ),
                     {"id": first.id},
                 )
             ).all()
-        assert reservation_states == [(1, "SETTLED"), (2, "RELEASED")]
+        assert reservation_states == [
+            (1, "SUBMITTED", "SETTLED", 1, 2, True, True),
+            (2, "SKIPPED", "RELEASED", 0, 0, False, False),
+            (3, "FAILED", "SETTLED", 0, 0, False, False),
+            (4, "CLAIMED", "NONE", 0, 0, False, False),
+        ]
     finally:
         async with engine.begin() as connection:
             await connection.execute(

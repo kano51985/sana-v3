@@ -4,6 +4,7 @@ from uuid import UUID
 
 import pytest
 
+from sana.modules.conversation.domain import normalized_content_sha256
 from sana.modules.orchestration.domain import SearchMode
 from sana.modules.shadow_campaign.domain import (
     CampaignStatus,
@@ -107,7 +108,13 @@ def test_full_plan_is_stable_balanced_and_review_stratified() -> None:
     assert len(forward) == 120
     assert [item.schedule_ordinal for item in forward] == list(range(1, 121))
     assert len({item.id for item in forward}) == 120
-    assert len({item.submission_request_hash for item in forward}) == 120
+    assert len({item.submission_request_hash for item in forward}) == 40
+    assert len({item.message_idempotency_key for item in forward}) == 120
+    assert all(item.message_idempotency_key.startswith("shadow:") for item in forward)
+    assert all(
+        item.submission_request_hash == normalized_content_sha256(item.prompt)
+        for item in forward
+    )
     assert sum(item.manual_review_selected for item in forward) == 20
     assert [item.case_id for item in forward[:4]] == [
         "fast-zh-cn-0",
@@ -143,6 +150,9 @@ def test_run_lease_uses_version_as_a_fencing_token() -> None:
         lease_expires_at=NOW + timedelta(seconds=30),
         conversation_id=None,
         search_run_id=None,
+        conversation_idempotency_key="conversation-key",
+        message_idempotency_key="message-key",
+        submission_request_hash="a" * 64,
         reservation_state=ReservationState.NONE,
         version=1,
         _persisted_version=1,

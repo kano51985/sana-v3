@@ -58,9 +58,11 @@ class FakeConversationCatalog:
         self.principal = principal
         self.items: list[ConversationView] = []
         self.messages_by_id: dict = {}
+        self.creation_keys: list[str | None] = []
 
-    async def create(self, principal, title):
+    async def create(self, principal, title, idempotency_key=None):
         assert principal == self.principal
+        self.creation_keys.append(idempotency_key)
         item = ConversationView(uuid4(), title or "新会话", "ACTIVE", NOW, NOW)
         self.items.insert(0, item)
         self.messages_by_id[item.id] = []

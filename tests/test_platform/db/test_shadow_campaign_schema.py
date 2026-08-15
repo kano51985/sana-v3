@@ -111,6 +111,12 @@ def test_result_schema_has_recovery_measurement_and_exactly_once_settlement() ->
     assert _column_names(
         _constraint("shadow_run_results", "uq_shadow_results_campaign_case_repetition")
     ) == {"campaign_id", "case_id", "repetition"}
+    assert _column_names(
+        _constraint("shadow_run_results", "uq_shadow_results_tenant_conversation")
+    ) == {"tenant_id", "conversation_id"}
+    assert _column_names(
+        _constraint("shadow_run_results", "uq_shadow_results_tenant_search_run")
+    ) == {"tenant_id", "search_run_id"}
     for name in (
         "fk_shadow_results_campaign",
         "fk_shadow_results_conversation",

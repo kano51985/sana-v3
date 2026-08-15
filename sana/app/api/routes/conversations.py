@@ -34,8 +34,18 @@ async def create_conversation(
     body: ConversationCreate,
     request: Request,
     principal: Principal = Depends(require_principal),
+    idempotency_key: str | None = Header(
+        default=None,
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=200,
+    ),
 ) -> ConversationResponse:
-    conversation = await _catalog(request).create(principal, body.title)
+    conversation = await _catalog(request).create(
+        principal,
+        body.title,
+        idempotency_key,
+    )
     return ConversationResponse.model_validate(conversation)
 
 
@@ -76,7 +86,11 @@ async def submit_message(
     body: MessageCreate,
     request: Request,
     principal: Principal = Depends(require_principal),
-    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1),
+    idempotency_key: str = Header(
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=200,
+    ),
 ) -> SubmissionResponse:
     container = get_container(request)
     routing = container.router.route(body.content)

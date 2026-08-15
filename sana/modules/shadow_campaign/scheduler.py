@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Mapping
 from uuid import UUID, uuid5
 
+from sana.modules.conversation.domain import normalized_content_sha256
 from sana.modules.orchestration.domain import SearchMode
 from sana.modules.shadow_campaign.domain import (
     CampaignStatus,
@@ -14,7 +15,6 @@ from sana.modules.shadow_campaign.domain import (
     SchedulingState,
     canonical_snapshot,
     require_aware,
-    snapshot_hash,
 )
 from sana.modules.shadow_campaign.evaluator import select_review_units
 from sana.modules.shadow_campaign.manifest import ShadowCase, ShadowManifest
@@ -116,21 +116,8 @@ def materialize_run_plans(
             conversation_key = (
                 f"shadow-conversation:{campaign_id}:{case.id}:{repetition}"
             )
-            message_key = f"shadow-message:{campaign_id}:{case.id}:{repetition}"
-            request_hash = snapshot_hash(
-                {
-                    "campaign_id": campaign_id,
-                    "case_id": case.id,
-                    "repetition": repetition,
-                    "prompt": case.prompt,
-                    "locale": case.locale,
-                    "category": case.category.value,
-                    "answerability": case.answerability.value,
-                    "expected_mode": case.expected_mode.value,
-                    "conversation_idempotency_key": conversation_key,
-                    "message_idempotency_key": message_key,
-                }
-            )
+            message_key = f"shadow:{campaign_id}:{case.id}:{repetition}"
+            request_hash = normalized_content_sha256(case.prompt)
             plans.append(
                 RunPlan(
                     id=uuid5(
@@ -197,6 +184,9 @@ class RunLease:
     lease_expires_at: datetime
     conversation_id: UUID | None
     search_run_id: UUID | None
+    conversation_idempotency_key: str
+    message_idempotency_key: str
+    submission_request_hash: str
     reservation_state: ReservationState
     version: int
     _persisted_version: int
@@ -212,6 +202,18 @@ class RunLease:
             )
         if not self.lease_owner.strip() or self.version < 1:
             raise ValueError("A scheduling lease requires an owner and fencing version")
+        if not self.conversation_idempotency_key.strip():
+            raise ValueError("A scheduling lease requires a Conversation key")
+        if not self.message_idempotency_key.strip():
+            raise ValueError("A scheduling lease requires a Message key")
+        if (
+            len(self.submission_request_hash) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.submission_request_hash
+            )
+        ):
+            raise ValueError("A scheduling lease requires a lowercase request SHA-256")
 
     def accept_budget_fence(
         self,
@@ -223,6 +225,21 @@ class RunLease:
         self.version = version
         self._persisted_version = version
         self.reservation_state = ReservationState(reservation_state)
+
+    def accept_attempt_fence(self, version: int) -> None:
+        if version <= self.version:
+            raise InvariantViolation("Execution fencing token must advance")
+        self.version = version
+        self._persisted_version = version
+
+    def accept_conversation_fence(
+        self,
+        version: int,
+        conversation_id: UUID,
+    ) -> None:
+        self.accept_attempt_fence(version)
+        self.state = SchedulingState.CONVERSATION_BOUND
+        self.conversation_id = conversation_id
 
     @property
     def persisted_version(self) -> int:

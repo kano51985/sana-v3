@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+import hashlib
 import logging
 from uuid import UUID
 
 from sqlalchemy import or_, select
+from sqlalchemy.dialects.postgresql import insert
 from redis.exceptions import RedisError
 
 from sana.app.api.dependencies import (
@@ -23,6 +25,7 @@ from sana.modules.identity.domain import Principal
 from sana.modules.orchestration.domain import SearchRun
 from sana.modules.orchestration.events import RunEventData
 from sana.modules.shared.clock import Clock
+from sana.modules.shared.errors import InvariantViolation
 from sana.modules.shared.ids import IdFactory
 from sana.platform.db.models.conversation import Conversation, Message, ResponseRun
 from sana.platform.db.models.orchestration import RunEvent, SearchRunRecord
@@ -71,21 +74,75 @@ class DatabaseConversationCatalogService:
         self._clock = clock
         self._ids = id_factory
 
-    async def create(self, principal: Principal, title: str) -> ConversationView:
+    async def create(
+        self,
+        principal: Principal,
+        title: str,
+        idempotency_key: str | None = None,
+    ) -> ConversationView:
         now = self._clock.now()
-        conversation = Conversation(
-            id=self._ids.new_uuid(),
-            tenant_id=principal.tenant_id,
-            user_id=principal.user_id,
-            title=title.strip() or "新会话",
-            status="ACTIVE",
-            created_at=now,
-            updated_at=now,
+        normalized_title = title.strip() or "新会话"
+        normalized_key = idempotency_key.strip() if idempotency_key else None
+        if normalized_key is not None and not 1 <= len(normalized_key) <= 200:
+            raise ValueError(
+                "Idempotency-Key must contain between 1 and 200 characters"
+            )
+        request_hash = (
+            hashlib.sha256(normalized_title.encode("utf-8")).hexdigest()
+            if normalized_key is not None
+            else None
         )
+        conversation_id = self._ids.new_uuid()
         async with self._uow_factory(principal.tenant_id) as uow:
-            uow.session.add(conversation)
+            statement = (
+                insert(Conversation)
+                .values(
+                    id=conversation_id,
+                    tenant_id=principal.tenant_id,
+                    user_id=principal.user_id,
+                    title=normalized_title,
+                    status="ACTIVE",
+                    creation_idempotency_key=normalized_key,
+                    creation_request_hash=request_hash,
+                    created_at=now,
+                    updated_at=now,
+                )
+                .returning(Conversation.id)
+            )
+            if normalized_key is not None:
+                statement = statement.on_conflict_do_nothing(
+                    constraint="uq_conversations_tenant_user_creation_key"
+                )
+            inserted_id = await uow.session.scalar(statement)
+            if inserted_id is None:
+                conversation = await uow.session.scalar(
+                    select(Conversation).where(
+                        Conversation.tenant_id == principal.tenant_id,
+                        Conversation.user_id == principal.user_id,
+                        Conversation.creation_idempotency_key == normalized_key,
+                    )
+                )
+                if conversation is None:
+                    raise InvariantViolation(
+                        "Conversation idempotency lookup did not converge",
+                        code="idempotency_state_corrupt",
+                    )
+                if conversation.creation_request_hash != request_hash:
+                    raise InvariantViolation(
+                        "Idempotency-Key was already used for a different title",
+                        code="idempotency_conflict",
+                    )
+                view = self._view(conversation)
+            else:
+                view = ConversationView(
+                    id=conversation_id,
+                    title=normalized_title,
+                    status="ACTIVE",
+                    created_at=now,
+                    updated_at=now,
+                )
             await uow.commit()
-        return self._view(conversation)
+        return view
 
     async def list(self, principal: Principal) -> list[ConversationView]:
         async with self._uow_factory(principal.tenant_id) as uow:

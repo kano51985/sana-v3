@@ -64,6 +64,18 @@ async def test_authenticated_client_can_create_list_and_read_conversations(api_c
     }
 
 
+async def test_conversation_create_accepts_optional_idempotency_key(api_context) -> None:
+    response = await api_context.client.post(
+        "/api/v1/conversations",
+        json={"title": " Stable title "},
+        headers={**api_context.auth, "Idempotency-Key": "conversation-1"},
+    )
+
+    assert response.status_code == 201
+    assert api_context.catalog.items[0].title == " Stable title "
+    assert api_context.catalog.creation_keys == ["conversation-1"]
+
+
 async def test_identity_endpoint_validates_the_bearer_token(api_context) -> None:
     response = await api_context.client.get("/api/v1/me", headers=api_context.auth)
 

@@ -16,6 +16,10 @@ if TYPE_CHECKING:
         BudgetSettlementReceipt,
         SettlementUsage,
     )
+    from sana.modules.shadow_campaign.execution import (
+        CampaignSubmissionReceipt,
+        CandidateSubmissionReceipt,
+    )
     from sana.modules.shadow_campaign.scheduler import (
         CampaignSchedulingEvidence,
         RunLease,
@@ -99,8 +103,27 @@ class CampaignRepository(Protocol):
     ) -> BudgetReleaseReceipt: ...
 
 
+class CampaignExecutionRepository(Protocol):
+    async def prepare_conversation_attempt(self, lease: RunLease) -> None: ...
+
+    async def bind_conversation(
+        self,
+        lease: RunLease,
+        conversation_id: UUID,
+    ) -> None: ...
+
+    async def prepare_submission_attempt(self, lease: RunLease) -> None: ...
+
+    async def bind_submission(
+        self,
+        lease: RunLease,
+        receipt: CandidateSubmissionReceipt,
+    ) -> CampaignSubmissionReceipt: ...
+
+
 class CampaignUnitOfWork(Protocol):
     campaigns: CampaignRepository
+    campaign_execution: CampaignExecutionRepository
 
     async def __aenter__(self) -> "CampaignUnitOfWork": ...
 

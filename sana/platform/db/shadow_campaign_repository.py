@@ -396,6 +396,11 @@ class SqlShadowCampaignRepository:
         )
         if candidate is None:
             return None
+        claimed_state = (
+            SchedulingState.CONVERSATION_BOUND
+            if candidate.conversation_id is not None
+            else SchedulingState.CLAIMED
+        )
         next_version = candidate.version + 1
         claimed = await self._session.execute(
             update(ShadowRunResultRecord)
@@ -405,7 +410,7 @@ class SqlShadowCampaignRepository:
                 ShadowRunResultRecord.version == candidate.version,
             )
             .values(
-                scheduling_state=SchedulingState.CLAIMED.value,
+                scheduling_state=claimed_state.value,
                 lease_owner=worker_id,
                 lease_expires_at=lease_expires_at,
                 version=next_version,
@@ -424,11 +429,14 @@ class SqlShadowCampaignRepository:
             case_id=candidate.case_id,
             repetition=candidate.repetition,
             schedule_ordinal=candidate.schedule_ordinal,
-            state=SchedulingState.CLAIMED,
+            state=claimed_state,
             lease_owner=worker_id,
             lease_expires_at=lease_expires_at,
             conversation_id=candidate.conversation_id,
             search_run_id=candidate.search_run_id,
+            conversation_idempotency_key=candidate.conversation_idempotency_key,
+            message_idempotency_key=candidate.message_idempotency_key,
+            submission_request_hash=candidate.submission_request_hash,
             reservation_state=ReservationState(candidate.reservation_state),
             version=next_version,
             _persisted_version=next_version,

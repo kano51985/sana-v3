@@ -17,6 +17,13 @@ from sana.modules.orchestration.events import RunEventRepository
 
 
 class ConversationRepository(Protocol):
+    async def lock_owned_by(
+        self,
+        tenant_id: UUID,
+        conversation_id: UUID,
+        user_id: UUID,
+    ) -> bool: ...
+
     async def is_owned_by(
         self,
         tenant_id: UUID,

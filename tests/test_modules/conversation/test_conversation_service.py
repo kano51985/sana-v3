@@ -9,6 +9,7 @@ from sana.modules.conversation.domain import (
     ConversationService,
     SubmissionReceipt,
     SubmitMessageCommand,
+    normalized_content_sha256,
 )
 from sana.modules.orchestration.domain import RoutingDecision, SearchMode
 from sana.modules.orchestration.policy import SearchPolicy
@@ -34,6 +35,9 @@ class FakeConversationRepository:
             and conversation_id == self.conversation_id
             and user_id == self.user_id
         )
+
+    async def lock_owned_by(self, tenant_id, conversation_id, user_id) -> bool:
+        return await self.is_owned_by(tenant_id, conversation_id, user_id)
 
     async def find_submission(self, tenant_id, conversation_id, idempotency_key):
         return self.existing
@@ -126,7 +130,13 @@ async def test_message_and_both_runs_commit_in_one_unit_of_work() -> None:
 @pytest.mark.asyncio
 async def test_idempotent_retry_returns_existing_submission_without_writes() -> None:
     service, command, uow = make_service()
-    existing = SubmissionReceipt(uuid4(), uuid4(), uuid4(), "RUNNING")
+    existing = SubmissionReceipt(
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        "RUNNING",
+        request_hash=normalized_content_sha256(command.content),
+    )
     uow.conversations.existing = existing
 
     receipt = await service.submit_message(command)
@@ -134,6 +144,25 @@ async def test_idempotent_retry_returns_existing_submission_without_writes() -> 
     assert receipt.duplicate
     assert receipt.search_run_id == existing.search_run_id
     assert not uow.committed
+    assert uow.rolled_back
+    assert not uow.conversations.messages
+
+
+@pytest.mark.asyncio
+async def test_idempotent_retry_with_different_content_is_rejected() -> None:
+    service, command, uow = make_service()
+    uow.conversations.existing = SubmissionReceipt(
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        "RUNNING",
+        request_hash=normalized_content_sha256("different content"),
+    )
+
+    with pytest.raises(InvariantViolation) as error:
+        await service.submit_message(command)
+
+    assert error.value.code == "idempotency_conflict"
     assert uow.rolled_back
     assert not uow.conversations.messages
 

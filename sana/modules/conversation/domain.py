@@ -63,6 +63,14 @@ class SubmissionReceipt:
     search_run_id: UUID
     status: str
     duplicate: bool = False
+    request_hash: str | None = None
+
+
+def normalized_content_sha256(content: str) -> str:
+    normalized = content.strip()
+    if not normalized:
+        raise ValueError("Message content cannot be empty")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,8 +86,8 @@ class SubmitMessageCommand:
     def __post_init__(self) -> None:
         if not self.content.strip():
             raise ValueError("Message content cannot be empty")
-        if not self.idempotency_key.strip():
-            raise ValueError("Idempotency-Key cannot be empty")
+        if not 1 <= len(self.idempotency_key.strip()) <= 200:
+            raise ValueError("Idempotency-Key must contain between 1 and 200 characters")
 
 
 class ConversationService:
@@ -102,22 +110,11 @@ class ConversationService:
                 code="policy_version_mismatch",
             )
 
+        normalized_content = command.content.strip()
+        normalized_key = command.idempotency_key.strip()
+        request_hash = normalized_content_sha256(normalized_content)
         async with self._uow_factory(command.tenant_id) as uow:
-            existing = await uow.conversations.find_submission(
-                command.tenant_id,
-                command.conversation_id,
-                command.idempotency_key,
-            )
-            if existing is not None:
-                return SubmissionReceipt(
-                    existing.message_id,
-                    existing.response_run_id,
-                    existing.search_run_id,
-                    existing.status,
-                    duplicate=True,
-                )
-
-            owned = await uow.conversations.is_owned_by(
+            owned = await uow.conversations.lock_owned_by(
                 command.tenant_id,
                 command.conversation_id,
                 command.user_id,
@@ -126,6 +123,25 @@ class ConversationService:
                 raise InvariantViolation(
                     "Conversation does not belong to the authenticated user",
                     code="conversation_not_found",
+                )
+            existing = await uow.conversations.find_submission(
+                command.tenant_id,
+                command.conversation_id,
+                normalized_key,
+            )
+            if existing is not None:
+                if existing.request_hash != request_hash:
+                    raise InvariantViolation(
+                        "Idempotency-Key was already used for different content",
+                        code="idempotency_conflict",
+                    )
+                return SubmissionReceipt(
+                    existing.message_id,
+                    existing.response_run_id,
+                    existing.search_run_id,
+                    existing.status,
+                    duplicate=True,
+                    request_hash=request_hash,
                 )
 
             created_at = self._clock.now()
@@ -141,8 +157,8 @@ class ConversationService:
                 conversation_id=command.conversation_id,
                 author_user_id=command.user_id,
                 role=MessageRole.USER,
-                content=command.content.strip(),
-                idempotency_key=command.idempotency_key.strip(),
+                content=normalized_content,
+                idempotency_key=normalized_key,
                 created_at=created_at,
             )
             response_run = ResponseRunDraft(
@@ -162,7 +178,6 @@ class ConversationService:
                 routing=command.routing,
                 budget=self._policy.snapshot(command.routing.mode, created_at),
             )
-            content_hash = hashlib.sha256(message.content.encode("utf-8")).hexdigest()
             route_step = SearchStep(
                 id=step_id,
                 tenant_id=command.tenant_id,
@@ -172,7 +187,7 @@ class ConversationService:
                 plan_revision=1,
                 input_ref=ArtifactRef(
                     uri=f"db://messages/{message_id}",
-                    sha256=content_hash,
+                    sha256=request_hash,
                 ),
             )
             event_type = (
@@ -214,4 +229,5 @@ class ConversationService:
                 response_run_id,
                 search_run_id,
                 search_run.status.value,
+                request_hash=request_hash,
             )

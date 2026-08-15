@@ -107,6 +107,7 @@ class ConversationCatalogService(Protocol):
         self,
         principal: Principal,
         title: str,
+        idempotency_key: str | None = None,
     ) -> ConversationView: ...
 
     async def list(self, principal: Principal) -> list[ConversationView]: ...

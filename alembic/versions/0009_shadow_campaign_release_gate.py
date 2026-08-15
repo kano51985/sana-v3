@@ -385,6 +385,16 @@ def _create_results() -> None:
             "repetition",
             name="uq_shadow_results_campaign_case_repetition",
         ),
+        sa.UniqueConstraint(
+            "tenant_id",
+            "conversation_id",
+            name="uq_shadow_results_tenant_conversation",
+        ),
+        sa.UniqueConstraint(
+            "tenant_id",
+            "search_run_id",
+            name="uq_shadow_results_tenant_search_run",
+        ),
         sa.CheckConstraint(
             "scheduling_state IN ('PENDING', 'CLAIMED', 'CONVERSATION_BOUND', "
             "'SUBMITTED', 'COLLECTED', 'FAILED', 'SKIPPED')",

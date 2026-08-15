@@ -224,6 +224,16 @@ class ShadowRunResultRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "repetition",
             name="uq_shadow_results_campaign_case_repetition",
         ),
+        UniqueConstraint(
+            "tenant_id",
+            "conversation_id",
+            name="uq_shadow_results_tenant_conversation",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "search_run_id",
+            name="uq_shadow_results_tenant_search_run",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "campaign_id"],
             ["shadow_campaigns.tenant_id", "shadow_campaigns.id"],

@@ -13,6 +13,7 @@ from sana.modules.conversation.domain import (
     MessageDraft,
     ResponseRunDraft,
     SubmissionReceipt,
+    normalized_content_sha256,
 )
 from sana.modules.orchestration.domain import SearchRun, SearchStep, StepAttempt
 from sana.modules.orchestration.outbox import (
@@ -52,6 +53,24 @@ class SqlConversationRepository:
                 code="tenant_scope_mismatch",
             )
 
+    async def lock_owned_by(
+        self,
+        tenant_id: UUID,
+        conversation_id: UUID,
+        user_id: UUID,
+    ) -> bool:
+        self._assert_tenant(tenant_id)
+        statement = (
+            select(Conversation.id)
+            .where(
+                Conversation.tenant_id == tenant_id,
+                Conversation.id == conversation_id,
+                Conversation.user_id == user_id,
+            )
+            .with_for_update()
+        )
+        return (await self._session.scalar(statement)) is not None
+
     async def is_owned_by(
         self,
         tenant_id: UUID,
@@ -76,6 +95,7 @@ class SqlConversationRepository:
         statement = (
             select(
                 Message.id,
+                Message.content,
                 ResponseRun.id,
                 SearchRunRecord.id,
                 SearchRunRecord.status,
@@ -101,9 +121,10 @@ class SqlConversationRepository:
             return None
         return SubmissionReceipt(
             message_id=row[0],
-            response_run_id=row[1],
-            search_run_id=row[2],
-            status=row[3],
+            response_run_id=row[2],
+            search_run_id=row[3],
+            status=row[4],
+            request_hash=normalized_content_sha256(row[1]),
         )
 
     async def add_message(self, message: MessageDraft) -> None:
