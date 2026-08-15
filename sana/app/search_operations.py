@@ -297,27 +297,66 @@ def _select_ranked_hits(
             value[0]["canonical_url"],
         ),
     )
-    diverse = []
-    deferred = []
-    seen_identities: set[str] = set()
-    for item, identity, _ in ranked:
-        if identity in seen_identities:
-            deferred.append(item)
-        else:
-            diverse.append(item)
-            seen_identities.add(identity)
     has_official = any(
         authority is SourceAuthority.OFFICIAL
         for _, _, authority in ranked
     )
-    selection_limit = (
-        1
-        if mode is SearchMode.FAST and has_official
-        else min(2, max_selected_hits)
-        if mode is SearchMode.FAST
-        else max_selected_hits
-    )
-    return (diverse + deferred)[:selection_limit]
+    if mode is SearchMode.FAST:
+        selection_limit = 1 if has_official else min(2, max_selected_hits)
+        diverse = []
+        deferred = []
+        seen_identities: set[str] = set()
+        for item, identity, _ in ranked:
+            if identity in seen_identities:
+                deferred.append(item)
+            else:
+                diverse.append(item)
+                seen_identities.add(identity)
+        return (diverse + deferred)[:selection_limit]
+
+    # Research selection is a bounded set-cover problem: cover every planned fact
+    # before spending slots on redundant URLs. Once coverage is complete, prefer a
+    # new publisher so cross-check requests retain source diversity.
+    remaining = list(ranked)
+    selected: list[dict[str, Any]] = []
+    covered_fact_ids: set[str] = set()
+    seen_identities: set[str] = set()
+    while remaining and len(selected) < max_selected_hits:
+        gains = [
+            len(set(map(str, item.get("fact_ids", ()))) - covered_fact_ids)
+            for item, _, _ in remaining
+        ]
+        maximum_gain = max(gains, default=0)
+        if maximum_gain:
+            candidate_indexes = [
+                index for index, gain in enumerate(gains) if gain == maximum_gain
+            ]
+            chosen_index = min(
+                candidate_indexes,
+                key=lambda index: (
+                    0
+                    if remaining[index][2] is SourceAuthority.OFFICIAL
+                    else 1,
+                    0 if remaining[index][1] not in seen_identities else 1,
+                    index,
+                ),
+            )
+        else:
+            chosen_index = min(
+                range(len(remaining)),
+                key=lambda index: (
+                    0 if remaining[index][1] not in seen_identities else 1,
+                    0
+                    if remaining[index][2] is SourceAuthority.OFFICIAL
+                    else 1,
+                    index,
+                ),
+            )
+        item, identity, _ = remaining.pop(chosen_index)
+        selected.append(item)
+        seen_identities.add(identity)
+        covered_fact_ids.update(map(str, item.get("fact_ids", ())))
+    return selected
 
 
 def _model_context(context: StepExecutionContext) -> ModelInvocationContext:

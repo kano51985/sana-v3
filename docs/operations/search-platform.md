@@ -38,7 +38,9 @@ PostgreSQL 是 Run、Step、Attempt、证据与记忆的唯一事实源。Redis 
 
 当前质量管线由同一 DeepSeek API 承担 Planner、Verifier 和 Synthesizer，默认使用 `deepseek-v4-flash`、关闭 thinking 并要求 JSON object。Model Gateway 对外部调用施加独立的总墙钟超时，并在 Step deadline 前保留 2 秒用于审计封账、本地降级和事务提交；Planner 失败时转入启发式计划，Verifier/Synthesizer 失败时转入确定性证据约束路径。所有降级都会进入最终 `degraded`、`degradation_codes` 与 `stop_reason`，不能伪装成完整模型结果。
 
-`direct` 不是任意 URL 访问能力。它只读取版本化、代码审查可见的官方来源注册表；模型不能生成或提升 URL 权威等级。当前注册表覆盖 Python、DeepSeek 与 Apex Legends 的已知稳定入口，其他实体仍依赖搜索 provider，生产扩展时必须通过配置变更和 SSRF 测试加入。
+`direct` 不是任意 URL 访问能力。它只读取版本化、代码审查可见的官方来源注册表；模型不能生成或提升 URL 权威等级。`official-sources-v4` 覆盖 Python、DeepSeek、Apex Legends、HTTP/IANA、Git/kernel.org、Rust 和 OpenAI Developers 的已验证入口。`source-authority-v4` 默认按实体限定 registrable domain；当官方工件发布在共享域时，只允许审核过的 URL 前缀，不会把整个共享域提升为官方。生产扩展仍必须通过配置变更、真实 Worker 网络探测和 SSRF 测试加入。
+
+`search-v4` 在 RESEARCH 模式按未覆盖 Fact 数做有界集合选择，先覆盖计划中的不同事实，再把剩余额度用于发布方多样性；因此同一官方发布方的多篇必要文档不会被错误去重。证据候选按 Fact 轮询分配全局上限，避免末尾 Fact 饥饿；Fact key 中的数字、对象名等强锚点用于过滤 chunk 和定位 quote，Verifier 不再收到只命中通用导航词的候选。
 
 ## 外部 PostgreSQL/Redis 启动
 
@@ -93,7 +95,7 @@ docker compose -f deployment/docker-compose.yml --profile workers up --build
 - `fast`、`research`、`crawl`、`maintenance` 使用各自独立的 direct exchange 与 routing key。
 - Celery 消息只传 `tenant_id`、`step_id` 与 trace context，不传 prompt、正文或密钥。
 
-当前数据库 head 为 `0008_provider_attempt_identity`。`provider_attempts` 按 `(query_spec_id, provider, attempt_no)` 唯一，允许 Direct 与 Bing 对同一 Query 并发落库；`model_invocations`、证据与引用表均强制 PostgreSQL RLS。引用必须保存 document version、chunk、原文 quote 与精确 offset，缺任一项都不能进入用户答案。
+当前数据库 head 为 `0012_fetch_run_binding`。`provider_attempts` 按 `(query_spec_id, provider, attempt_no)` 唯一，允许 Direct 与 Bing 对同一 Query 并发落库；`document_version_fetches` 通过 tenant/run 复合外键把内容稳定的 DocumentVersion 绑定到本次成功 FetchArtifact，防止历史抓取内容冒充当前 Run 证据。`model_invocations`、抓取血缘、证据与引用表均强制 PostgreSQL RLS。引用必须保存本 Run 抓取绑定、document version、chunk、原文 quote 与精确 offset，缺任一项都不能进入用户答案。
 
 ## 切流门槛
 

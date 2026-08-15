@@ -64,7 +64,7 @@ class SearchPolicy:
     @classmethod
     def default(cls) -> "SearchPolicy":
         return cls(
-            version="search-v3",
+            version="search-v4",
             fast=ModePolicy(
                 soft_seconds=12.0,
                 hard_seconds=15.0,

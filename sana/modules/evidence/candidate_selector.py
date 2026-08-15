@@ -14,6 +14,32 @@ from sana.modules.search_planning.domain import FactRequirement
 
 
 _TERM = re.compile(r"[\w\u3400-\u9fff]+", re.UNICODE)
+_GENERIC_ANCHORS = frozenset(
+    {
+        "answer",
+        "background",
+        "code",
+        "current",
+        "description",
+        "detail",
+        "evidence",
+        "exact",
+        "fact",
+        "gap",
+        "information",
+        "object",
+        "official",
+        "overview",
+        "parameter",
+        "phrase",
+        "private",
+        "reason",
+        "result",
+        "source",
+        "status",
+        "type",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,18 +95,59 @@ class CandidateSelector:
         self._quote_chars = max_quote_chars
 
     @staticmethod
-    def _terms(entity: str, fact: FactRequirement) -> frozenset[str]:
-        values = _TERM.findall(
-            f"{entity} {fact.subject} {fact.description} {fact.fact_type.value}".casefold()
-        )
-        return frozenset(value for value in values if len(value) > 1)
+    def _tokens(*values: str) -> frozenset[str]:
+        normalized = " ".join(values).replace("_", " ").replace("-", " ")
+        tokens = []
+        for value in _TERM.findall(normalized.casefold()):
+            if len(value) <= 1:
+                continue
+            if (
+                value.isascii()
+                and len(value) > 4
+                and value.endswith("s")
+                and not value.endswith(("is", "ss", "us"))
+            ):
+                value = value[:-1]
+            tokens.append(value)
+        return frozenset(tokens)
 
-    def _quote_window(self, text: str, terms: frozenset[str]) -> str:
+    @classmethod
+    def _term_sets(
+        cls,
+        entity: str,
+        fact: FactRequirement,
+    ) -> tuple[frozenset[str], frozenset[str]]:
+        entity_terms = cls._tokens(entity, fact.fact_type.value)
+        context = cls._tokens(
+            entity,
+            fact.subject,
+            fact.description,
+            fact.fact_type.value,
+        )
+        anchors = set(cls._tokens(fact.key))
+        anchors.difference_update(entity_terms)
+        anchors.difference_update(_GENERIC_ANCHORS)
+        if fact.subject.casefold() != entity.casefold():
+            anchors.update(cls._tokens(fact.subject) - cls._tokens(entity))
+        anchors.update(
+            value
+            for value in cls._tokens(fact.description)
+            if value.isdecimal()
+        )
+        return context, frozenset(anchors)
+
+    def _quote_window(
+        self,
+        text: str,
+        terms: frozenset[str],
+        anchors: frozenset[str],
+    ) -> str:
         if len(text) <= self._quote_chars:
             return text
         folded = text.casefold()
         positions: list[int] = []
-        for term in terms:
+        position_terms = anchors or terms
+        for term in position_terms:
             offset = 0
             while True:
                 position = folded.find(term, offset)
@@ -96,9 +163,16 @@ class CandidateSelector:
         for position in positions:
             start = min(maximum_start, max(0, position - self._quote_chars // 3))
             window = folded[start : start + self._quote_chars]
-            matched = sum(term in window for term in terms)
-            density = sum(window.count(term) for term in terms)
-            score = (matched, density)
+            anchor_matches = sum(term in window for term in anchors)
+            anchor_density = sum(window.count(term) for term in anchors)
+            context_matches = sum(term in window for term in terms)
+            context_density = sum(window.count(term) for term in terms)
+            score = (
+                anchor_matches,
+                anchor_density,
+                context_matches,
+                context_density,
+            )
             if score > best_score:
                 best_start = start
                 best_score = score
@@ -122,14 +196,23 @@ class CandidateSelector:
                 fact = facts.get(mapped_fact_id)
                 if fact is None:
                     continue
-                terms = self._terms(entity, fact)
+                terms, anchors = self._term_sets(entity, fact)
                 for chunk_id, chunk in document.chunks:
                     folded = chunk.text.casefold()
                     matched = {term for term in terms if term in folded}
                     if not matched:
                         continue
-                    score = min(1.0, len(matched) / max(1, len(terms)))
-                    quote = self._quote_window(chunk.text, terms)
+                    matched_anchors = {term for term in anchors if term in folded}
+                    if anchors and not matched_anchors:
+                        continue
+                    context_score = len(matched) / max(1, len(terms))
+                    score = (
+                        0.7 * len(matched_anchors) / len(anchors)
+                        + 0.3 * context_score
+                        if anchors
+                        else context_score
+                    )
+                    quote = self._quote_window(chunk.text, terms, anchors)
                     quote_hash = hashlib.sha256(quote.encode("utf-8")).hexdigest()
                     by_fact[mapped_fact_id].append(
                         SelectedCandidate(
@@ -152,7 +235,7 @@ class CandidateSelector:
                         )
                     )
 
-        selected: list[SelectedCandidate] = []
+        ranked_by_fact: dict[UUID, list[SelectedCandidate]] = {}
         for fact_id in facts:
             ranked = sorted(
                 by_fact[fact_id],
@@ -174,8 +257,17 @@ class CandidateSelector:
                 else:
                     diverse.append(item)
                     seen_sources.add(item.source_identity)
-            selected.extend((diverse + deferred)[: self._per_fact])
-        return tuple(selected[: self._total])
+            ranked_by_fact[fact_id] = (diverse + deferred)[: self._per_fact]
+
+        selected: list[SelectedCandidate] = []
+        for rank in range(self._per_fact):
+            for fact_id in facts:
+                ranked = ranked_by_fact[fact_id]
+                if rank < len(ranked):
+                    selected.append(ranked[rank])
+                    if len(selected) == self._total:
+                        return tuple(selected)
+        return tuple(selected)
 
 
 __all__ = ["CandidateDocument", "CandidateSelector", "SelectedCandidate"]

@@ -61,6 +61,52 @@ def test_fast_selection_prioritizes_official_and_diverse_sources() -> None:
     assert selected[0]["canonical_url"] == "https://docs.python.org/3/"
 
 
+def test_research_selection_covers_facts_before_redundant_publishers() -> None:
+    version, changes, patch, team = (str(uuid4()) for _ in range(4))
+    candidates = []
+    for url, fact_id, score in (
+        (
+            "https://www.ea.com/games/apex-legends/apex-legends/news/"
+            "overclocked-patch-notes",
+            version,
+            0.8,
+        ),
+        (
+            "https://www.ea.com/games/apex-legends/apex-legends/news/"
+            "breach-patch-notes",
+            changes,
+            0.7,
+        ),
+        (
+            "https://www.ea.com/games/apex-legends/apex-legends/news/"
+            "overclocked-midseason-patch-notes",
+            patch,
+            0.6,
+        ),
+        ("https://analysis.example.net/apex-team", team, 0.5),
+        ("https://duplicate.example.org/apex-version", version, 1.0),
+    ):
+        candidate = _hit(url, score=score, rank=1)
+        candidate["fact_ids"] = [fact_id]
+        candidates.append(candidate)
+
+    selected = _select_ranked_hits(
+        tuple(candidates),
+        authority_policy=SourceAuthorityPolicy(),
+        entity="Apex Legends",
+        mode=SearchMode.RESEARCH,
+        max_selected_hits=4,
+    )
+
+    assert len(selected) == 4
+    assert {
+        fact_id
+        for item in selected
+        for fact_id in item["fact_ids"]
+    } == {version, changes, patch, team}
+    assert sum("ea.com" in item["canonical_url"] for item in selected) == 3
+
+
 @pytest.mark.asyncio
 async def test_selection_preserves_all_fact_bindings_for_one_canonical_url() -> None:
     tenant_id, run_id = uuid4(), uuid4()

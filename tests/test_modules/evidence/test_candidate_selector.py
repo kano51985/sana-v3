@@ -65,6 +65,14 @@ def test_authority_is_entity_specific_and_not_model_controlled() -> None:
         "https://openai.com/",
         entity="next unreleased OpenAI model",
     )[1] is SourceAuthority.OFFICIAL
+    assert policy.classify(
+        "https://www.kernel.org/pub/software/scm/git/docs/gitglossary.html",
+        entity="Git object model",
+    )[1] is SourceAuthority.OFFICIAL
+    assert policy.classify(
+        "https://www.kernel.org/doc/html/latest/",
+        entity="Git object model",
+    )[1] is SourceAuthority.INDEPENDENT
 
 
 def test_selector_bounds_candidates_and_prefers_distinct_publishers() -> None:
@@ -123,6 +131,105 @@ def test_selector_centers_quote_on_relevant_term_cluster() -> None:
     assert "Python 3.14.2 is the latest stable version" in selected[0].quote
     assert selected[0].quote in text
     assert len(selected[0].quote) <= 600
+
+
+def test_selector_uses_fact_key_anchor_for_quote_and_chunk_filtering() -> None:
+    fact_id = uuid4()
+    fact = FactRequirement(
+        "http_404_reason_phrase",
+        FactType.CURRENT_VALUE,
+        "The English reason phrase for HTTP status code 404",
+        "HTTP",
+    )
+    tenant_id, document_id = uuid4(), uuid4()
+    chunks = (
+        DocumentChunk(
+            0,
+            "HTTP status code reason phrase standard overview " + "x" * 900,
+            hashlib.sha256(
+                ("HTTP status code reason phrase standard overview " + "x" * 900).encode()
+            ).hexdigest(),
+            10,
+            0,
+            950,
+        ),
+        DocumentChunk(
+            1,
+            "HTTP status registry " + "y" * 900 + " 404,Not Found,RFC9110",
+            hashlib.sha256(
+                ("HTTP status registry " + "y" * 900 + " 404,Not Found,RFC9110").encode()
+            ).hexdigest(),
+            10,
+            950,
+            1_900,
+        ),
+    )
+    text = "\n".join(chunk.text for chunk in chunks)
+    version = DocumentVersion(
+        uuid4(),
+        tenant_id,
+        document_id,
+        hashlib.sha256(text.encode()).hexdigest(),
+        text,
+        "text/plain",
+        "en",
+        NOW,
+    )
+    candidate_document = CandidateDocument(
+        document_id,
+        version,
+        tuple((uuid4(), chunk) for chunk in chunks),
+        "https://www.iana.org/assignments/http-status-codes/http-status-codes-1.csv",
+        "HTTP Status Code Registry",
+        (fact_id,),
+    )
+
+    selected = CandidateSelector(max_per_fact=1, max_total=1).select(
+        run_id=uuid4(),
+        entity="HTTP",
+        facts={fact_id: fact},
+        documents=(candidate_document,),
+    )
+
+    assert len(selected) == 1
+    assert selected[0].chunk.ordinal == 1
+    assert "404,Not Found" in selected[0].quote
+
+
+def test_global_candidate_cap_round_robins_across_facts() -> None:
+    fact_ids = tuple(uuid4() for _ in range(5))
+    names = ("alpha", "beta", "gamma", "delta", "epsilon")
+    facts = {
+        fact_id: FactRequirement(name, FactType.BACKGROUND, name, "Example")
+        for fact_id, name in zip(fact_ids, names, strict=True)
+    }
+    documents = []
+    for index, domain in enumerate(("one.example", "two.example", "three.example")):
+        value = document(
+            f"https://{domain}/{index}",
+            fact_ids[0],
+            "Example alpha beta gamma delta epsilon",
+        )
+        documents.append(
+            CandidateDocument(
+                value.document_id,
+                value.version,
+                value.chunks,
+                value.url,
+                value.title,
+                fact_ids,
+            )
+        )
+
+    selected = CandidateSelector(max_per_fact=3, max_total=12).select(
+        run_id=uuid4(),
+        entity="Example",
+        facts=facts,
+        documents=tuple(documents),
+    )
+
+    assert len(selected) == 12
+    assert {item.fact_id for item in selected} == set(fact_ids)
 
 
 def test_one_fetched_document_can_ground_multiple_planned_facts() -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Mapping
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import tldextract
 
@@ -29,20 +29,44 @@ def registrable_domain(url: str) -> str:
     return (identity or host).casefold()
 
 
+def _normalized_url(url: str) -> str:
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").strip(".").casefold()
+    if not host:
+        raise ValueError("Source URL has no hostname")
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    return urlunsplit(
+        (
+            parsed.scheme.casefold(),
+            f"{host}{port}",
+            parsed.path or "/",
+            parsed.query,
+            "",
+        )
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class SourceAuthorityPolicy:
     """Authority is configuration-owned and entity-specific, never model-owned."""
 
-    version: str = "source-authority-v3"
+    version: str = "source-authority-v4"
     official_domains_by_entity: Mapping[str, frozenset[str]] = field(
         default_factory=lambda: {
             "apex legends": frozenset({"ea.com", "respawn.com"}),
             "deepseek": frozenset({"deepseek.com"}),
             "openai": frozenset({"openai.com"}),
             "python": frozenset({"python.org"}),
-            "http": frozenset({"rfc-editor.org"}),
+            "http": frozenset({"iana.org", "rfc-editor.org"}),
             "git": frozenset({"git-scm.com"}),
             "rust": frozenset({"rust-lang.org"}),
+        }
+    )
+    official_url_prefixes_by_entity: Mapping[str, tuple[str, ...]] = field(
+        default_factory=lambda: {
+            "git": (
+                "https://www.kernel.org/pub/software/scm/git/docs/",
+            ),
         }
     )
 
@@ -61,21 +85,46 @@ class SourceAuthorityPolicy:
             "official_domains_by_entity",
             MappingProxyType(normalized),
         )
+        normalized_prefixes = {
+            entity.strip().casefold(): tuple(
+                _normalized_url(prefix)
+                for prefix in prefixes
+                if prefix.strip()
+            )
+            for entity, prefixes in self.official_url_prefixes_by_entity.items()
+            if entity.strip()
+        }
+        object.__setattr__(
+            self,
+            "official_url_prefixes_by_entity",
+            MappingProxyType(normalized_prefixes),
+        )
 
     def classify(self, url: str, *, entity: str) -> tuple[str, SourceAuthority]:
         identity = registrable_domain(url)
-        matched_key = match_configured_entity(
+        matched_domain_key = match_configured_entity(
             entity,
             self.official_domains_by_entity,
         )
         official = (
-            self.official_domains_by_entity[matched_key]
-            if matched_key is not None
+            self.official_domains_by_entity[matched_domain_key]
+            if matched_domain_key is not None
             else ()
         )
+        matched_prefix_key = match_configured_entity(
+            entity,
+            self.official_url_prefixes_by_entity,
+        )
+        prefixes = (
+            self.official_url_prefixes_by_entity[matched_prefix_key]
+            if matched_prefix_key is not None
+            else ()
+        )
+        normalized_url = _normalized_url(url)
         return (
             identity,
             SourceAuthority.OFFICIAL
             if identity in official
+            or any(normalized_url.startswith(prefix) for prefix in prefixes)
             else SourceAuthority.INDEPENDENT,
         )

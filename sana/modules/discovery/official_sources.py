@@ -12,7 +12,7 @@ from sana.modules.shared.entity_matching import match_configured_entity
 
 @dataclass(frozen=True, slots=True)
 class OfficialSourcePolicy:
-    version: str = "official-sources-v3"
+    version: str = "official-sources-v4"
     sources: Mapping[str, Mapping[str, tuple[str, ...]]] = field(
         default_factory=lambda: {
             "python": {
@@ -31,16 +31,16 @@ class OfficialSourcePolicy:
             },
             "apex legends": {
                 FactType.VERSION.value: (
-                    "https://www.ea.com/games/apex-legends/apex-legends/news"
-                    "?page=1&type=game-updates",
+                    "https://www.ea.com/games/apex-legends/apex-legends/news/"
+                    "overclocked-patch-notes",
                 ),
                 FactType.PATCH_NOTES.value: (
-                    "https://www.ea.com/games/apex-legends/apex-legends/news"
-                    "?page=1&type=game-updates",
+                    "https://www.ea.com/games/apex-legends/apex-legends/news/"
+                    "overclocked-midseason-patch-notes",
                 ),
                 FactType.CHARACTER_CHANGES.value: (
-                    "https://www.ea.com/games/apex-legends/apex-legends/news"
-                    "?page=1&type=game-updates",
+                    "https://www.ea.com/games/apex-legends/apex-legends/news/"
+                    "breach-patch-notes",
                 ),
             },
             "http": {
@@ -48,12 +48,14 @@ class OfficialSourcePolicy:
                     "https://www.rfc-editor.org/rfc/rfc9110.html#name-404-not-found",
                 ),
                 FactType.CURRENT_VALUE.value: (
-                    "https://www.rfc-editor.org/rfc/rfc9110.html#name-404-not-found",
+                    "https://www.iana.org/assignments/http-status-codes/"
+                    "http-status-codes-1.csv",
                 ),
             },
             "git": {
                 FactType.BACKGROUND.value: (
-                    "https://git-scm.com/book/en/v2/Git-Internals-Git-Objects",
+                    "https://www.kernel.org/pub/software/scm/git/docs/"
+                    "gitglossary.html",
                 ),
             },
             "rust": {
@@ -68,12 +70,17 @@ class OfficialSourcePolicy:
                 ),
             },
             "openai": {
-                FactType.BACKGROUND.value: ("https://openai.com/",),
-                FactType.VERSION.value: ("https://openai.com/news/",),
-                FactType.CURRENT_VALUE.value: ("https://openai.com/",),
+                FactType.BACKGROUND.value: (
+                    "https://developers.openai.com/api/docs/models/all",
+                ),
+                FactType.VERSION.value: (
+                    "https://developers.openai.com/api/docs/models/all",
+                ),
+                FactType.CURRENT_VALUE.value: (
+                    "https://developers.openai.com/api/docs/models/all",
+                ),
                 FactType.COMPARISON.value: (
-                    "https://openai.com/",
-                    "https://openai.com/news/",
+                    "https://developers.openai.com/api/docs/models/all",
                 ),
             },
         }

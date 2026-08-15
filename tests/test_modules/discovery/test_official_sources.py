@@ -30,19 +30,19 @@ def test_standards_and_toolchains_have_deterministic_official_fallbacks() -> Non
         "https://www.rfc-editor.org/rfc/rfc9110.html#name-404-not-found",
     )
     assert policy.urls_for("HTTP 404 reason phrase", FactType.CURRENT_VALUE) == (
-        "https://www.rfc-editor.org/rfc/rfc9110.html#name-404-not-found",
+        "https://www.iana.org/assignments/http-status-codes/"
+        "http-status-codes-1.csv",
     )
     assert policy.urls_for("Git object model", FactType.BACKGROUND) == (
-        "https://git-scm.com/book/en/v2/Git-Internals-Git-Objects",
+        "https://www.kernel.org/pub/software/scm/git/docs/gitglossary.html",
     )
     assert policy.urls_for("Rust", FactType.VERSION) == (
         "https://doc.rust-lang.org/stable/releases.html",
     )
     assert policy.urls_for("OpenAI", FactType.COMPARISON) == (
-        "https://openai.com/",
-        "https://openai.com/news/",
+        "https://developers.openai.com/api/docs/models/all",
     )
     assert policy.urls_for(
         "next unreleased OpenAI model",
         FactType.CURRENT_VALUE,
-    ) == ("https://openai.com/",)
+    ) == ("https://developers.openai.com/api/docs/models/all",)
