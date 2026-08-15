@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from uuid import uuid4
 
@@ -32,6 +33,32 @@ async def test_campaign_report_store_is_scoped_atomic_and_content_addressed(tmp_
     assert first.startswith(f"campaign-artifact://{tenant_id}/{campaign_id}/")
     assert first.endswith(hashlib.sha256(payload).hexdigest())
     assert await store.get(tenant_id, campaign_id, first) == payload
+    assert not tuple(tmp_path.rglob("*.tmp"))
+
+
+@pytest.mark.asyncio
+async def test_concurrent_identical_report_writes_converge_without_replace_race(
+    tmp_path,
+) -> None:
+    store = LocalCampaignReportStore(tmp_path)
+    tenant_id, campaign_id = uuid4(), uuid4()
+    payload = b'{"decision":"concurrent"}'
+
+    results = await asyncio.gather(
+        *(
+            store.put(
+                tenant_id,
+                campaign_id,
+                payload,
+                media_type="application/json",
+            )
+            for _ in range(32)
+        )
+    )
+
+    assert len(set(results)) == 1
+    assert await store.get(tenant_id, campaign_id, results[0]) == payload
+    assert len(tuple(path for path in tmp_path.rglob("*") if path.is_file())) == 1
     assert not tuple(tmp_path.rglob("*.tmp"))
 
 

@@ -7,6 +7,7 @@ import hashlib
 import os
 import re
 from pathlib import Path
+from threading import Lock
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
@@ -20,6 +21,7 @@ _MEDIA_TYPES = frozenset({"application/json", "text/markdown"})
 class LocalCampaignReportStore:
     def __init__(self, root: str | Path) -> None:
         self._root = Path(root).expanduser().resolve()
+        self._write_locks = tuple(Lock() for _ in range(64))
 
     def _path(self, tenant_id: UUID, campaign_id: UUID, digest: str) -> Path:
         if not _SHA256.fullmatch(digest):
@@ -81,8 +83,13 @@ class LocalCampaignReportStore:
             raise ValueError("Campaign report media type is not allowlisted")
         digest = hashlib.sha256(payload).hexdigest()
         path = self._path(tenant_id, campaign_id, digest)
-        await asyncio.to_thread(self._write_atomic, path, payload, digest)
+        await asyncio.to_thread(self._write_serialized, path, payload, digest)
         return self._uri(tenant_id, campaign_id, digest)
+
+    def _write_serialized(self, path: Path, payload: bytes, digest: str) -> None:
+        lock = self._write_locks[int(digest[:2], 16) % len(self._write_locks)]
+        with lock:
+            self._write_atomic(path, payload, digest)
 
     @staticmethod
     def _write_atomic(path: Path, payload: bytes, digest: str) -> None:
@@ -104,12 +111,23 @@ class LocalCampaignReportStore:
                 stream.flush()
                 os.fsync(stream.fileno())
             try:
-                os.replace(temporary, path)
+                # The closed, fsynced temporary is linked into place atomically.
+                # Unlike replace, this never opens a Windows sharing window on an
+                # existing immutable content-addressed target.
+                os.link(temporary, path)
+            except FileExistsError:
+                pass
             except OSError:
-                # Windows may reject replacing a concurrently-created target.
-                # Convergence is still safe when that target has the same digest.
-                if not path.exists() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
-                    raise
+                # Filesystems without hard-link support retain the older atomic
+                # replace fallback. Cross-process convergence remains hash-checked.
+                try:
+                    os.replace(temporary, path)
+                except OSError:
+                    if (
+                        not path.exists()
+                        or hashlib.sha256(path.read_bytes()).hexdigest() != digest
+                    ):
+                        raise
             if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
                 raise TypedError(
                     ErrorCategory.CONTENT,
