@@ -30,7 +30,7 @@ from sana.modules.content.domain import (
 )
 from sana.modules.content.extractor import ContentExtractor
 from sana.modules.discovery.domain import DiscoveryQuery
-from sana.modules.discovery.official_sources import OfficialSourcePolicy
+from sana.modules.discovery.official_sources import DirectSourcePolicy
 from sana.modules.discovery.service import DiscoveryService
 from sana.modules.evidence.candidate_selector import (
     CandidateDocument,
@@ -328,12 +328,26 @@ def _select_ranked_hits(
         ]
         maximum_gain = max(gains, default=0)
         if maximum_gain:
+            trusted_direct_indexes = [
+                index
+                for index, gain in enumerate(gains)
+                if gain > 0
+                and remaining[index][2] is SourceAuthority.OFFICIAL
+                and str(remaining[index][0].get("provider", "")) == "direct"
+            ]
+            candidate_pool = trusted_direct_indexes or [
+                index for index, gain in enumerate(gains) if gain > 0
+            ]
+            pool_maximum_gain = max(gains[index] for index in candidate_pool)
             candidate_indexes = [
-                index for index, gain in enumerate(gains) if gain == maximum_gain
+                index
+                for index in candidate_pool
+                if gains[index] == pool_maximum_gain
             ]
             chosen_index = min(
                 candidate_indexes,
                 key=lambda index: (
+                    len(set(map(str, remaining[index][0].get("fact_ids", ())))),
                     0
                     if remaining[index][2] is SourceAuthority.OFFICIAL
                     else 1,
@@ -388,7 +402,7 @@ class SearchStepOperations:
     _chunker: DocumentChunker = field(init=False, repr=False)
     _candidate_selector: CandidateSelector = field(init=False, repr=False)
     _authority: SourceAuthorityPolicy = field(init=False, repr=False)
-    _official_sources: OfficialSourcePolicy = field(init=False, repr=False)
+    _direct_sources: DirectSourcePolicy = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not self.provider_names:
@@ -400,7 +414,7 @@ class SearchStepOperations:
         self._chunker = DocumentChunker()
         self._authority = SourceAuthorityPolicy()
         self._candidate_selector = CandidateSelector(self._authority)
-        self._official_sources = OfficialSourcePolicy()
+        self._direct_sources = DirectSourcePolicy()
 
     def registry_operations(self) -> FastStepOperations:
         return FastStepOperations(
@@ -527,7 +541,7 @@ class SearchStepOperations:
                 "plan_revision": query.plan_revision,
                 "metadata": dict(query.metadata),
                 "direct_urls": list(
-                    self._official_sources.urls_for(
+                    self._direct_sources.urls_for(
                         intent.entity,
                         next(
                             fact.fact_type

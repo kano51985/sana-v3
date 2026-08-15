@@ -1,9 +1,9 @@
-from sana.modules.discovery.official_sources import OfficialSourcePolicy
+from sana.modules.discovery.official_sources import DirectSourcePolicy
 from sana.modules.search_planning.domain import FactType
 
 
-def test_official_sources_are_entity_and_fact_specific() -> None:
-    policy = OfficialSourcePolicy()
+def test_direct_sources_are_entity_and_fact_specific() -> None:
+    policy = DirectSourcePolicy()
 
     assert policy.urls_for("Python", FactType.VERSION) == (
         "https://www.python.org/downloads/",
@@ -16,15 +16,15 @@ def test_official_sources_are_entity_and_fact_specific() -> None:
 
 
 def test_canonical_product_prefix_uses_configured_vendor_sources() -> None:
-    policy = OfficialSourcePolicy()
+    policy = DirectSourcePolicy()
 
     assert policy.urls_for("DeepSeek V4 Flash", FactType.BACKGROUND) == (
         "https://api-docs.deepseek.com/",
     )
 
 
-def test_standards_and_toolchains_have_deterministic_official_fallbacks() -> None:
-    policy = OfficialSourcePolicy()
+def test_standards_toolchains_and_reviews_have_direct_fallbacks() -> None:
+    policy = DirectSourcePolicy()
 
     assert policy.urls_for("HTTP 404", FactType.BACKGROUND) == (
         "https://www.rfc-editor.org/rfc/rfc9110.html#name-404-not-found",
@@ -38,6 +38,11 @@ def test_standards_and_toolchains_have_deterministic_official_fallbacks() -> Non
     )
     assert policy.urls_for("Rust", FactType.VERSION) == (
         "https://doc.rust-lang.org/stable/releases.html",
+    )
+    assert policy.urls_for("Apex Legends", FactType.TEAM_META) == (
+        "https://apexranked.com/meta",
+        "https://games.gg/apex-legends/guides/"
+        "apex-legends-season-29-tier-list/",
     )
     assert policy.urls_for("OpenAI", FactType.COMPARISON) == (
         "https://developers.openai.com/api/docs/models/all",

@@ -39,6 +39,17 @@ class BingRssProvider:
         self._max_results = max_results
         self._max_response_bytes = max_response_bytes
 
+    @staticmethod
+    def _locale_params(locale: str) -> dict[str, str]:
+        normalized = locale.strip().replace("_", "-").casefold()
+        if normalized in {"zh", "zh-cn", "zh-hans"}:
+            return {"mkt": "zh-CN", "setlang": "zh-hans"}
+        if normalized in {"zh-tw", "zh-hk", "zh-hant"}:
+            return {"mkt": "zh-TW", "setlang": "zh-hant"}
+        if normalized.startswith("en-gb"):
+            return {"mkt": "en-GB", "setlang": "en"}
+        return {"mkt": "en-US", "setlang": "en"}
+
     async def search(
         self,
         query: DiscoveryQuery,
@@ -48,10 +59,15 @@ class BingRssProvider:
         started = perf_counter()
         response_bytes = 0
         try:
+            params = {
+                "q": query.text,
+                "format": "rss",
+                **self._locale_params(query.locale),
+            }
             content, response_bytes = await bounded_get(
                 self._client,
                 self._endpoint,
-                params={"q": query.text, "format": "rss", "setlang": query.locale},
+                params=params,
                 timeout_seconds=timeout_seconds,
                 max_response_bytes=self._max_response_bytes,
             )

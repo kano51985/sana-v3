@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -29,8 +30,14 @@ class PlanningModelGateway(Protocol):
 
 
 class IntentParser:
-    def __init__(self, policy: SearchPlanningPolicy) -> None:
+    def __init__(
+        self,
+        policy: SearchPlanningPolicy,
+        *,
+        allow_optional_facts: bool = False,
+    ) -> None:
         self._policy = policy
+        self._allow_optional_facts = allow_optional_facts
 
     def parse(self, text: str) -> NormalizedIntent:
         payload: dict[str, Any] = json.loads(text)
@@ -43,7 +50,11 @@ class IntentParser:
                 fact_type=FactType(str(raw["fact_type"]).strip().lower()),
                 description=str(raw["description"]),
                 subject=str(raw.get("subject") or payload["entity"]),
-                required=bool(raw.get("required", True)),
+                required=(
+                    bool(raw.get("required", True))
+                    if self._allow_optional_facts
+                    else True
+                ),
                 freshness=Freshness(
                     str(raw.get("freshness", "STABLE")).strip().upper()
                 ),
@@ -81,6 +92,11 @@ class IntentParser:
 
 
 class SearchPlanner:
+    _OPTIONAL_REQUEST = re.compile(
+        r"(可选|非必需|如有|如果能找到|optional|if available|if possible)",
+        re.I,
+    )
+
     def __init__(
         self,
         gateway: PlanningModelGateway,
@@ -88,7 +104,6 @@ class SearchPlanner:
     ) -> None:
         self._gateway = gateway
         self._policy = policy or SearchPlanningPolicy()
-        self._parser = IntentParser(self._policy)
 
     async def plan(
         self,
@@ -122,6 +137,10 @@ class SearchPlanner:
                 "\nAllowed context summary (resolve references only; never copy it as "
                 f"a query suffix):\n{allowed_conversation_summary.strip()}"
             )
+        parser = IntentParser(
+            self._policy,
+            allow_optional_facts=bool(self._OPTIONAL_REQUEST.search(user_message)),
+        )
         result = await self._gateway.generate(
             ModelRole.PLANNER,
             (
@@ -130,7 +149,7 @@ class SearchPlanner:
             ),
             deadline=deadline,
             budget=model_budget,
-            parser=self._parser,
+            parser=parser,
             invocation_context=invocation_context,
         )
         if not isinstance(result.parsed, NormalizedIntent):

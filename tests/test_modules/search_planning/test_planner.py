@@ -103,3 +103,31 @@ def test_repair_instruction_names_exact_enum_contract() -> None:
     assert "STABLE, RECENT, or CURRENT" in instruction
     assert "LOW, MEDIUM, or HIGH" in instruction
     assert "bad payload" not in instruction
+
+
+def test_model_cannot_silently_mark_requested_fact_optional() -> None:
+    payload = json.dumps(
+        {
+            "entity": "Apex Legends",
+            "aliases": [],
+            "locale": "zh-CN",
+            "facts": [
+                {
+                    "key": "team_meta",
+                    "fact_type": "team_meta",
+                    "description": "当前阵容建议",
+                    "subject": "Apex Legends",
+                    "required": False,
+                }
+            ],
+        }
+    )
+
+    required_intent = IntentParser(SearchPlanningPolicy()).parse(payload)
+    optional_intent = IntentParser(
+        SearchPlanningPolicy(),
+        allow_optional_facts=True,
+    ).parse(payload)
+
+    assert required_intent.facts[0].required is True
+    assert optional_intent.facts[0].required is False

@@ -38,9 +38,9 @@ PostgreSQL 是 Run、Step、Attempt、证据与记忆的唯一事实源。Redis 
 
 当前质量管线由同一 DeepSeek API 承担 Planner、Verifier 和 Synthesizer，默认使用 `deepseek-v4-flash`、关闭 thinking 并要求 JSON object。Model Gateway 对外部调用施加独立的总墙钟超时，并在 Step deadline 前保留 2 秒用于审计封账、本地降级和事务提交；Planner 失败时转入启发式计划，Verifier/Synthesizer 失败时转入确定性证据约束路径。所有降级都会进入最终 `degraded`、`degradation_codes` 与 `stop_reason`，不能伪装成完整模型结果。
 
-`direct` 不是任意 URL 访问能力。它只读取版本化、代码审查可见的官方来源注册表；模型不能生成或提升 URL 权威等级。`official-sources-v4` 覆盖 Python、DeepSeek、Apex Legends、HTTP/IANA、Git/kernel.org、Rust 和 OpenAI Developers 的已验证入口。`source-authority-v4` 默认按实体限定 registrable domain；当官方工件发布在共享域时，只允许审核过的 URL 前缀，不会把整个共享域提升为官方。生产扩展仍必须通过配置变更、真实 Worker 网络探测和 SSRF 测试加入。
+`direct` 不是任意 URL 访问能力。它只读取版本化、代码审查可见的稳定入口注册表；模型不能生成 direct URL 或提升其权威等级。`direct-sources-v1` 覆盖 Python、DeepSeek、Apex Legends、HTTP/IANA、Git/kernel.org、Rust、OpenAI Developers，以及明确标为独立来源的 Apex 当前 meta 分析入口。`source-authority-v4` 仍单独决定 OFFICIAL/INDEPENDENT：默认按实体限定 registrable domain；当官方工件发布在共享域时，只允许审核过的 URL 前缀，不会把整个共享域提升为官方。生产扩展必须通过配置变更、真实 Worker 网络探测和 SSRF 测试加入。
 
-`search-v4` 在 RESEARCH 模式按未覆盖 Fact 数做有界集合选择，先覆盖计划中的不同事实，再把剩余额度用于发布方多样性；因此同一官方发布方的多篇必要文档不会被错误去重。证据候选按 Fact 轮询分配全局上限，避免末尾 Fact 饥饿；Fact key 中的数字、对象名等强锚点用于过滤 chunk 和定位 quote，Verifier 不再收到只命中通用导航词的候选。
+`search-v5` 在 RESEARCH 模式做有界集合选择：只要仍有能覆盖未覆盖 Fact 的 curated direct + official URL，就先完成这层覆盖；之后按未覆盖增益和 Fact 映射特异性处理其余来源，再考虑 authority 与发布方多样性。这避免泛化搜索主页因重复映射多个 Query 而挤掉精确 direct 文档，也不把域名权威误当成页面相关性。证据候选按 Fact 轮询分配 8 个全局槽位，避免末尾 Fact 饥饿并约束 Verifier 成本；Fact key 中的数字、对象名等强锚点用于过滤 chunk 和定位 quote。除非原请求明确包含“可选/if available”等标记，Fact 的 required 状态由系统强制为 true，模型无权把用户要求静默降级为可选。
 
 ## 外部 PostgreSQL/Redis 启动
 

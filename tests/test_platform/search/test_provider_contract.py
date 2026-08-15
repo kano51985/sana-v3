@@ -43,6 +43,8 @@ async def test_bing_rss_contract_returns_call_local_metrics_and_hits() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.params["format"] == "rss"
+        assert request.url.params["mkt"] == "en-US"
+        assert request.url.params["setlang"] == "en"
         return httpx.Response(200, content=rss)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -58,6 +60,13 @@ async def test_bing_rss_contract_returns_call_local_metrics_and_hits() -> None:
     assert response.metrics.response_bytes == len(rss)
     assert response.hits[0].snippet == "Useful snippet"
     assert response.hits[0].canonical_url == "https://example.com/article"
+
+
+def test_bing_rss_uses_explicit_chinese_market_routing() -> None:
+    assert BingRssProvider._locale_params("zh-CN") == {
+        "mkt": "zh-CN",
+        "setlang": "zh-hans",
+    }
 
 
 @pytest.mark.asyncio

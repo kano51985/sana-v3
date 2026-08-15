@@ -88,7 +88,22 @@ def test_research_selection_covers_facts_before_redundant_publishers() -> None:
     ):
         candidate = _hit(url, score=score, rank=1)
         candidate["fact_ids"] = [fact_id]
+        candidate["provider"] = (
+            "direct" if "ea.com" in url else "bing_rss"
+        )
         candidates.append(candidate)
+    generic = _hit("https://generic.example.com/apex", score=1.0, rank=1)
+    generic["fact_ids"] = [version, changes, patch, team]
+    generic["provider"] = "bing_rss"
+    candidates.append(generic)
+    generic_official = _hit(
+        "https://www.ea.com/games/apex-legends/apex-legends",
+        score=1.0,
+        rank=1,
+    )
+    generic_official["fact_ids"] = [version, changes, patch, team]
+    generic_official["provider"] = "bing_rss"
+    candidates.append(generic_official)
 
     selected = _select_ranked_hits(
         tuple(candidates),
@@ -105,6 +120,18 @@ def test_research_selection_covers_facts_before_redundant_publishers() -> None:
         for fact_id in item["fact_ids"]
     } == {version, changes, patch, team}
     assert sum("ea.com" in item["canonical_url"] for item in selected) == 3
+    assert any(
+        item["canonical_url"] == "https://analysis.example.net/apex-team"
+        for item in selected
+    )
+    assert all(
+        item["canonical_url"]
+        not in {
+            "https://generic.example.com/apex",
+            "https://www.ea.com/games/apex-legends/apex-legends",
+        }
+        for item in selected
+    )
 
 
 @pytest.mark.asyncio

@@ -118,7 +118,7 @@ def run_and_step():
         uuid4(),
         uuid4(),
         uuid4(),
-        RoutingDecision(SearchMode.FAST, ("test",), "search-v4", 1.0),
+        RoutingDecision(SearchMode.FAST, ("test",), "search-v5", 1.0),
         SearchPolicy.default().snapshot(SearchMode.FAST, NOW),
     )
     step = SearchStep(

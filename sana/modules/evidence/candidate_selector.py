@@ -19,6 +19,7 @@ _GENERIC_ANCHORS = frozenset(
         "answer",
         "background",
         "code",
+        "composition",
         "current",
         "description",
         "detail",
@@ -33,6 +34,8 @@ _GENERIC_ANCHORS = frozenset(
         "parameter",
         "phrase",
         "private",
+        "purpose",
+        "recent",
         "reason",
         "result",
         "source",
@@ -84,7 +87,7 @@ class CandidateSelector:
         authority: SourceAuthorityPolicy | None = None,
         *,
         max_per_fact: int = 3,
-        max_total: int = 12,
+        max_total: int = 8,
         max_quote_chars: int = 600,
     ) -> None:
         if min(max_per_fact, max_total, max_quote_chars) < 1:

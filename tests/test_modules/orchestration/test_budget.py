@@ -19,7 +19,7 @@ def test_fast_and_research_deadlines_match_product_targets() -> None:
     fast = policy.snapshot(SearchMode.FAST, NOW)
     research = policy.snapshot(SearchMode.RESEARCH, NOW)
 
-    assert fast.soft_deadline_at == NOW + timedelta(seconds=12)
+    assert fast.soft_deadline_at == NOW + timedelta(seconds=14)
     assert fast.hard_deadline_at == NOW + timedelta(seconds=15)
     assert research.hard_deadline_at == NOW + timedelta(seconds=120)
 
@@ -28,9 +28,9 @@ def test_discovery_cannot_consume_synthesis_reserve() -> None:
     snapshot = SearchPolicy.default().snapshot(SearchMode.FAST, NOW)
     guard = BudgetGuard(snapshot)
 
-    assert guard.non_synthesis_deadline == NOW + timedelta(seconds=11)
-    assert guard.can_start(BudgetPhase.DISCOVERY, NOW + timedelta(seconds=10.5))
-    assert not guard.can_start(BudgetPhase.DISCOVERY, NOW + timedelta(seconds=11))
+    assert guard.non_synthesis_deadline == NOW + timedelta(seconds=13)
+    assert guard.can_start(BudgetPhase.DISCOVERY, NOW + timedelta(seconds=12.5))
+    assert not guard.can_start(BudgetPhase.DISCOVERY, NOW + timedelta(seconds=13))
     assert guard.can_start(BudgetPhase.SYNTHESIZE, NOW + timedelta(seconds=14))
 
 

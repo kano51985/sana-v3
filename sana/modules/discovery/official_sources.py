@@ -1,4 +1,4 @@
-"""Versioned, configuration-owned official URLs for direct discovery."""
+"""Versioned, reviewed URLs for deterministic direct discovery."""
 
 from __future__ import annotations
 
@@ -11,8 +11,10 @@ from sana.modules.shared.entity_matching import match_configured_entity
 
 
 @dataclass(frozen=True, slots=True)
-class OfficialSourcePolicy:
-    version: str = "official-sources-v4"
+class DirectSourcePolicy:
+    """Reviewed direct URLs; authority remains owned by SourceAuthorityPolicy."""
+
+    version: str = "direct-sources-v1"
     sources: Mapping[str, Mapping[str, tuple[str, ...]]] = field(
         default_factory=lambda: {
             "python": {
@@ -41,6 +43,11 @@ class OfficialSourcePolicy:
                 FactType.CHARACTER_CHANGES.value: (
                     "https://www.ea.com/games/apex-legends/apex-legends/news/"
                     "breach-patch-notes",
+                ),
+                FactType.TEAM_META.value: (
+                    "https://apexranked.com/meta",
+                    "https://games.gg/apex-legends/guides/"
+                    "apex-legends-season-29-tier-list/",
                 ),
             },
             "http": {
@@ -109,4 +116,7 @@ class OfficialSourcePolicy:
         return tuple(self.sources[matched_key].get(fact_type.value, ()))
 
 
-__all__ = ["OfficialSourcePolicy"]
+OfficialSourcePolicy = DirectSourcePolicy
+
+
+__all__ = ["DirectSourcePolicy", "OfficialSourcePolicy"]

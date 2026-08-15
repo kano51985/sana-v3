@@ -7,7 +7,7 @@ from sana.modules.orchestration.domain import SearchMode
 
 @dataclass(frozen=True, slots=True)
 class SearchPlanningPolicy:
-    version: str = "search-v4"
+    version: str = "search-v5"
     max_facts: int = 8
     max_query_characters: int = 64
     fast_max_queries_per_fact: int = 1

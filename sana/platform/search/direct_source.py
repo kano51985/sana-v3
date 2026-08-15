@@ -1,4 +1,4 @@
-"""Discovery adapter for explicit trusted/official URLs from planning."""
+"""Discovery adapter for explicit reviewed URLs from planning."""
 
 from time import perf_counter
 
