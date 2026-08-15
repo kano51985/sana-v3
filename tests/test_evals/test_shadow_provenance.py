@@ -36,6 +36,7 @@ def _attestation() -> dict[str, object]:
     images = {service: IMAGE for service in SERVICES}
     volume_ids = {name: f"volume-{index}" for index, name in enumerate(VOLUMES, 1)}
     topology_source = {
+        "execution_class": "LIVE_DEEPSEEK",
         "container_images": images,
         "network": "sana-shadow-eval-net",
         "network_id": "network-identity",
@@ -49,7 +50,7 @@ def _attestation() -> dict[str, object]:
         "docker_socket_mounted": False,
     }
     return {
-        "schema_version": "shadow-provenance-v1",
+        "schema_version": "shadow-provenance-v2",
         "candidate": {
             "commit_sha": "a" * 40,
             "source_clean": True,
@@ -66,6 +67,7 @@ def _attestation() -> dict[str, object]:
         },
         "environment": {
             "compose_project": "sana-shadow-eval",
+            "execution_class": "LIVE_DEEPSEEK",
             "container_images": images,
             "network": "sana-shadow-eval-net",
             "network_id": "network-identity",
@@ -122,6 +124,11 @@ def test_sanitized_attestation_binds_source_image_config_and_topology() -> None:
             ("environment", "docker_socket_mounted"),
             True,
             "provenance_docker_socket",
+        ),
+        (
+            ("environment", "execution_class"),
+            "UNMARKED_TEST",
+            "provenance_execution_class_mismatch",
         ),
     ),
 )

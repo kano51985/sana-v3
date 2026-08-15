@@ -36,6 +36,7 @@ from sana.modules.shadow_campaign.service import (
     CreateCampaignCommand,
 )
 from sana.modules.shared.clock import SystemClock
+from sana.modules.shared.errors import InvariantViolation
 from sana.modules.shared.ids import RandomIdFactory
 from sana.platform.db.session import create_database_engine, create_session_factory
 from sana.platform.db.shadow_collector import SqlShadowSnapshotReader
@@ -122,6 +123,19 @@ class ShadowRuntimeBindings:
     clock: SystemClock
 
     def create_command(self, principal: Principal, args, manifest) -> CreateCampaignCommand:
+        requested_execution_class = (
+            "OFFLINE_FIXTURE"
+            if args.confirm_offline_fixture
+            else "LIVE_DEEPSEEK"
+        )
+        attested_execution_class = self.provenance.environment_snapshot.get(
+            "execution_class"
+        )
+        if requested_execution_class != attested_execution_class:
+            raise InvariantViolation(
+                "Campaign confirmation does not match attested execution class",
+                code="shadow_execution_class_mismatch",
+            )
         now = self.clock.now()
         return CreateCampaignCommand(
             principal.tenant_id,

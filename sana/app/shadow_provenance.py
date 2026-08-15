@@ -14,7 +14,8 @@ from sana.modules.shadow_campaign.service import CampaignProvenance
 from sana.modules.shared.errors import InvariantViolation
 
 
-ATTESTATION_SCHEMA_VERSION = "shadow-provenance-v1"
+ATTESTATION_SCHEMA_VERSION = "shadow-provenance-v2"
+EXECUTION_CLASSES = frozenset({"LIVE_DEEPSEEK", "OFFLINE_FIXTURE"})
 REQUIRED_IMAGE_SERVICES = frozenset(
     {"migrate", "artifact-init", "api", "dispatcher", "worker", "campaign-runner"}
 )
@@ -44,6 +45,7 @@ _HARNESS_KEYS = frozenset(
 _ENVIRONMENT_KEYS = frozenset(
     {
         "compose_project",
+        "execution_class",
         "container_images",
         "network",
         "network_id",
@@ -188,6 +190,16 @@ def parse_shadow_attestation_bytes(payload: bytes) -> ShadowProvenanceAttestatio
             "Compose project is not the dedicated Shadow evaluation project",
             code="provenance_project_mismatch",
         )
+    execution_class = _text(
+        environment["execution_class"],
+        40,
+        "execution class",
+    )
+    if execution_class not in EXECUTION_CLASSES:
+        raise InvariantViolation(
+            "Shadow execution class is unsupported",
+            code="provenance_execution_class_mismatch",
+        )
     images = environment["container_images"]
     if not isinstance(images, Mapping) or set(images) != REQUIRED_IMAGE_SERVICES:
         raise InvariantViolation(
@@ -267,6 +279,7 @@ def parse_shadow_attestation_bytes(payload: bytes) -> ShadowProvenanceAttestatio
             code="provenance_resource_limits_missing",
         )
     topology_source = {
+        "execution_class": execution_class,
         "container_images": dict(images),
         "network": environment["network"],
         "network_id": environment["network_id"],
@@ -321,6 +334,7 @@ def parse_shadow_attestation_bytes(payload: bytes) -> ShadowProvenanceAttestatio
 
 __all__ = [
     "ATTESTATION_SCHEMA_VERSION",
+    "EXECUTION_CLASSES",
     "EXPECTED_QUEUES",
     "EXPECTED_VOLUMES",
     "REQUIRED_IMAGE_SERVICES",

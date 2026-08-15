@@ -7,6 +7,7 @@ import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from datetime import UTC, datetime
 import getpass
 import json
 import os
@@ -51,7 +52,9 @@ def _parser() -> argparse.ArgumentParser:
 
     create = commands.add_parser("create")
     add_api_url(create)
-    create.add_argument("--confirm-live", action="store_true")
+    confirmation = create.add_mutually_exclusive_group()
+    confirmation.add_argument("--confirm-live", action="store_true")
+    confirmation.add_argument("--confirm-offline-fixture", action="store_true")
     create.add_argument("--campaign-key", required=True)
     create.add_argument("--manifest", required=True, type=Path)
     create.add_argument(
@@ -111,7 +114,7 @@ def _load_manifest(path: Path):
             "Manifest file was not found",
             code="manifest_not_found",
         )
-    return parse_manifest_bytes(path.read_bytes())
+    return parse_manifest_bytes(path.read_bytes(), now=datetime.now(UTC))
 
 
 def _safe(value: Any) -> Any:
@@ -228,11 +231,34 @@ def main(
     token_prompt: Callable[[str], str] = getpass.getpass,
 ) -> int:
     args = _parser().parse_args(argv)
-    if args.command == "create" and not args.confirm_live:
-        print("shadow_campaign_error:live_confirmation_required", file=sys.stderr)
-        return 2
+    selected_environ = os.environ if environ is None else environ
+    offline_fixture = selected_environ.get(
+        "SANA_SHADOW_OFFLINE_FIXTURE",
+        "",
+    ).strip().casefold() in {"1", "true", "yes", "on"}
+    if args.command == "create":
+        if not args.confirm_live and not args.confirm_offline_fixture:
+            code = (
+                "offline_fixture_confirmation_required"
+                if offline_fixture
+                else "live_confirmation_required"
+            )
+            print(f"shadow_campaign_error:{code}", file=sys.stderr)
+            return 2
+        if args.confirm_offline_fixture and not offline_fixture:
+            print(
+                "shadow_campaign_error:offline_fixture_environment_required",
+                file=sys.stderr,
+            )
+            return 2
+        if args.confirm_live and offline_fixture:
+            print(
+                "shadow_campaign_error:live_confirmation_forbidden_in_fixture",
+                file=sys.stderr,
+            )
+            return 2
     try:
-        token = _read_token(os.environ if environ is None else environ, token_prompt)
+        token = _read_token(selected_environ, token_prompt)
         return asyncio.run(_dispatch(args, token, client_factory, runtime_factory))
     except KeyboardInterrupt:
         print("shadow_campaign_error:operator_interrupt", file=sys.stderr)

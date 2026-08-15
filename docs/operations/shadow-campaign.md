@@ -16,12 +16,14 @@
 
 1. 在 clean `codex/shadow-campaign-release-gate` worktree 执行。
 2. Docker Desktop/Engine 与 Compose v2 可用。
-3. 设置或在安全提示中输入以下值：
+3. live 模式设置或在安全提示中输入以下值：
    - `SANA_SHADOW_OWNER_DB_PASSWORD`
    - `SANA_SHADOW_APP_DB_PASSWORD`
    - `DEEPSEEK_API_KEY`
    - `SANA_ACCESS_TOKEN`，本地 dev 模式格式为 `<tenant UUID>:<user UUID>`
 4. 不要把上述值写入 `.env`、PowerShell history、issue、报告或聊天记录。
+
+离线 fixture 模式不需要、也不会读取 `DEEPSEEK_API_KEY`。launcher 会在 worker 容器内强制覆盖固定的无效哨兵值，宿主机已有的真实 key 不会进入容器。
 
 ## 构建与隔离预检
 
@@ -41,6 +43,24 @@
 - attestation 不含 secret、原始 Compose config、环境变量值或 Docker socket。
 
 成功后 attestation 位于 `var/shadow-eval/attestation.json`。它只包含可公开复验的身份与计数。
+
+## 离线 Docker 闭环
+
+在任何 live 调用前，先运行显式标记的离线闭环：
+
+```powershell
+.\scripts\run_shadow_campaign.ps1 prepare -OfflineFixture
+.\scripts\run_shadow_campaign.ps1 create `
+  -OfflineFixture `
+  -CampaignKey offline-fixture-<stable-key> `
+  -Profile docker-smoke-v1
+```
+
+该模式使用专用 `fixture` discovery/fetch/model adapters，产生真实 PostgreSQL、Redis、Celery、Run、Fact、Evidence、Claim、Citation、ledger 与 report 记录，但所有模型结果的 `provider_calls` 和 token 使用量均为 0，且不进行公网访问。
+
+其 attestation schema 为 `shadow-provenance-v2`，`execution_class` 固定为 `OFFLINE_FIXTURE`。CLI confirmation、Compose override 与 attestation 三者不一致时会在 Campaign 写入前失败。离线报告只能证明恢复、持久化、血缘、隐私和容器拓扑；即使其 gate 状态为 PASS，也绝不能作为 DeepSeek live gate 或生产放量依据。
+
+切换到 live 必须重新执行不带 `-OfflineFixture` 的 `prepare`，生成 `execution_class=LIVE_DEEPSEEK` 的新 attestation；同一 attestation 不能跨执行类别复用。
 
 ## 费率版本
 

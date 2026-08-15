@@ -8,7 +8,8 @@ param(
     [string]$Profile = 'docker-smoke-v1',
     [string]$CampaignId,
     [string]$ParentSmokeCampaignId,
-    [string]$Manifest = 'evals/shadow/cases-v1.jsonl'
+    [string]$Manifest = 'evals/shadow/cases-v1.jsonl',
+    [switch]$OfflineFixture
 )
 
 Set-StrictMode -Version Latest
@@ -16,10 +17,13 @@ $ErrorActionPreference = 'Stop'
 
 $WorkspaceRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $ComposeFile = Join-Path $WorkspaceRoot 'deployment/docker-compose.shadow-eval.yml'
+$FixtureComposeFile = Join-Path $WorkspaceRoot 'deployment/docker-compose.shadow-fake.yml'
 $AttestationPath = Join-Path $WorkspaceRoot 'var/shadow-eval/attestation.json'
 $ProjectName = 'sana-shadow-eval'
 $CandidateImage = if ($env:SANA_SHADOW_IMAGE) { $env:SANA_SHADOW_IMAGE } else { 'sana-shadow-eval:local' }
 $ComposeArgs = @('--project-name', $ProjectName, '-f', $ComposeFile)
+if ($OfflineFixture) { $ComposeArgs += @('-f', $FixtureComposeFile) }
+$ExecutionClass = if ($OfflineFixture) { 'OFFLINE_FIXTURE' } else { 'LIVE_DEEPSEEK' }
 
 function Assert-LastExitCode([string]$Operation) {
     if ($LASTEXITCODE -ne 0) {
@@ -46,6 +50,16 @@ function Set-SecretEnvironment([string]$Name, [string]$Prompt) {
     finally {
         [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)
     }
+}
+
+function Set-ProviderEnvironment {
+    if ($OfflineFixture) {
+        $env:DEEPSEEK_API_KEY = 'shadow-offline-fixture-no-provider-call'
+        $env:SANA_SHADOW_OFFLINE_FIXTURE = 'true'
+        return
+    }
+    $env:SANA_SHADOW_OFFLINE_FIXTURE = 'false'
+    Set-SecretEnvironment 'DEEPSEEK_API_KEY' 'DeepSeek API key'
 }
 
 function Invoke-Compose([string[]]$Arguments) {
@@ -111,14 +125,18 @@ value = parse_shadow_attestation_bytes(pathlib.Path(sys.argv[1]).read_bytes()).p
 print(value.candidate_image_id)
 print(value.candidate_commit_sha)
 print(value.harness_commit_sha)
+print(value.environment_snapshot["execution_class"])
 '@ $AttestationPath)
     Assert-LastExitCode 'strict attestation validation'
-    if ($identity.Count -ne 3) { throw 'Attestation identity output is incomplete' }
+    if ($identity.Count -ne 4) { throw 'Attestation identity output is incomplete' }
     $imageId = ConvertTo-ImmutableImageId $identity[0]
     $commit = (& git -C $WorkspaceRoot rev-parse HEAD).Trim()
     Assert-LastExitCode 'git rev-parse HEAD'
     if ($identity[1] -ne $commit -or $identity[2] -ne $commit) {
         throw 'Attested candidate/harness commit does not equal the current commit'
+    }
+    if ($identity[3] -ne $ExecutionClass) {
+        throw 'Requested execution class does not equal the attested execution class'
     }
     $actualImageId = ConvertTo-ImmutableImageId (
         (& docker image inspect --format '{{.Id}}' $imageId).Trim()
@@ -145,7 +163,7 @@ function Prepare-ShadowEnvironment {
     Assert-CleanSource
     Set-SecretEnvironment 'SANA_SHADOW_OWNER_DB_PASSWORD' 'Shadow database owner password'
     Set-SecretEnvironment 'SANA_SHADOW_APP_DB_PASSWORD' 'Shadow database application password'
-    Set-SecretEnvironment 'DEEPSEEK_API_KEY' 'DeepSeek API key'
+    Set-ProviderEnvironment
     Set-SecretEnvironment 'SANA_ACCESS_TOKEN' 'Local Sana token (tenant UUID:user UUID)'
 
     $commit = (& git -C $WorkspaceRoot rev-parse HEAD).Trim()
@@ -224,6 +242,7 @@ function Prepare-ShadowEnvironment {
         'campaign-runner' = [ordered]@{ cpus = '1.0'; memory = '512m' }
     }
     $topology = [ordered]@{
+        execution_class = $ExecutionClass
         container_images = $images
         network = 'sana-shadow-eval-net'
         network_id = $networkId
@@ -237,7 +256,7 @@ function Prepare-ShadowEnvironment {
         docker_socket_mounted = $false
     }
     $attestation = [ordered]@{
-        schema_version = 'shadow-provenance-v1'
+        schema_version = 'shadow-provenance-v2'
         candidate = [ordered]@{
             commit_sha = $commit
             source_clean = $true
@@ -254,6 +273,7 @@ function Prepare-ShadowEnvironment {
         }
         environment = [ordered]@{
             compose_project = $ProjectName
+            execution_class = $ExecutionClass
             container_images = $images
             network = 'sana-shadow-eval-net'
             network_id = $networkId
@@ -284,7 +304,7 @@ function Invoke-RunnerCommand {
     $attestedImage = Get-ValidatedAttestedImage
     Set-SecretEnvironment 'SANA_SHADOW_OWNER_DB_PASSWORD' 'Shadow database owner password'
     Set-SecretEnvironment 'SANA_SHADOW_APP_DB_PASSWORD' 'Shadow database application password'
-    Set-SecretEnvironment 'DEEPSEEK_API_KEY' 'DeepSeek API key'
+    Set-ProviderEnvironment
     Set-SecretEnvironment 'SANA_ACCESS_TOKEN' 'Local Sana token (tenant UUID:user UUID)'
     $env:SANA_SHADOW_ATTESTATION_PATH = $AttestationPath
     $env:SANA_SHADOW_IMAGE = $attestedImage
@@ -294,7 +314,8 @@ function Invoke-RunnerCommand {
     switch ($Command) {
         'create' {
             if (-not $CampaignKey) { throw 'create requires -CampaignKey' }
-            $arguments += @('--confirm-live', '--campaign-key', $CampaignKey, '--manifest', $Manifest, '--profile', $Profile)
+            $confirmation = if ($OfflineFixture) { '--confirm-offline-fixture' } else { '--confirm-live' }
+            $arguments += @($confirmation, '--campaign-key', $CampaignKey, '--manifest', $Manifest, '--profile', $Profile)
             if ($Profile -eq 'shadow-full-v1') {
                 if (-not $ParentSmokeCampaignId) { throw 'Full create requires -ParentSmokeCampaignId' }
                 $arguments += @('--parent-smoke-campaign-id', $ParentSmokeCampaignId)

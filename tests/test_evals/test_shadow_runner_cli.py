@@ -62,6 +62,65 @@ def test_create_without_live_confirmation_has_zero_external_side_effects() -> No
     assert calls == []
 
 
+def test_offline_confirmation_requires_explicit_fixture_environment() -> None:
+    calls: list[str] = []
+
+    code = RUNNER.main(
+        [
+            "create",
+            "--api-url",
+            "http://candidate:8000",
+            "--confirm-offline-fixture",
+            "--campaign-key",
+            "safe-key",
+            "--manifest",
+            "cases.jsonl",
+            "--profile",
+            "docker-smoke-v1",
+        ],
+        client_factory=lambda *args: calls.append("client"),
+        token_prompt=lambda prompt: calls.append("token"),
+        environ={},
+    )
+
+    assert code == 2
+    assert calls == []
+
+
+def test_live_confirmation_is_rejected_inside_fixture_environment() -> None:
+    calls: list[str] = []
+
+    code = RUNNER.main(
+        [
+            "create",
+            "--api-url",
+            "http://candidate:8000",
+            "--confirm-live",
+            "--campaign-key",
+            "safe-key",
+            "--manifest",
+            "cases.jsonl",
+            "--profile",
+            "docker-smoke-v1",
+        ],
+        client_factory=lambda *args: calls.append("client"),
+        token_prompt=lambda prompt: calls.append("token"),
+        environ={"SANA_SHADOW_OFFLINE_FIXTURE": "true"},
+    )
+
+    assert code == 2
+    assert calls == []
+
+
+def test_cli_loads_the_versioned_manifest_with_a_validation_time() -> None:
+    manifest = RUNNER._load_manifest(
+        Path(__file__).parents[2] / "evals" / "shadow" / "cases-v1.jsonl"
+    )
+
+    assert manifest.version == "shadow-cases-v1"
+    assert len(manifest.cases) == 40
+
+
 def test_cli_has_no_token_argument() -> None:
     parser = RUNNER._parser()
 

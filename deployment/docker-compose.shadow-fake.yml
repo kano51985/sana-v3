@@ -1,0 +1,11 @@
+services:
+  worker:
+    environment:
+      SANA_WORKER_OFFLINE_FIXTURE_ENABLED: "true"
+      SANA_WORKER_MODEL_PIPELINE_ENABLED: "false"
+      SANA_WORKER_DISCOVERY_PROVIDERS: fixture
+      DEEPSEEK_API_KEY: shadow-offline-fixture-no-provider-call
+
+  campaign-runner:
+    environment:
+      SANA_SHADOW_OFFLINE_FIXTURE: "true"

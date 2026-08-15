@@ -100,6 +100,7 @@ def test_model_pipeline_defaults_are_safe_and_disabled() -> None:
     settings = ProductionWorkerSettings()
 
     assert settings.worker_model_pipeline_enabled is False
+    assert settings.worker_offline_fixture_enabled is False
     assert settings.worker_planner_provider == "deepseek"
     assert settings.worker_verifier_provider == "deepseek"
     assert settings.worker_synthesizer_provider == "deepseek"
@@ -111,6 +112,32 @@ def test_model_pipeline_defaults_are_safe_and_disabled() -> None:
     assert settings.worker_model_output_format == "json_object"
     assert settings.worker_live_eval_max_runs == 20
     assert settings.discovery_provider_names == ("direct", "bing_rss")
+
+
+def test_offline_fixture_is_strictly_test_only_and_exclusive() -> None:
+    settings = ProductionWorkerSettings(
+        environment="test",
+        worker_offline_fixture_enabled=True,
+        worker_discovery_providers="fixture",
+    )
+
+    assert settings.worker_offline_fixture_enabled is True
+    assert settings.discovery_provider_names == ("fixture",)
+
+    with pytest.raises(ValueError, match="restricted to test"):
+        ProductionWorkerSettings(
+            environment="local",
+            worker_offline_fixture_enabled=True,
+            worker_discovery_providers="fixture",
+        )
+    with pytest.raises(ValueError, match="exactly the fixture"):
+        ProductionWorkerSettings(
+            environment="test",
+            worker_offline_fixture_enabled=True,
+            worker_discovery_providers="fixture,direct",
+        )
+    with pytest.raises(ValueError, match="requires offline"):
+        ProductionWorkerSettings(worker_discovery_providers="fixture")
 
 
 def test_enabled_pipeline_requires_one_shared_provider() -> None:

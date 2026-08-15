@@ -9,6 +9,7 @@ ROOT = Path(__file__).parents[2]
 COMPOSE = ROOT / "deployment" / "docker-compose.shadow-eval.yml"
 DOCKERFILE = ROOT / "deployment" / "Dockerfile"
 LAUNCHER = ROOT / "scripts" / "run_shadow_campaign.ps1"
+FIXTURE_COMPOSE = ROOT / "deployment" / "docker-compose.shadow-fake.yml"
 
 
 def _config() -> dict:
@@ -137,3 +138,19 @@ def test_host_launcher_hashes_sanitized_inputs_and_never_accepts_token_argv() ->
     assert "docker.sock" in launcher
     assert "down', '--remove-orphans'" in launcher
     assert "down', '--volumes'" not in launcher
+    assert "shadow-provenance-v2" in launcher
+    assert "OFFLINE_FIXTURE" in launcher
+
+
+def test_offline_override_cannot_receive_a_real_provider_credential() -> None:
+    config = yaml.safe_load(FIXTURE_COMPOSE.read_text(encoding="utf-8"))
+    worker = config["services"]["worker"]["environment"]
+    runner = config["services"]["campaign-runner"]["environment"]
+
+    assert worker == {
+        "SANA_WORKER_OFFLINE_FIXTURE_ENABLED": "true",
+        "SANA_WORKER_MODEL_PIPELINE_ENABLED": "false",
+        "SANA_WORKER_DISCOVERY_PROVIDERS": "fixture",
+        "DEEPSEEK_API_KEY": "shadow-offline-fixture-no-provider-call",
+    }
+    assert runner == {"SANA_SHADOW_OFFLINE_FIXTURE": "true"}

@@ -59,6 +59,7 @@ from sana.platform.storage.local_artifacts import LocalArtifactStore
 
 class ProductionWorkerSettings(SanaSettings):
     worker_model_pipeline_enabled: bool = False
+    worker_offline_fixture_enabled: bool = False
     worker_planner_provider: Literal[
         "heuristic", "deepseek", "openai", "local"
     ] = "deepseek"
@@ -104,9 +105,24 @@ class ProductionWorkerSettings(SanaSettings):
         if not 1 <= self.worker_live_eval_max_runs <= 20:
             raise ValueError("Live eval run limit must be between 1 and 20")
         providers = self.discovery_provider_names
-        unsupported = set(providers) - {"direct", "bing_rss", "searxng"}
+        unsupported = set(providers) - {"direct", "bing_rss", "searxng", "fixture"}
         if unsupported:
             raise ValueError(f"Unsupported Worker discovery providers: {sorted(unsupported)}")
+        if self.worker_offline_fixture_enabled:
+            if self.environment != "test":
+                raise ValueError("Offline Worker fixture is restricted to test")
+            if self.worker_model_pipeline_enabled:
+                raise ValueError(
+                    "Offline Worker fixture cannot enable the provider model pipeline"
+                )
+            if providers != ("fixture",):
+                raise ValueError(
+                    "Offline Worker fixture requires exactly the fixture discovery provider"
+                )
+        elif "fixture" in providers:
+            raise ValueError(
+                "Fixture discovery provider requires offline Worker fixture mode"
+            )
         if "searxng" in providers and not self.worker_searxng_url.strip():
             raise ValueError("SearXNG provider requires SANA_WORKER_SEARXNG_URL")
         if self.worker_max_selected_hits < 1:
@@ -137,7 +153,7 @@ class WorkerRuntime:
     engine: object
     redis: Redis
     discovery_client: httpx.AsyncClient
-    fetcher: HttpContentFetcher
+    fetcher: object
     model_provider: object | None = None
 
     async def aclose(self) -> None:
@@ -156,6 +172,16 @@ def _model_stack(
     artifacts: LocalArtifactStore,
     ids: RandomIdFactory,
 ):
+    if settings.worker_offline_fixture_enabled:
+        from sana.app.shadow_fixture_worker import ShadowFixtureModelGateway
+
+        gateway = ShadowFixtureModelGateway()
+        return (
+            ModelIntentPlanner(SearchPlanner(gateway)),
+            ModelEvidenceVerifier(gateway),
+            ConstrainedModelSynthesizer(gateway),
+            None,
+        )
     if (
         not settings.worker_model_pipeline_enabled
         or settings.worker_planner_provider == "heuristic"
@@ -256,7 +282,11 @@ async def build_worker_runtime(
     discovery_client = httpx.AsyncClient(follow_redirects=False, trust_env=False)
     providers = {}
     for name in settings.discovery_provider_names:
-        if name == "direct":
+        if name == "fixture":
+            from sana.app.shadow_fixture_worker import ShadowFixtureSearchProvider
+
+            providers[name] = ShadowFixtureSearchProvider(clock)
+        elif name == "direct":
             providers[name] = DirectSourceProvider()
         elif name == "bing_rss":
             providers[name] = BingRssProvider(discovery_client)
@@ -270,7 +300,12 @@ async def build_worker_runtime(
         clock,
         breakers={name: CircuitBreaker(clock) for name in providers},
     )
-    fetcher = HttpContentFetcher(SSRFGuard(), clock)
+    if settings.worker_offline_fixture_enabled:
+        from sana.app.shadow_fixture_worker import ShadowFixtureContentFetcher
+
+        fetcher = ShadowFixtureContentFetcher(clock)
+    else:
+        fetcher = HttpContentFetcher(SSRFGuard(), clock)
     operations = SearchStepOperations(
         uow_factory,
         artifacts,
