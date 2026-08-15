@@ -8,7 +8,9 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
+from decimal import Decimal
 import getpass
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -120,6 +122,15 @@ def _load_manifest(path: Path):
 def _safe(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, bool)):
         return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, bytes):
+        return {
+            "byte_length": len(value),
+            "sha256": hashlib.sha256(value).hexdigest(),
+        }
     if isinstance(value, UUID):
         return str(value)
     if hasattr(value, "value"):

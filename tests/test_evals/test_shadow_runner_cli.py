@@ -5,6 +5,8 @@ from pathlib import Path
 import sys
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from decimal import Decimal
+import hashlib
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -119,6 +121,27 @@ def test_cli_loads_the_versioned_manifest_with_a_validation_time() -> None:
 
     assert manifest.version == "shadow-cases-v1"
     assert len(manifest.cases) == 40
+
+
+def test_cli_serializes_report_artifacts_without_emitting_content() -> None:
+    private = b"private report body that must not be printed"
+    rendered = RUNNER._safe(
+        {
+            "created_at": datetime(2026, 8, 15, tzinfo=UTC),
+            "cost": Decimal("0.0100000000"),
+            "json_bytes": private,
+        }
+    )
+
+    assert rendered == {
+        "created_at": "2026-08-15T00:00:00+00:00",
+        "cost": "0.0100000000",
+        "json_bytes": {
+            "byte_length": len(private),
+            "sha256": hashlib.sha256(private).hexdigest(),
+        },
+    }
+    assert "private report body" not in str(rendered)
 
 
 def test_cli_has_no_token_argument() -> None:
