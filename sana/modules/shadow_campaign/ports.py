@@ -8,6 +8,13 @@ from uuid import UUID
 from sana.modules.shadow_campaign.domain import CampaignLifecycle
 
 if TYPE_CHECKING:
+    from datetime import datetime, timedelta
+
+    from sana.modules.shadow_campaign.scheduler import (
+        CampaignSchedulingEvidence,
+        RunLease,
+        RunPlan,
+    )
     from sana.modules.shadow_campaign.service import (
         CampaignCreation,
         CampaignParentEvidence,
@@ -38,6 +45,33 @@ class CampaignRepository(Protocol):
     ) -> CampaignLifecycle | None: ...
 
     async def save_lifecycle(self, campaign: CampaignLifecycle) -> None: ...
+
+    async def scheduling_evidence_for_update(
+        self,
+        tenant_id: UUID,
+        campaign_id: UUID,
+    ) -> CampaignSchedulingEvidence | None: ...
+
+    async def materialize_results(
+        self,
+        evidence: CampaignSchedulingEvidence,
+        plans: tuple[RunPlan, ...],
+        now: datetime,
+    ) -> int: ...
+
+    async def claim_next_result(
+        self,
+        tenant_id: UUID,
+        campaign_id: UUID,
+        worker_id: str,
+        lease_duration: timedelta,
+    ) -> RunLease | None: ...
+
+    async def renew_result_lease(
+        self,
+        lease: RunLease,
+        lease_duration: timedelta,
+    ) -> None: ...
 
 
 class CampaignUnitOfWork(Protocol):

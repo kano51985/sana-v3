@@ -265,6 +265,13 @@ class ShadowRunResultRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             name="state_bindings",
         ),
         CheckConstraint(
+            "(scheduling_state IN ('CLAIMED', 'CONVERSATION_BOUND') AND "
+            "lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL) OR "
+            "(scheduling_state NOT IN ('CLAIMED', 'CONVERSATION_BOUND') AND "
+            "lease_owner IS NULL AND lease_expires_at IS NULL)",
+            name="lease_binding",
+        ),
+        CheckConstraint(
             "(reservation_state = 'NONE' AND reserved_provider_calls = 0 AND "
             "reserved_estimated_cost = 0 AND reservation_reserved_at IS NULL AND "
             "budget_settled_at IS NULL AND reservation_released_at IS NULL) OR "

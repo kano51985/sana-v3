@@ -127,6 +127,10 @@ def test_result_schema_has_recovery_measurement_and_exactly_once_settlement() ->
         ),
         CheckConstraint,
     )
+    assert isinstance(
+        _constraint("shadow_run_results", "ck_shadow_run_results_lease_binding"),
+        CheckConstraint,
+    )
 
 
 def test_manual_review_is_structured_and_has_actor_invariant() -> None:

@@ -16,7 +16,7 @@ NOW = datetime(2026, 8, 15, tzinfo=UTC)
 
 
 def test_campaign_lifecycle_supports_pause_resume_review_and_completion() -> None:
-    campaign = CampaignLifecycle(uuid4(), uuid4(), uuid4())
+    campaign = CampaignLifecycle(uuid4(), uuid4(), uuid4(), 6, 6)
 
     campaign.start(NOW)
     campaign.request_stop(StopIntent.PAUSE, "operator pause")
@@ -38,7 +38,7 @@ def test_campaign_lifecycle_supports_pause_resume_review_and_completion() -> Non
 
 
 def test_non_pause_stop_settles_to_aborted_and_terminal_state_is_immutable() -> None:
-    campaign = CampaignLifecycle(uuid4(), uuid4(), uuid4())
+    campaign = CampaignLifecycle(uuid4(), uuid4(), uuid4(), 6, 6)
     campaign.start(NOW)
     campaign.request_stop(StopIntent.BUDGET, "cost ceiling reached")
     campaign.settle_stop(NOW + timedelta(seconds=1))
@@ -54,8 +54,17 @@ def test_non_pause_stop_settles_to_aborted_and_terminal_state_is_immutable() -> 
 
 
 def test_campaign_cannot_complete_with_a_pending_gate() -> None:
-    campaign = CampaignLifecycle(uuid4(), uuid4(), uuid4())
+    campaign = CampaignLifecycle(uuid4(), uuid4(), uuid4(), 6, 6)
     campaign.start(NOW)
 
     with pytest.raises(InvariantViolation, match="final gate decision"):
         campaign.complete(GateStatus.PENDING, NOW + timedelta(seconds=1))
+
+
+def test_campaign_cannot_start_before_run_plan_is_fully_materialized() -> None:
+    campaign = CampaignLifecycle(uuid4(), uuid4(), uuid4(), 6, 0)
+
+    with pytest.raises(InvariantViolation, match="every planned run") as error:
+        campaign.start(NOW)
+
+    assert error.value.code == "campaign_not_materialized"

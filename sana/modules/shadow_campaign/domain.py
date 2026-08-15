@@ -117,6 +117,8 @@ class CampaignLifecycle:
     id: UUID
     tenant_id: UUID
     created_by_user_id: UUID
+    max_runs: int
+    planned_count: int
     _status: CampaignStatus = field(
         default=CampaignStatus.CREATED,
         init=False,
@@ -146,6 +148,8 @@ class CampaignLifecycle:
         id: UUID,
         tenant_id: UUID,
         created_by_user_id: UUID,
+        max_runs: int,
+        planned_count: int,
         status: CampaignStatus,
         gate_status: GateStatus,
         stop_intent: StopIntent,
@@ -159,6 +163,8 @@ class CampaignLifecycle:
             id=id,
             tenant_id=tenant_id,
             created_by_user_id=created_by_user_id,
+            max_runs=max_runs,
+            planned_count=planned_count,
             stop_reason=stop_reason,
             started_at=started_at,
             review_deadline_at=review_deadline_at,
@@ -203,8 +209,8 @@ class CampaignLifecycle:
         ):
             if value is not None:
                 require_aware(value, name)
-        if self.version < 0:
-            raise InvariantViolation("Campaign version cannot be negative")
+        if self.version < 0 or self.max_runs < 1 or not 0 <= self.planned_count <= self.max_runs:
+            raise InvariantViolation("Campaign planning counters are invalid")
         if self.status is CampaignStatus.CREATED:
             if self.started_at is not None or self.completed_at is not None:
                 raise InvariantViolation("Persisted CREATED campaign has run timestamps")
@@ -248,6 +254,11 @@ class CampaignLifecycle:
     def start(self, at: datetime) -> None:
         require_aware(at, "started_at")
         self._require_not_before_start(at, "started_at")
+        if self.planned_count != self.max_runs:
+            raise InvariantViolation(
+                "Campaign cannot start before every planned run is materialized",
+                code="campaign_not_materialized",
+            )
         self._transition(CampaignStatus.RUNNING)
         self.started_at = self.started_at or at
         self._stop_intent = StopIntent.NONE

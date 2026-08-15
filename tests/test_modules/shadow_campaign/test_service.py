@@ -282,7 +282,7 @@ async def test_full_campaign_rejects_dirty_or_mismatched_smoke_evidence() -> Non
 async def test_lifecycle_service_locks_owner_scoped_mutations() -> None:
     tenant_id, user_id, campaign_id = uuid4(), uuid4(), uuid4()
     repository = FakeCampaignRepository()
-    repository.lifecycle = CampaignLifecycle(campaign_id, tenant_id, user_id)
+    repository.lifecycle = CampaignLifecycle(campaign_id, tenant_id, user_id, 6, 6)
     uow = FakeUnitOfWork(repository)
     service = CampaignLifecycleService(lambda requested_tenant: uow, FrozenClock(NOW))
 
