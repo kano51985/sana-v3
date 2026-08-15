@@ -218,6 +218,42 @@ def explicit_json_terms_candidate() -> SelectedCandidate:
     )
 
 
+def http_method_registry_candidate() -> SelectedCandidate:
+    base = candidate()
+    text = (
+        "Method Name\nSafe\nIdempotent\nReference\n"
+        "DELETE\nno\nyes\n[RFC9110]\nGET\nyes\nyes\n[RFC9110]"
+    )
+    return replace(
+        base,
+        fact_id=uuid4(),
+        fact=FactRequirement(
+            "get_safe",
+            FactType.BACKGROUND,
+            "Whether HTTP GET is safe according to HTTP semantics",
+            "HTTP GET method",
+        ),
+        version=replace(
+            base.version,
+            content_hash=hashlib.sha256(text.encode()).hexdigest(),
+            text=text,
+        ),
+        chunk_id=uuid4(),
+        chunk=DocumentChunk(
+            0,
+            text,
+            hashlib.sha256(text.encode()).hexdigest(),
+            12,
+            0,
+            len(text),
+        ),
+        url="https://www.iana.org/assignments/http-methods/http-methods.xhtml",
+        source_identity="iana.org",
+        quote=text,
+        score=0.88,
+    )
+
+
 @pytest.mark.asyncio
 async def test_exact_official_numeric_value_skips_model_verification() -> None:
     item = explicit_http_candidate()
@@ -253,6 +289,32 @@ async def test_exact_official_term_list_skips_model_verification() -> None:
         value in result.evidence[0].candidate.quote
         for value in ("true", "false", "null")
     )
+
+
+@pytest.mark.asyncio
+async def test_reviewed_registry_table_skips_model_verification() -> None:
+    item = http_method_registry_candidate()
+
+    result = await ModelEvidenceVerifier(ForbiddenGateway()).verify(
+        (item,),
+        invocation_context=context(item),
+        deadline=NOW + timedelta(seconds=5),
+        verified_at=NOW,
+    )
+
+    assert result.degraded is False
+    assert result.evidence[0].verdict is EvidenceVerdict.ACCEPTED
+    assert result.evidence[0].verifier_version == "deterministic-registry-table-v1"
+    assert "GET\nyes\nyes" in result.evidence[0].candidate.quote
+
+
+def test_registry_verification_is_bound_to_exact_reviewed_page() -> None:
+    item = replace(
+        http_method_registry_candidate(),
+        url="https://www.iana.org/assignments/http-methods/unreviewed.xhtml",
+    )
+
+    assert ModelEvidenceVerifier._deterministic_registry_boolean(item) is None
 
 
 @pytest.mark.asyncio

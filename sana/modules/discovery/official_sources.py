@@ -29,7 +29,7 @@ class DirectSourceRule:
 class DirectSourcePolicy:
     """Reviewed direct URLs; authority remains owned by SourceAuthorityPolicy."""
 
-    version: str = "direct-sources-v4"
+    version: str = "direct-sources-v5"
     sources: Mapping[str, Mapping[str, tuple[str, ...]]] = field(
         default_factory=lambda: {
             "python": {
@@ -243,7 +243,11 @@ class DirectSourcePolicy:
                     ),
                     (
                         "get_safe_idempotent",
+                        "get_safe",
+                        "get_idempotent",
                         "safe and idempotent",
+                        "safe according",
+                        "idempotent according",
                         "http_semantics_standard",
                     ),
                     (

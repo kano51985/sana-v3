@@ -81,6 +81,18 @@ def test_fact_semantics_select_reviewed_primary_pages() -> None:
         "Whether HTTP GET is both safe and idempotent",
         "HTTP GET method",
     )
+    http_get_safe = FactRequirement(
+        "get_safe",
+        FactType.BACKGROUND,
+        "Whether HTTP GET is safe according to HTTP semantics",
+        "HTTP GET method",
+    )
+    http_get_idempotent = FactRequirement(
+        "get_idempotent",
+        FactType.BACKGROUND,
+        "Whether HTTP GET is idempotent according to HTTP semantics",
+        "HTTP GET method",
+    )
     dns_transport = FactRequirement(
         "dns_transport_protocols",
         FactType.CURRENT_VALUE,
@@ -104,6 +116,12 @@ def test_fact_semantics_select_reviewed_primary_pages() -> None:
         "https://git-scm.com/book/en/v2/Getting-Started-What-is-Git%3F",
     )
     assert policy.urls_for_fact("HTTP GET method", http_get) == (
+        "https://www.iana.org/assignments/http-methods/http-methods.xhtml",
+    )
+    assert policy.urls_for_fact("HTTP GET method", http_get_safe) == (
+        "https://www.iana.org/assignments/http-methods/http-methods.xhtml",
+    )
+    assert policy.urls_for_fact("HTTP GET method", http_get_idempotent) == (
         "https://www.iana.org/assignments/http-methods/http-methods.xhtml",
     )
     assert policy.urls_for_fact("DNS", dns_transport) == (

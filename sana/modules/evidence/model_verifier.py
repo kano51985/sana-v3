@@ -252,6 +252,54 @@ class ModelEvidenceVerifier:
             ("direct_support", "explicit_value"),
         )
 
+    @classmethod
+    def _deterministic_registry_boolean(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Read a method/property cell from the reviewed IANA table at runtime."""
+
+        if (
+            candidate.source_authority is not SourceAuthority.OFFICIAL
+            or candidate.score < 0.8
+            or candidate.url.split("#", 1)[0].split("?", 1)[0]
+            != (
+                "https://www.iana.org/assignments/http-methods/"
+                "http-methods.xhtml"
+            )
+        ):
+            return None
+        property_match = re.search(
+            r"\bis\s+(safe|idempotent)\b",
+            candidate.fact.description,
+            re.I,
+        )
+        method_match = re.search(
+            r"\bHTTP\s+([A-Z][A-Z-]{1,20})\b",
+            candidate.fact.subject,
+            re.I,
+        )
+        if property_match is None or method_match is None:
+            return None
+        method = method_match.group(1).upper()
+        compact = " ".join(candidate.quote.split())
+        table = re.search(
+            rf"Method Name\s+Safe\s+Idempotent\s+Reference.*?"
+            rf"(?<![A-Z-]){re.escape(method)}\s+(?:yes|no)\s+(?:yes|no)\s+\[",
+            compact,
+            re.I,
+        )
+        if table is None:
+            return None
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            candidate.quote,
+            0.99,
+            ("direct_support", "explicit_value"),
+        )
+
     @staticmethod
     def _messages(candidates: tuple[SelectedCandidate, ...]) -> tuple[ModelMessage, ...]:
         payload = {
@@ -406,6 +454,9 @@ class ModelEvidenceVerifier:
             if proposed is None:
                 proposed = self._deterministic_explicit_terms(candidate)
                 verifier_version = "deterministic-explicit-terms-v1"
+            if proposed is None:
+                proposed = self._deterministic_registry_boolean(candidate)
+                verifier_version = "deterministic-registry-table-v1"
             if proposed is not None:
                 deterministic_values.append(
                     self._record(
