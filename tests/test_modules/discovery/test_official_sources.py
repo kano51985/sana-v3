@@ -75,6 +75,24 @@ def test_fact_semantics_select_reviewed_primary_pages() -> None:
         "Git working tree, staging area, and file states",
         "Git",
     )
+    http_get = FactRequirement(
+        "get_safe_idempotent",
+        FactType.BACKGROUND,
+        "Whether HTTP GET is both safe and idempotent",
+        "HTTP GET method",
+    )
+    dns_transport = FactRequirement(
+        "dns_transport_protocols",
+        FactType.CURRENT_VALUE,
+        "DNS uses specifically TCP and UDP",
+        "DNS",
+    )
+    dns_registry = FactRequirement(
+        "dns_registry_authority",
+        FactType.BACKGROUND,
+        "The authoritative DNS port registry",
+        "DNS",
+    )
 
     assert policy.urls_for_fact("Python releases", python_support) == (
         "https://devguide.python.org/versions/",
@@ -84,6 +102,16 @@ def test_fact_semantics_select_reviewed_primary_pages() -> None:
     )
     assert policy.urls_for_fact("Git states", git_states) == (
         "https://git-scm.com/book/en/v2/Getting-Started-What-is-Git%3F",
+    )
+    assert policy.urls_for_fact("HTTP GET method", http_get) == (
+        "https://www.iana.org/assignments/http-methods/http-methods.xhtml",
+    )
+    assert policy.urls_for_fact("DNS", dns_transport) == (
+        "https://www.rfc-editor.org/rfc/rfc1035.html",
+    )
+    assert policy.urls_for_fact("DNS", dns_registry) == (
+        "https://www.iana.org/assignments/service-names-port-numbers/"
+        "service-names-port-numbers.xhtml",
     )
 
 

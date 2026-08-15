@@ -121,6 +121,30 @@ class VerificationParser:
 
 class ModelEvidenceVerifier:
     _NUMERIC_IDENTIFIER = re.compile(r"\d+(?:[.-]\d+)*")
+    _EXPLICIT_TOKEN = re.compile(
+        r"[+-]\d{2}:\d{2}|[A-Za-z][A-Za-z0-9+._-]*"
+    )
+    _BOTH_TERMS = re.compile(
+        r"\bboth\s+([A-Za-z][A-Za-z0-9+._-]*)\s+and\s+"
+        r"([A-Za-z][A-Za-z0-9+._-]*)",
+        re.I,
+    )
+    _EXPLICIT_LIST = re.compile(
+        r"(?:\bspecifically\s+|:\s*)([^.;\n]{1,160})",
+        re.I,
+    )
+    _NON_VALUE_TERMS = frozenset(
+        {
+            "answer",
+            "current",
+            "evidence",
+            "fact",
+            "official",
+            "source",
+            "standard",
+            "support",
+        }
+    )
 
     def __init__(self, gateway: VerificationGateway) -> None:
         self._gateway = gateway
@@ -164,6 +188,66 @@ class ModelEvidenceVerifier:
             candidate.id,
             SupportType.SUPPORTS,
             candidate.quote[quote_start:quote_end].strip(),
+            0.99,
+            ("direct_support", "explicit_value"),
+        )
+
+    @classmethod
+    def _deterministic_explicit_terms(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Accept an official span only when every explicitly listed term exists."""
+
+        if (
+            candidate.source_authority is not SourceAuthority.OFFICIAL
+            or candidate.score < 0.8
+        ):
+            return None
+        description = candidate.fact.description
+        values: tuple[str, ...] = ()
+        both = cls._BOTH_TERMS.search(description)
+        if both is not None:
+            values = (both.group(1), both.group(2))
+        else:
+            listed = cls._EXPLICIT_LIST.search(description)
+            if listed is not None:
+                pieces = re.split(
+                    r"\s*,\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+",
+                    listed.group(1).strip(),
+                    flags=re.I,
+                )
+                parsed = []
+                for piece in pieces:
+                    tokens = cls._EXPLICIT_TOKEN.findall(piece)
+                    if len(tokens) != 1:
+                        parsed = []
+                        break
+                    parsed.append(tokens[0])
+                values = tuple(dict.fromkeys(parsed))
+        if not 2 <= len(values) <= 8:
+            return None
+        if any(value.casefold() in cls._NON_VALUE_TERMS for value in values):
+            return None
+
+        folded = candidate.quote.casefold()
+        spans: list[tuple[int, int]] = []
+        for value in values:
+            match = re.search(
+                rf"(?<![A-Za-z0-9]){re.escape(value.casefold())}"
+                r"(?![A-Za-z0-9])",
+                folded,
+            )
+            if match is None:
+                return None
+            spans.append(match.span())
+        start = max(0, min(item[0] for item in spans) - 120)
+        end = min(len(candidate.quote), max(item[1] for item in spans) + 120)
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            candidate.quote[start:end].strip(),
             0.99,
             ("direct_support", "explicit_value"),
         )
@@ -315,17 +399,24 @@ class ModelEvidenceVerifier:
     ) -> VerifiedBatch:
         if not candidates:
             return VerifiedBatch((), False)
-        deterministic = tuple(
-            self._record(
-                candidate,
-                proposed,
-                run_id=invocation_context.run_id,
-                verified_at=verified_at,
-                verifier_version="deterministic-explicit-value-v1",
-            )
-            for candidate in candidates
-            if (proposed := self._deterministic_explicit_value(candidate)) is not None
-        )
+        deterministic_values: list[VerifiedEvidence] = []
+        for candidate in candidates:
+            proposed = self._deterministic_explicit_value(candidate)
+            verifier_version = "deterministic-explicit-value-v1"
+            if proposed is None:
+                proposed = self._deterministic_explicit_terms(candidate)
+                verifier_version = "deterministic-explicit-terms-v1"
+            if proposed is not None:
+                deterministic_values.append(
+                    self._record(
+                        candidate,
+                        proposed,
+                        run_id=invocation_context.run_id,
+                        verified_at=verified_at,
+                        verifier_version=verifier_version,
+                    )
+                )
+        deterministic = tuple(deterministic_values)
         resolved_fact_ids = {
             item.fact_requirement_id for item in deterministic
         }

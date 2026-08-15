@@ -57,10 +57,15 @@ class QueryCompiler:
         return query
 
     @staticmethod
-    def signature(query: str) -> str:
+    def signature(query: str, *, fact_key: str | None = None) -> str:
         normalized = unicodedata.normalize("NFKC", query).casefold()
         normalized = re.sub(r"[^\w]+", " ", normalized, flags=re.UNICODE).strip()
-        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        scope = (
+            normalized
+            if fact_key is None
+            else f"{unicodedata.normalize('NFKC', fact_key).casefold()}\0{normalized}"
+        )
+        return hashlib.sha256(scope.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _freshness_days(fact: FactRequirement) -> int | None:
@@ -113,7 +118,10 @@ class QueryCompiler:
                 components.append(subject)
             components.extend(keywords)
             text = self._fit(intent.entity.strip(), components)
-            signature = self.signature(text)
+            # QuerySpec has exactly one Fact binding. Text-identical queries for
+            # different Facts must therefore remain distinct; otherwise the
+            # later Fact silently loses discovery and evidence lineage.
+            signature = self.signature(text, fact_key=fact.key)
             if signature in signatures:
                 continue
             signatures.add(signature)

@@ -84,6 +84,7 @@ def test_full_campaign_primary_sources_receive_entity_scoped_authority() -> None
             "https://www.iana.org/assignments/service-names-port-numbers/",
             "DNS",
         ),
+        ("https://www.rfc-editor.org/rfc/rfc1035.html", "DNS"),
         ("https://www.rfc-editor.org/rfc/rfc8446.html", "TLS 1.3"),
         ("https://www.rfc-editor.org/rfc/rfc3339.html", "RFC 3339"),
         (
@@ -159,6 +160,57 @@ def test_selector_centers_quote_on_relevant_term_cluster() -> None:
     assert "Python 3.14.2 is the latest stable version" in selected[0].quote
     assert selected[0].quote in text
     assert len(selected[0].quote) <= 600
+
+
+def test_creator_anchor_matches_created_in_primary_source() -> None:
+    fact_id = uuid4()
+    fact = FactRequirement(
+        "python_creator",
+        FactType.BACKGROUND,
+        "Python 的创建者是谁",
+        "Python",
+    )
+
+    selected = CandidateSelector(max_per_fact=1, max_total=1).select(
+        run_id=uuid4(),
+        entity="Python",
+        facts={fact_id: fact},
+        documents=(
+            document(
+                "https://docs.python.org/3/license.html",
+                fact_id,
+                "Python was created in the early 1990s by Guido van Rossum.",
+            ),
+        ),
+    )
+
+    assert len(selected) == 1
+    assert "Guido van Rossum" in selected[0].quote
+
+
+def test_relational_fact_does_not_require_literal_tradeoff_word() -> None:
+    fact_id = uuid4()
+    fact = FactRequirement(
+        "cap_tradeoff",
+        FactType.BACKGROUND,
+        "During a network partition choose Consistency or Availability",
+        "CAP theorem",
+    )
+
+    selected = CandidateSelector(max_per_fact=1, max_total=1).select(
+        run_id=uuid4(),
+        entity="CAP theorem",
+        facts={fact_id: fact},
+        documents=(
+            document(
+                "https://www.ibm.com/think/topics/cap-theorem",
+                fact_id,
+                "During a network partition a system chooses Consistency or Availability.",
+            ),
+        ),
+    )
+
+    assert len(selected) == 1
 
 
 def test_selector_uses_fact_key_anchor_for_quote_and_chunk_filtering() -> None:

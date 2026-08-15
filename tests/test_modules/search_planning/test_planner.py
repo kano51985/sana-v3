@@ -140,7 +140,7 @@ def test_model_cannot_silently_mark_requested_fact_optional() -> None:
 def test_minimum_fact_count_preserves_explicit_enumeration() -> None:
     message = "请研究 Git 对象模型：列出四种对象类型，并分别说明用途"
 
-    assert minimum_fact_count(message, "search-v11") == 4
+    assert minimum_fact_count(message, "search-v12") == 4
 
 
 @pytest.mark.parametrize(
@@ -162,7 +162,7 @@ def test_minimum_fact_count_handles_structured_multi_part_requests(
     message: str,
     expected: int,
 ) -> None:
-    assert minimum_fact_count(message, "search-v11") == expected
+    assert minimum_fact_count(message, "search-v12") == expected
 
 
 def test_intent_parser_rejects_semantically_incomplete_fact_list() -> None:

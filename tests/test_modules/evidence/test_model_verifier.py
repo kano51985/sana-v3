@@ -181,6 +181,43 @@ def explicit_http_candidate() -> SelectedCandidate:
     )
 
 
+def explicit_json_terms_candidate() -> SelectedCandidate:
+    base = candidate()
+    text = (
+        "A JSON value can be one of the following three literal names: "
+        "false, null, and true."
+    )
+    version = replace(
+        base.version,
+        content_hash=hashlib.sha256(text.encode()).hexdigest(),
+        text=text,
+    )
+    return replace(
+        base,
+        fact_id=uuid4(),
+        fact=FactRequirement(
+            "json_literals_three",
+            FactType.BACKGROUND,
+            "The three JSON literals are: true, false, and null.",
+            "JSON standard",
+        ),
+        version=version,
+        chunk_id=uuid4(),
+        chunk=DocumentChunk(
+            0,
+            text,
+            hashlib.sha256(text.encode()).hexdigest(),
+            16,
+            0,
+            len(text),
+        ),
+        url="https://www.rfc-editor.org/rfc/rfc8259.html",
+        source_identity="rfc-editor.org",
+        quote=text,
+        score=0.94,
+    )
+
+
 @pytest.mark.asyncio
 async def test_exact_official_numeric_value_skips_model_verification() -> None:
     item = explicit_http_candidate()
@@ -196,6 +233,60 @@ async def test_exact_official_numeric_value_skips_model_verification() -> None:
     assert result.evidence[0].verdict is EvidenceVerdict.ACCEPTED
     assert result.evidence[0].candidate.quote == "404,Not Found"
     assert result.evidence[0].verifier_version == "deterministic-explicit-value-v1"
+
+
+@pytest.mark.asyncio
+async def test_exact_official_term_list_skips_model_verification() -> None:
+    item = explicit_json_terms_candidate()
+
+    result = await ModelEvidenceVerifier(ForbiddenGateway()).verify(
+        (item,),
+        invocation_context=context(item),
+        deadline=NOW + timedelta(seconds=5),
+        verified_at=NOW,
+    )
+
+    assert result.degraded is False
+    assert result.evidence[0].verdict is EvidenceVerdict.ACCEPTED
+    assert result.evidence[0].verifier_version == "deterministic-explicit-terms-v1"
+    assert all(
+        value in result.evidence[0].candidate.quote
+        for value in ("true", "false", "null")
+    )
+
+
+@pytest.mark.asyncio
+async def test_incomplete_official_term_list_still_uses_model() -> None:
+    item = explicit_json_terms_candidate()
+    text = "A JSON value can be the literal true."
+    item = replace(
+        item,
+        version=replace(
+            item.version,
+            content_hash=hashlib.sha256(text.encode()).hexdigest(),
+            text=text,
+        ),
+        chunk=DocumentChunk(
+            0,
+            text,
+            hashlib.sha256(text.encode()).hexdigest(),
+            8,
+            0,
+            len(text),
+        ),
+        quote=text,
+    )
+
+    result = await ModelEvidenceVerifier(
+        ParsingGateway('{"verdicts":[]}')
+    ).verify(
+        (item,),
+        invocation_context=context(item),
+        deadline=NOW + timedelta(seconds=5),
+        verified_at=NOW,
+    )
+
+    assert result.evidence[0].verdict is EvidenceVerdict.REJECTED
 
 
 @pytest.mark.asyncio

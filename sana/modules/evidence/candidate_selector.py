@@ -43,6 +43,7 @@ _GENERIC_ANCHORS = frozenset(
         "source",
         "status",
         "suggestion",
+        "tradeoff",
         "type",
     }
 )
@@ -114,6 +115,8 @@ class CandidateSelector:
                 and not value.endswith(("is", "ss", "us"))
             ):
                 value = value[:-1]
+            if value in {"created", "creator", "creates", "creation"}:
+                value = "creat"
             tokens.append(value)
         return frozenset(tokens)
 

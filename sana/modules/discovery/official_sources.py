@@ -29,7 +29,7 @@ class DirectSourceRule:
 class DirectSourcePolicy:
     """Reviewed direct URLs; authority remains owned by SourceAuthorityPolicy."""
 
-    version: str = "direct-sources-v3"
+    version: str = "direct-sources-v4"
     sources: Mapping[str, Mapping[str, tuple[str, ...]]] = field(
         default_factory=lambda: {
             "python": {
@@ -229,6 +229,47 @@ class DirectSourcePolicy:
                     (
                         "https://git-scm.com/book/en/v2/"
                         "Getting-Started-What-is-Git%3F",
+                    ),
+                ),
+            ),
+            "http": (
+                DirectSourceRule(
+                    frozenset(
+                        {
+                            FactType.BACKGROUND,
+                            FactType.COMPARISON,
+                            FactType.CURRENT_VALUE,
+                        }
+                    ),
+                    (
+                        "get_safe_idempotent",
+                        "safe and idempotent",
+                        "http_semantics_standard",
+                    ),
+                    (
+                        "https://www.iana.org/assignments/http-methods/"
+                        "http-methods.xhtml",
+                    ),
+                ),
+            ),
+            "dns": (
+                DirectSourceRule(
+                    frozenset({FactType.BACKGROUND, FactType.CURRENT_VALUE}),
+                    (
+                        "dns_default_port",
+                        "dns_transport_protocols",
+                        "port number",
+                        "transport protocols",
+                    ),
+                    ("https://www.rfc-editor.org/rfc/rfc1035.html",),
+                ),
+                DirectSourceRule(
+                    frozenset({FactType.BACKGROUND, FactType.CURRENT_VALUE}),
+                    ("dns_registry_authority", "authoritative registry"),
+                    (
+                        "https://www.iana.org/assignments/"
+                        "service-names-port-numbers/"
+                        "service-names-port-numbers.xhtml",
                     ),
                 ),
             ),

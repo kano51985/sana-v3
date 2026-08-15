@@ -90,6 +90,38 @@ def test_fast_version_query_prefers_official_stable_release_language() -> None:
     assert "season" not in query.text
 
 
+def test_text_identical_queries_keep_distinct_fact_bindings() -> None:
+    intent = NormalizedIntent(
+        entity="Python",
+        aliases=(),
+        locale="zh-CN",
+        facts=(
+            FactRequirement(
+                key="python_creator",
+                fact_type=FactType.BACKGROUND,
+                description="Python 的创建者",
+                subject="Python",
+            ),
+            FactRequirement(
+                key="python_first_release_year",
+                fact_type=FactType.BACKGROUND,
+                description="Python 首次公开发布年份",
+                subject="Python",
+            ),
+        ),
+    )
+
+    queries = QueryCompiler().compile(intent, SearchMode.FAST)
+
+    assert len(queries) == 2
+    assert queries[0].text == queries[1].text == "Python 背景"
+    assert queries[0].signature != queries[1].signature
+    assert {query.fact_key for query in queries} == {
+        "python_creator",
+        "python_first_release_year",
+    }
+
+
 def test_existing_signatures_are_deduplicated_during_expansion() -> None:
     _, intent = load_intent()
     compiler = QueryCompiler()

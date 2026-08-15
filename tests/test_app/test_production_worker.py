@@ -50,7 +50,7 @@ async def test_local_heuristic_planner_removes_conversation_filler_from_queries(
 
 @pytest.mark.asyncio
 async def test_local_heuristic_planner_preserves_enumerated_fact_floor() -> None:
-    planner = HeuristicIntentPlanner("search-v11")
+    planner = HeuristicIntentPlanner("search-v12")
 
     planning = await planner.plan(
         "\u8bf7\u7814\u7a76 Git \u5bf9\u8c61\u6a21\u578b\uff1a"
@@ -82,7 +82,7 @@ async def test_model_planner_failure_uses_explicit_degraded_local_plan() -> None
 
 @pytest.mark.asyncio
 async def test_local_fallback_skips_sentence_initial_question_words() -> None:
-    planning = await HeuristicIntentPlanner("search-v11").plan(
+    planning = await HeuristicIntentPlanner("search-v12").plan(
         "What stable Rust version is currently listed on the official page?",
         mode=SearchMode.FAST,
         deadline=NOW,
