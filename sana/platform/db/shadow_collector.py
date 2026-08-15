@@ -863,6 +863,11 @@ class SqlShadowCollectorRepository:
                 possibly_billed_run_reserve_usd=Decimal(
                     str(snapshot["possibly_billed_run_reserve_usd"])
                 ),
+                run_reservation_usd=(
+                    Decimal(str(snapshot["run_reservation_usd"]))
+                    if "run_reservation_usd" in snapshot
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError, ArithmeticError) as error:
             raise InvariantViolation(

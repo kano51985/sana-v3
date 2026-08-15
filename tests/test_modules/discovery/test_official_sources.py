@@ -29,6 +29,9 @@ def test_standards_and_toolchains_have_deterministic_official_fallbacks() -> Non
     assert policy.urls_for("HTTP 404", FactType.BACKGROUND) == (
         "https://www.rfc-editor.org/rfc/rfc9110.html#name-404-not-found",
     )
+    assert policy.urls_for("HTTP 404 reason phrase", FactType.CURRENT_VALUE) == (
+        "https://www.rfc-editor.org/rfc/rfc9110.html#name-404-not-found",
+    )
     assert policy.urls_for("Git object model", FactType.BACKGROUND) == (
         "https://git-scm.com/book/en/v2/Git-Internals-Git-Objects",
     )
@@ -39,3 +42,7 @@ def test_standards_and_toolchains_have_deterministic_official_fallbacks() -> Non
         "https://openai.com/",
         "https://openai.com/news/",
     )
+    assert policy.urls_for(
+        "next unreleased OpenAI model",
+        FactType.CURRENT_VALUE,
+    ) == ("https://openai.com/",)

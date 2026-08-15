@@ -413,6 +413,11 @@ class SqlShadowReportGateway:
                 possibly_billed_run_reserve_usd=Decimal(
                     str(value["possibly_billed_run_reserve_usd"])
                 ),
+                run_reservation_usd=(
+                    Decimal(str(value["run_reservation_usd"]))
+                    if "run_reservation_usd" in value
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError, InvalidOperation) as error:
             raise InvariantViolation(

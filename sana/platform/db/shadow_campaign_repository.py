@@ -825,7 +825,8 @@ class SqlShadowCampaignRepository:
                 code="campaign_budget_snapshot_invalid",
             )
         raw_cost = campaign.cost_rate_snapshot.get(
-            "possibly_billed_run_reserve_usd"
+            "run_reservation_usd",
+            campaign.cost_rate_snapshot.get("possibly_billed_run_reserve_usd"),
         )
         if raw_cost is None:
             raise InvariantViolation(

@@ -56,7 +56,7 @@ class ShadowRuntimeSettings(SanaSettings):
     shadow_attestation_path: str = "/run/sana/attestation.json"
     campaign_report_root: str = "/var/lib/sana/campaign-reports"
     shadow_review_rubric_path: str = "evals/shadow/review-rubric-v1.json"
-    shadow_cost_rate_path: str = "evals/shadow/cost-rates-v1.json"
+    shadow_cost_rate_path: str = "evals/shadow/cost-rates-v2.json"
 
 
 def _load_json(path: str | Path, maximum: int = 1_000_000) -> dict[str, Any]:
@@ -98,11 +98,16 @@ def load_review_rubric(path: str | Path) -> ReviewRubric:
 
 def load_cost_rate(path: str | Path) -> CostRate:
     value = _load_json(path)
-    if set(value) != {
+    required = {
         "version",
         "prompt_per_million_usd",
         "completion_per_million_usd",
         "possibly_billed_run_reserve_usd",
+    }
+    keys = frozenset(value)
+    if keys not in {
+        frozenset(required),
+        frozenset(required | {"run_reservation_usd"}),
     }:
         raise ValueError("Cost rate asset schema is invalid")
     return CostRate(
@@ -110,6 +115,11 @@ def load_cost_rate(path: str | Path) -> CostRate:
         Decimal(str(value["prompt_per_million_usd"])),
         Decimal(str(value["completion_per_million_usd"])),
         Decimal(str(value["possibly_billed_run_reserve_usd"])),
+        (
+            Decimal(str(value["run_reservation_usd"]))
+            if "run_reservation_usd" in value
+            else None
+        ),
     )
 
 

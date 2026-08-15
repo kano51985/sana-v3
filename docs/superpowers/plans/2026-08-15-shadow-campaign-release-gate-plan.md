@@ -329,6 +329,7 @@
     evals/shadow/gate-policies-v1.json
     evals/shadow/review-rubric-v1.json
     evals/shadow/cost-rates-v1.json
+    evals/shadow/cost-rates-v2.json
     tests/test_evals/test_shadow_manifest_v1.py
 
 ### 实施

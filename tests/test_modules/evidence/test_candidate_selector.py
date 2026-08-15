@@ -57,6 +57,14 @@ def test_authority_is_entity_specific_and_not_model_controlled() -> None:
         SourceAuthority.OFFICIAL,
     )
     assert policy.classify("https://www.ea.com/news", entity="Unrelated Product")[1] is SourceAuthority.INDEPENDENT
+    assert policy.classify(
+        "https://git-scm.com/book/en/v2/Git-Internals-Git-Objects",
+        entity="Git object model",
+    )[1] is SourceAuthority.OFFICIAL
+    assert policy.classify(
+        "https://openai.com/",
+        entity="next unreleased OpenAI model",
+    )[1] is SourceAuthority.OFFICIAL
 
 
 def test_selector_bounds_candidates_and_prefers_distinct_publishers() -> None:

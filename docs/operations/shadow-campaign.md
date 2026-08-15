@@ -76,9 +76,9 @@
 
 ## 费率版本
 
-`deepseek-v4-flash-usd-2026-08-15-v1` 冻结采用 DeepSeek 官方定价页在 2026-08-15 列出的缓存未命中输入价 0.14 美元/百万 token 与输出价 0.28 美元/百万 token；未知出站按每个 run 0.001 美元记 possibly-billed reserve。来源：<https://api-docs.deepseek.com/quick_start/pricing>。
+`deepseek-v4-flash-usd-2026-08-15-v2` 冻结采用 DeepSeek 官方定价页在 2026-08-15 列出的缓存未命中输入价 0.14 美元/百万 token 与输出价 0.28 美元/百万 token。未知出站仍按每个 run 0.001 美元计 possibly-billed charge；预算 admission 独立预留 0.002 美元，以同时覆盖未知出站和同一 run 已确认计费的正常调用，避免把一次瞬态重试误判为 Campaign 级预算事故。来源：<https://api-docs.deepseek.com/quick_start/pricing>。
 
-官方价格发生变化时必须新增 cost-rate 版本、重算全部 hash 并重跑 smoke；不得原地修改 v1 或让同一 smoke/full Campaign 使用不同费率身份。
+官方价格或预留语义发生变化时必须新增 cost-rate 版本、重算全部 hash 并重跑 smoke；不得原地修改历史版本或让同一 smoke/full Campaign 使用不同费率身份。
 
 ## 七个 Runner 命令
 

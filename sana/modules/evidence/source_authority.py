@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 import tldextract
 
 from sana.modules.evidence.domain import SourceAuthority
+from sana.modules.shared.entity_matching import match_configured_entity
 
 
 _PSL = tldextract.TLDExtract(
@@ -32,7 +33,7 @@ def registrable_domain(url: str) -> str:
 class SourceAuthorityPolicy:
     """Authority is configuration-owned and entity-specific, never model-owned."""
 
-    version: str = "source-authority-v2"
+    version: str = "source-authority-v3"
     official_domains_by_entity: Mapping[str, frozenset[str]] = field(
         default_factory=lambda: {
             "apex legends": frozenset({"ea.com", "respawn.com"}),
@@ -63,7 +64,15 @@ class SourceAuthorityPolicy:
 
     def classify(self, url: str, *, entity: str) -> tuple[str, SourceAuthority]:
         identity = registrable_domain(url)
-        official = self.official_domains_by_entity.get(entity.strip().casefold(), ())
+        matched_key = match_configured_entity(
+            entity,
+            self.official_domains_by_entity,
+        )
+        official = (
+            self.official_domains_by_entity[matched_key]
+            if matched_key is not None
+            else ()
+        )
         return (
             identity,
             SourceAuthority.OFFICIAL

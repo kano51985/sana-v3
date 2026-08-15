@@ -57,9 +57,8 @@ def test_fast_selection_prioritizes_official_and_diverse_sources() -> None:
         max_selected_hits=4,
     )
 
-    assert len(selected) == 2
+    assert len(selected) == 1
     assert selected[0]["canonical_url"] == "https://docs.python.org/3/"
-    assert selected[1]["canonical_url"] == "https://blog.example.com/python"
 
 
 @pytest.mark.asyncio

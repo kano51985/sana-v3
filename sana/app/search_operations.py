@@ -306,8 +306,14 @@ def _select_ranked_hits(
         else:
             diverse.append(item)
             seen_identities.add(identity)
+    has_official = any(
+        authority is SourceAuthority.OFFICIAL
+        for _, _, authority in ranked
+    )
     selection_limit = (
-        min(2, max_selected_hits)
+        1
+        if mode is SearchMode.FAST and has_official
+        else min(2, max_selected_hits)
         if mode is SearchMode.FAST
         else max_selected_hits
     )

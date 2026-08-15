@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
@@ -185,6 +186,17 @@ def test_runtime_assets_have_locked_semantic_hashes_and_conservative_rate() -> N
     assert rate.possibly_billed_run_reserve_usd * 6 <= (
         DOCKER_SMOKE_V1.estimated_cost_stop_threshold
     )
+
+    current = load_cost_rate(ASSET_ROOT / "cost-rates-v2.json")
+    assert hashlib.sha256(
+        (ASSET_ROOT / "cost-rates-v2.json").read_bytes()
+    ).hexdigest() == "c470e7f053f8079e0ebec9d07b0136bbea36dbe18fc3e79f07e4de96c4a277b2"
+    assert current.sha256 == (
+        "0597f98036074753d16168e7eaa2e0cc8ac513e917350afa09f23d636f072b01"
+    )
+    assert current.version == "deepseek-v4-flash-usd-2026-08-15-v2"
+    assert current.run_reservation_usd == Decimal("0.002")
+    assert current.run_reservation_usd > current.possibly_billed_run_reserve_usd
 
 
 def test_runtime_asset_loader_rejects_duplicate_and_non_finite_json(

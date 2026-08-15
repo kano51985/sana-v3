@@ -7,11 +7,12 @@ from types import MappingProxyType
 from typing import Mapping
 
 from sana.modules.search_planning.domain import FactType
+from sana.modules.shared.entity_matching import match_configured_entity
 
 
 @dataclass(frozen=True, slots=True)
 class OfficialSourcePolicy:
-    version: str = "official-sources-v2"
+    version: str = "official-sources-v3"
     sources: Mapping[str, Mapping[str, tuple[str, ...]]] = field(
         default_factory=lambda: {
             "python": {
@@ -44,6 +45,9 @@ class OfficialSourcePolicy:
             },
             "http": {
                 FactType.BACKGROUND.value: (
+                    "https://www.rfc-editor.org/rfc/rfc9110.html#name-404-not-found",
+                ),
+                FactType.CURRENT_VALUE.value: (
                     "https://www.rfc-editor.org/rfc/rfc9110.html#name-404-not-found",
                 ),
             },
@@ -92,18 +96,10 @@ class OfficialSourcePolicy:
         object.__setattr__(self, "sources", MappingProxyType(normalized))
 
     def urls_for(self, entity: str, fact_type: FactType) -> tuple[str, ...]:
-        normalized = entity.strip().casefold()
-        matched = next(
-            (
-                configured
-                for key, configured in self.sources.items()
-                if normalized == key or normalized.startswith(f"{key} ")
-            ),
-            None,
-        )
-        if matched is None:
+        matched_key = match_configured_entity(entity, self.sources)
+        if matched_key is None:
             return ()
-        return tuple(matched.get(fact_type.value, ()))
+        return tuple(self.sources[matched_key].get(fact_type.value, ()))
 
 
 __all__ = ["OfficialSourcePolicy"]

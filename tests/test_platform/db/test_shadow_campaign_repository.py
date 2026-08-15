@@ -57,11 +57,35 @@ from sana.modules.shared.ids import (
     TraceContext,
 )
 from sana.platform.db.session import create_database_engine, create_session_factory
+from sana.platform.db.shadow_campaign_repository import SqlShadowCampaignRepository
 from sana.platform.db.uow import TenantUnitOfWorkFactory
 
 
 DATABASE_URL = os.environ.get("SANA_TEST_DATABASE_URL")
 NOW = datetime(2026, 8, 15, tzinfo=UTC)
+
+
+def test_run_budget_reservation_uses_explicit_frozen_cost_envelope() -> None:
+    current = SimpleNamespace(
+        provider_call_structural_ceiling=48,
+        max_runs=6,
+        cost_rate_snapshot={
+            "possibly_billed_run_reserve_usd": "0.001",
+            "run_reservation_usd": "0.002",
+        },
+    )
+    legacy = SimpleNamespace(
+        provider_call_structural_ceiling=48,
+        max_runs=6,
+        cost_rate_snapshot={"possibly_billed_run_reserve_usd": "0.001"},
+    )
+
+    assert SqlShadowCampaignRepository._reservation_request(
+        current
+    ).estimated_cost == Decimal("0.002")
+    assert SqlShadowCampaignRepository._reservation_request(
+        legacy
+    ).estimated_cost == Decimal("0.001")
 
 
 class InProcessCandidateGateway:

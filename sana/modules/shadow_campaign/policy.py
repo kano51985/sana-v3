@@ -134,7 +134,7 @@ class GatePolicy:
 
     @property
     def sha256(self) -> str:
-        return snapshot_hash(self)
+        return snapshot_hash(self.snapshot())
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +143,7 @@ class CostRate:
     prompt_per_million_usd: Decimal
     completion_per_million_usd: Decimal
     possibly_billed_run_reserve_usd: Decimal
+    run_reservation_usd: Decimal | None = None
 
     def __post_init__(self) -> None:
         if not self.version.strip():
@@ -156,13 +157,30 @@ class CostRate:
             )
         ):
             raise ValueError("Cost rates cannot be negative")
+        if self.run_reservation_usd is not None and (
+            not self.run_reservation_usd.is_finite()
+            or self.run_reservation_usd <= 0
+            or self.run_reservation_usd
+            < self.possibly_billed_run_reserve_usd
+        ):
+            raise ValueError("Run reservation must cover possibly-billed exposure")
 
     @property
     def sha256(self) -> str:
-        return snapshot_hash(self)
+        return snapshot_hash(self.snapshot())
 
     def snapshot(self) -> dict[str, object]:
-        return canonical_snapshot(self)
+        payload = {
+            "version": self.version,
+            "prompt_per_million_usd": self.prompt_per_million_usd,
+            "completion_per_million_usd": self.completion_per_million_usd,
+            "possibly_billed_run_reserve_usd": (
+                self.possibly_billed_run_reserve_usd
+            ),
+        }
+        if self.run_reservation_usd is not None:
+            payload["run_reservation_usd"] = self.run_reservation_usd
+        return canonical_snapshot(payload)
 
 
 @dataclass(frozen=True, slots=True)
