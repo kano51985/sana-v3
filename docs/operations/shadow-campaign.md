@@ -70,7 +70,7 @@
   -OfflineFixture
 ```
 
-审计器要求当前 worktree clean，且 HEAD、Campaign provenance、attestation 和运行中容器 image ID 完全一致。它同时核对 Result/SearchRun 唯一性、提交次数、Campaign/Result/ModelInvocation 账本、ACTIVE reservation、SearchRun、Outbox、全部业务队列、FORCE RLS、worker health/进程数和报告文件哈希。日志与报告会在进程内扫描数据库口令、当前 token/key 和 manifest prompt；输出只包含 PASS 断言，不回显敏感值。离线模式还强制全部 Provider 调用、token 与费用为零。
+审计器要求当前 worktree clean，且 HEAD、Campaign provenance、attestation 和运行中容器 image ID 完全一致。它同时核对 Result/SearchRun 唯一性、提交次数、Campaign/Result/ModelInvocation 账本、ACTIVE reservation、SearchRun、Outbox、全部业务队列、FORCE RLS、worker health/进程 allowlist 和报告文件哈希。worker 必须有 main+2 prefork 三个 Celery 常驻进程；采样瞬间只额外允许至多一个命令行完全匹配的短生命周期 Redis PING health probe。日志与报告会在进程内扫描数据库口令、当前 token/key 和 manifest prompt；输出只包含 PASS 断言，不回显敏感值。离线模式还强制全部 Provider 调用、token 与费用为零。
 
 `worker` 的 Docker healthcheck 是有界 Redis PING，只证明 worker 进程依赖可达，不单独证明 Celery 消费能力。Celery pidbox/inspect 不作为容器健康条件，因为超时探针可能遗留子进程且在任务后产生假阴性；实际消费能力必须由完成 Campaign、队列归零和上述审计共同证明。
 

@@ -230,9 +230,29 @@ $workerState = Invoke-DockerText @(
     'inspect', '--format', '{{.State.Status}}|{{.State.Health.Status}}|{{.State.Paused}}', $worker
 ) 'inspect worker health'
 Assert-Equal $workerState 'running|healthy|false' 'worker health'
-$workerProcesses = Invoke-DockerText @('top', $worker, '-eo', 'pid,ppid,comm') 'inspect worker processes'
-$workerProcessCount = @(($workerProcesses -split "`r?`n") | Select-Object -Skip 1).Count
-Assert-Equal $workerProcessCount 3 'worker process count'
+$workerProcesses = Invoke-DockerText @('top', $worker, '-eo', 'pid,ppid,args') 'inspect worker processes'
+$workerProcessRows = @(($workerProcesses -split "`r?`n") | Select-Object -Skip 1)
+$celeryProcessRows = @(
+    $workerProcessRows | Where-Object {
+        $_.Contains('python -m celery -A sana.app.worker_entrypoint:app worker')
+    }
+)
+$healthProbeRows = @(
+    $workerProcessRows | Where-Object {
+        $_.Contains('python -c import socket;') -and
+        $_.Contains("socket.create_connection(('redis', 6379)") -and
+        $_.Contains('PING')
+    }
+)
+$unexpectedProcessRows = @(
+    $workerProcessRows | Where-Object {
+        $_ -notin $celeryProcessRows -and $_ -notin $healthProbeRows
+    }
+)
+Assert-Equal $celeryProcessRows.Count 3 'Celery worker process count'
+if ($healthProbeRows.Count -gt 1 -or $unexpectedProcessRows.Count -ne 0) {
+    throw 'worker process allowlist invariant failed'
+}
 
 if ($OfflineFixture) {
     Assert-Zero $audit.observed_provider_calls 'Campaign provider calls'

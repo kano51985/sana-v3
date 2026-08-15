@@ -125,6 +125,9 @@ def test_worker_concurrency_and_image_revision_are_frozen() -> None:
     )
     assert "COPY scripts ./scripts" in dockerfile
     assert "COPY evals ./evals" in dockerfile
+    assert dockerfile.index("RUN python -m pip install --no-cache-dir --no-deps") < (
+        dockerfile.index("COPY scripts ./scripts")
+    )
 
 
 def test_host_launcher_hashes_sanitized_inputs_and_never_accepts_token_argv() -> None:
@@ -177,7 +180,8 @@ def test_post_campaign_auditor_is_fail_closed_and_secret_safe() -> None:
     assert "relforcerowsecurity" in auditor
     assert "LLEN" in auditor
     assert "{{.State.Status}}|{{.State.Health.Status}}|{{.State.Paused}}" in auditor
-    assert "worker process count" in auditor
+    assert "Celery worker process count" in auditor
+    assert "worker process allowlist invariant failed" in auditor
     assert "@('logs', $container)" in auditor
     assert "Campaign report integrity/privacy scan failed" in auditor
     assert "privacy_scan=PASS" in auditor

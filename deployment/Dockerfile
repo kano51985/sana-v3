@@ -16,11 +16,12 @@ COPY pyproject.toml alembic.ini ./
 COPY alembic ./alembic
 COPY sana ./sana
 COPY interfaces ./interfaces
+
+RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation .
+
 COPY scripts ./scripts
 COPY evals ./evals
 COPY .streamlit ./.streamlit
-
-RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation .
 
 RUN groupadd --system sana \
     && useradd --system --gid sana --home-dir /app --no-create-home sana \
