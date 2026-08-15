@@ -12,27 +12,27 @@ FIXTURE = Path(__file__).parents[2] / "fixtures" / "evals" / "apex_multi_fact.js
 def test_apex_multi_fact_request_routes_directly_to_research() -> None:
     case = json.loads(FIXTURE.read_text(encoding="utf-8"))
 
-    decision = AutomaticModeRouter("search-v7").route(case["user_message"])
+    decision = AutomaticModeRouter("search-v8").route(case["user_message"])
 
     assert decision.mode is SearchMode.RESEARCH
     assert "three_or_more_required_facts" in decision.reason_codes
     assert "fresh_multi_fact" in decision.reason_codes
-    assert decision.policy_version == "search-v7"
+    assert decision.policy_version == "search-v8"
 
 
 def test_simple_single_fact_stays_fast() -> None:
-    decision = AutomaticModeRouter("search-v7").route("Apex Legends 是哪一年发布的？")
+    decision = AutomaticModeRouter("search-v8").route("Apex Legends 是哪一年发布的？")
     assert decision.mode is SearchMode.FAST
 
 
 def test_high_consequence_request_routes_research_for_cross_check() -> None:
-    decision = AutomaticModeRouter("search-v7").route("这个医疗诊断结论可信吗？")
+    decision = AutomaticModeRouter("search-v8").route("这个医疗诊断结论可信吗？")
     assert decision.mode is SearchMode.RESEARCH
     assert "high_consequence_cross_check" in decision.reason_codes
 
 
 def test_enumerated_and_cross_check_requests_route_to_research() -> None:
-    router = AutomaticModeRouter("search-v7")
+    router = AutomaticModeRouter("search-v8")
 
     enumerated = router.route("列出四种 Git 对象类型，并分别说明每种对象的用途。")
     cross_check = router.route(
@@ -51,12 +51,12 @@ class CountingBoundaryClassifier:
 
     async def classify(self, message: str) -> RoutingDecision:
         self.calls += 1
-        return RoutingDecision(SearchMode.RESEARCH, ("model_boundary",), "search-v7", 0.75)
+        return RoutingDecision(SearchMode.RESEARCH, ("model_boundary",), "search-v8", 0.75)
 
 
 async def test_boundary_classifier_is_called_at_most_once_for_ambiguous_text() -> None:
     classifier = CountingBoundaryClassifier()
-    decision = await AutomaticModeRouter("search-v7").route_with_boundary_classifier(
+    decision = await AutomaticModeRouter("search-v8").route_with_boundary_classifier(
         "它现在怎么样？",
         classifier,
     )

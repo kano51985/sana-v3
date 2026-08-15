@@ -32,6 +32,7 @@ def test_standards_toolchains_and_reviews_have_direct_fallbacks() -> None:
     assert policy.urls_for("HTTP 404 reason phrase", FactType.CURRENT_VALUE) == (
         "https://www.iana.org/assignments/http-status-codes/"
         "http-status-codes-1.csv",
+        "https://www.rfc-editor.org/rfc/rfc9110.html#name-404-not-found",
     )
     assert policy.urls_for("Git object model", FactType.BACKGROUND) == (
         "https://www.kernel.org/pub/software/scm/git/docs/gitglossary.html",

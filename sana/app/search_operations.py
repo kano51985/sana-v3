@@ -290,7 +290,7 @@ def _fact_from_dict(payload: dict[str, Any]) -> FactRequirement:
 
 
 _FETCH_WINDOW_SECONDS = {
-    SearchMode.FAST: 4.0,
+    SearchMode.FAST: 6.0,
     SearchMode.RESEARCH: 8.0,
 }
 
@@ -341,7 +341,19 @@ def _select_ranked_hits(
         for _, _, authority in ranked
     )
     if mode is SearchMode.FAST:
-        selection_limit = 1 if has_official else min(2, max_selected_hits)
+        direct_official_identities = {
+            identity
+            for item, identity, authority in ranked
+            if authority is SourceAuthority.OFFICIAL
+            and str(item.get("provider", "")) == "direct"
+        }
+        if has_official:
+            selection_limit = min(
+                max_selected_hits,
+                2 if len(direct_official_identities) >= 2 else 1,
+            )
+        else:
+            selection_limit = min(2, max_selected_hits)
         diverse = []
         deferred = []
         seen_identities: set[str] = set()

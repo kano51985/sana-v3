@@ -70,12 +70,45 @@ def test_fetch_deadline_is_bounded_per_source_and_by_step() -> None:
         SearchMode.FAST,
         NOW,
         NOW + timedelta(seconds=30),
-    ) == NOW + timedelta(seconds=4)
+    ) == NOW + timedelta(seconds=6)
     assert _bounded_fetch_deadline(
         SearchMode.RESEARCH,
         NOW,
         NOW + timedelta(seconds=5),
     ) == NOW + timedelta(seconds=5)
+
+
+def test_fast_selection_keeps_two_reviewed_official_failovers() -> None:
+    candidates = []
+    for url, score in (
+        (
+            "https://www.iana.org/assignments/http-status-codes/"
+            "http-status-codes-1.csv",
+            1.0,
+        ),
+        (
+            "https://www.rfc-editor.org/rfc/rfc9110.html#name-404-not-found",
+            0.95,
+        ),
+    ):
+        candidate = _hit(url, score=score, rank=1)
+        candidate["provider"] = "direct"
+        candidates.append(candidate)
+
+    selected = _select_ranked_hits(
+        tuple(candidates),
+        authority_policy=SourceAuthorityPolicy(),
+        entity="HTTP 404",
+        mode=SearchMode.FAST,
+        max_selected_hits=4,
+    )
+
+    assert len(selected) == 2
+    assert {item["canonical_url"] for item in selected} == {
+        "https://www.iana.org/assignments/http-status-codes/"
+        "http-status-codes-1.csv",
+        "https://www.rfc-editor.org/rfc/rfc9110.html#name-404-not-found",
+    }
 
 
 def test_research_selection_covers_facts_before_redundant_publishers() -> None:

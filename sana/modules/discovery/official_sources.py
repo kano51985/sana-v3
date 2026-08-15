@@ -14,7 +14,7 @@ from sana.modules.shared.entity_matching import match_configured_entity
 class DirectSourcePolicy:
     """Reviewed direct URLs; authority remains owned by SourceAuthorityPolicy."""
 
-    version: str = "direct-sources-v1"
+    version: str = "direct-sources-v2"
     sources: Mapping[str, Mapping[str, tuple[str, ...]]] = field(
         default_factory=lambda: {
             "python": {
@@ -57,6 +57,7 @@ class DirectSourcePolicy:
                 FactType.CURRENT_VALUE.value: (
                     "https://www.iana.org/assignments/http-status-codes/"
                     "http-status-codes-1.csv",
+                    "https://www.rfc-editor.org/rfc/rfc9110.html#name-404-not-found",
                 ),
             },
             "git": {
