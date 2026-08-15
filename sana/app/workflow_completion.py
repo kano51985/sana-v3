@@ -15,6 +15,7 @@ from sana.modules.orchestration.artifact_store import ArtifactStore
 from sana.modules.orchestration.domain import (
     AnswerQuality,
     ArtifactRef,
+    SearchMode,
     SearchRun,
     SearchStep,
     StepStatus,
@@ -326,9 +327,9 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
             for row in rows
             if row.step_type in {StepType.FETCH.value, StepType.EXTRACT.value}
         ]
-        if any(self._status(row, current) not in _TERMINAL for row in fetch_extract):
-            return
-        plan_ref = await self._plan_reference(uow, run, current)
+        all_fetch_extract_terminal = all(
+            self._status(row, current) in _TERMINAL for row in fetch_extract
+        )
         extract_refs = [
             dict(row.output_ref)
             for row in rows
@@ -343,15 +344,66 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
             and _ref_dict(current.output_ref) not in extract_refs
         ):
             extract_refs.append(_ref_dict(current.output_ref))
-        if not extract_refs:
-            await self._maybe_synthesize(
-                uow,
-                run,
-                current,
-                trace_context,
-                degradation_codes=degradation_codes,
-            )
+        existing_verify = next(
+            (row for row in rows if row.step_type == StepType.VERIFY.value),
+            None,
+        )
+        if existing_verify is not None:
+            if (
+                all_fetch_extract_terminal
+                and self._status(existing_verify, current) in _TERMINAL
+            ):
+                await self._maybe_synthesize(
+                    uow,
+                    run,
+                    current,
+                    trace_context,
+                    degradation_codes=degradation_codes,
+                )
             return
+        if not extract_refs:
+            if all_fetch_extract_terminal:
+                await self._maybe_synthesize(
+                    uow,
+                    run,
+                    current,
+                    trace_context,
+                    degradation_codes=degradation_codes,
+                )
+            return
+        plan_ref = await self._plan_reference(uow, run, current)
+        if not all_fetch_extract_terminal:
+            if run.mode is not SearchMode.FAST:
+                return
+            extracted_payloads = [
+                await self._payload(
+                    run.tenant_id,
+                    artifact_from_dict(dict(reference)),
+                )
+                for reference in extract_refs
+            ]
+            if any(
+                str(dict(payload.get("hit", {})).get("provider", "")) != "direct"
+                for payload in extracted_payloads
+            ):
+                return
+            plan = await self._payload(run.tenant_id, plan_ref)
+            required_fact_ids = {
+                str(fact["id"])
+                for fact in plan.get("facts", ())
+                if bool(fact.get("required", True))
+            }
+            extracted_fact_ids = {
+                str(fact_id)
+                for payload in extracted_payloads
+                for fact_id in (
+                    dict(payload.get("hit", {})).get("fact_ids")
+                    or (dict(payload.get("hit", {})).get("fact_id"),)
+                )
+                if fact_id is not None
+            }
+            if not required_fact_ids or not required_fact_ids <= extracted_fact_ids:
+                return
         input_ref = await self._artifacts.put_json(
             run.tenant_id,
             run.id,

@@ -26,8 +26,13 @@ NOW = datetime(2026, 8, 15, tzinfo=timezone.utc)
 
 
 class RecordingArtifacts:
-    def __init__(self) -> None:
+    def __init__(self, stored: dict[str, dict] | None = None) -> None:
         self.payloads: list[dict] = []
+        self.stored = stored or {}
+
+    async def get_json(self, tenant_id, reference):
+        del tenant_id
+        return self.stored[reference.uri]
 
     async def put_json(self, tenant_id, run_id, payload):
         del tenant_id, run_id
@@ -68,7 +73,7 @@ class RecordingCoordinator(WorkflowCompletionCoordinator):
         return True
 
 
-def _run() -> SearchRun:
+def _run(mode: SearchMode = SearchMode.FAST) -> SearchRun:
     tenant_id = uuid4()
     return SearchRun(
         uuid4(),
@@ -76,8 +81,8 @@ def _run() -> SearchRun:
         uuid4(),
         uuid4(),
         uuid4(),
-        RoutingDecision(SearchMode.FAST, ("test",), "search-v9", 1.0),
-        SearchPolicy.default().snapshot(SearchMode.FAST, NOW),
+        RoutingDecision(mode, ("test",), "search-v10", 1.0),
+        SearchPolicy.default().snapshot(mode, NOW),
     )
 
 
@@ -155,6 +160,171 @@ async def test_verify_fan_in_must_finish_before_synthesis_is_scheduled() -> None
         StepType.VERIFY,
         StepType.SYNTHESIZE,
     ]
+    assert artifacts.payloads[-1]["verify_ref"] == {
+        "uri": verify_ref.uri,
+        "sha256": verify_ref.sha256,
+    }
+
+
+@pytest.mark.asyncio
+async def test_fast_direct_hedge_can_verify_before_slow_sibling_finishes() -> None:
+    run = _run()
+    fact_id = uuid4()
+    plan_ref = ArtifactRef("artifact://plan", "1" * 64)
+    extract_ref = ArtifactRef("artifact://extract-fast", "2" * 64)
+    artifacts = RecordingArtifacts(
+        {
+            plan_ref.uri: {
+                "facts": [{"id": str(fact_id), "required": True}],
+            },
+            extract_ref.uri: {
+                "hit": {
+                    "provider": "direct",
+                    "fact_ids": [str(fact_id)],
+                }
+            },
+        }
+    )
+    coordinator = RecordingCoordinator(artifacts, plan_ref)
+    extract = _successful_step(
+        run,
+        "extract:fast",
+        StepType.EXTRACT,
+        extract_ref,
+    )
+    coordinator.rows = [
+        SimpleNamespace(
+            id=uuid4(),
+            step_type=StepType.FETCH.value,
+            status="SUCCEEDED",
+            output_ref={"uri": "artifact://fetch-fast", "sha256": "3" * 64},
+        ),
+        SimpleNamespace(
+            id=extract.id,
+            step_type=StepType.EXTRACT.value,
+            status="RUNNING",
+            output_ref=None,
+        ),
+        SimpleNamespace(
+            id=uuid4(),
+            step_type=StepType.FETCH.value,
+            status="RUNNING",
+            output_ref=None,
+        ),
+    ]
+
+    await coordinator._maybe_verify(object(), run, extract, TraceContext.create())
+
+    assert [item["step_type"] for item in coordinator.added] == [StepType.VERIFY]
+    assert artifacts.payloads[-1]["extract_refs"] == [
+        {"uri": extract_ref.uri, "sha256": extract_ref.sha256}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mode", "provider", "covers_required_fact"),
+    [
+        (SearchMode.RESEARCH, "direct", True),
+        (SearchMode.FAST, "web", True),
+        (SearchMode.FAST, "direct", False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_early_verify_requires_fast_direct_full_fact_coverage(
+    mode: SearchMode,
+    provider: str,
+    covers_required_fact: bool,
+) -> None:
+    run = _run(mode)
+    fact_id = uuid4()
+    plan_ref = ArtifactRef("artifact://plan", "1" * 64)
+    extract_ref = ArtifactRef("artifact://extract-fast", "2" * 64)
+    artifacts = RecordingArtifacts(
+        {
+            plan_ref.uri: {
+                "facts": [{"id": str(fact_id), "required": True}],
+            },
+            extract_ref.uri: {
+                "hit": {
+                    "provider": provider,
+                    "fact_ids": [
+                        str(fact_id if covers_required_fact else uuid4())
+                    ],
+                }
+            },
+        }
+    )
+    coordinator = RecordingCoordinator(artifacts, plan_ref)
+    extract = _successful_step(run, "extract:fast", StepType.EXTRACT, extract_ref)
+    coordinator.rows = [
+        SimpleNamespace(
+            id=extract.id,
+            step_type=StepType.EXTRACT.value,
+            status="RUNNING",
+            output_ref=None,
+        ),
+        SimpleNamespace(
+            id=uuid4(),
+            step_type=StepType.FETCH.value,
+            status="RUNNING",
+            output_ref=None,
+        ),
+    ]
+
+    await coordinator._maybe_verify(object(), run, extract, TraceContext.create())
+
+    assert coordinator.added == []
+    assert artifacts.payloads == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_slow_sibling_resumes_synthesis_after_early_verify() -> None:
+    run = _run()
+    plan_ref = ArtifactRef("artifact://plan", "1" * 64)
+    verify_ref = ArtifactRef("artifact://verify", "2" * 64)
+    artifacts = RecordingArtifacts()
+    coordinator = RecordingCoordinator(artifacts, plan_ref)
+    slow_fetch = _successful_step(
+        run,
+        "fetch:slow",
+        StepType.FETCH,
+        ArtifactRef("artifact://fetch-slow", "3" * 64),
+    )
+    coordinator.rows = [
+        SimpleNamespace(
+            id=uuid4(),
+            step_type=StepType.FETCH.value,
+            status="SUCCEEDED",
+            output_ref={"uri": "artifact://fetch-fast", "sha256": "4" * 64},
+        ),
+        SimpleNamespace(
+            id=uuid4(),
+            step_type=StepType.EXTRACT.value,
+            status="SUCCEEDED",
+            output_ref={"uri": "artifact://extract-fast", "sha256": "5" * 64},
+        ),
+        SimpleNamespace(
+            id=slow_fetch.id,
+            step_type=StepType.FETCH.value,
+            status="RUNNING",
+            output_ref=None,
+        ),
+        SimpleNamespace(
+            id=uuid4(),
+            step_type=StepType.VERIFY.value,
+            status="SUCCEEDED",
+            output_ref={"uri": verify_ref.uri, "sha256": verify_ref.sha256},
+        ),
+    ]
+
+    await coordinator._maybe_verify(
+        object(),
+        run,
+        slow_fetch,
+        TraceContext.create(),
+    )
+
+    assert [item["step_type"] for item in coordinator.added] == [StepType.SYNTHESIZE]
     assert artifacts.payloads[-1]["verify_ref"] == {
         "uri": verify_ref.uri,
         "sha256": verify_ref.sha256,
