@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -33,6 +34,13 @@ class ScriptedProvider:
         return response
 
 
+class HangingProvider:
+    async def invoke(self, request, *, timeout_seconds):
+        del request, timeout_seconds
+        await asyncio.sleep(1)
+        return ProviderResponse("late", "model")
+
+
 def make_gateway(provider, *, retries=1, timeout=60.0):
     return ModelGateway(
         {"fake": provider},
@@ -62,9 +70,24 @@ async def test_absolute_deadline_caps_provider_timeout() -> None:
     )
 
     assert result.text == "ok"
-    assert provider.timeouts == [3.0]
+    assert provider.timeouts == [1.0]
     assert budget.used_calls == 1
     assert budget.used_total_tokens == 15
+
+
+@pytest.mark.asyncio
+async def test_gateway_enforces_total_provider_wall_clock_timeout() -> None:
+    gateway = make_gateway(HangingProvider(), retries=0, timeout=0.01)
+
+    with pytest.raises(TypedError) as captured:
+        await gateway.generate(
+            ModelRole.PLANNER,
+            MESSAGES,
+            deadline=NOW + timedelta(seconds=10),
+            budget=ModelCallBudget(1, 100),
+        )
+
+    assert captured.value.code == "model_provider_timeout"
 
 
 @pytest.mark.asyncio

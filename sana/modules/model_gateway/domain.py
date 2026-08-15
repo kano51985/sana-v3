@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import asyncio
+from dataclasses import dataclass
 from enum import StrEnum
-from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any
+from uuid import UUID
 
 from sana.modules.shared.errors import ErrorCategory, TypedError
+from sana.modules.shared.ids import TraceContext
 
 
 class ModelRole(StrEnum):
@@ -23,6 +25,30 @@ class MessageRole(StrEnum):
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
+
+
+class OutputFormat(StrEnum):
+    TEXT = "text"
+    JSON_OBJECT = "json_object"
+
+
+class ThinkingMode(StrEnum):
+    DISABLED = "disabled"
+    ENABLED = "enabled"
+
+
+class ModelInvocationStatus(StrEnum):
+    STARTED = "STARTED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    ABANDONED = "ABANDONED"
+    REUSED = "REUSED"
+
+
+class BillingDisposition(StrEnum):
+    NOT_BILLED = "NOT_BILLED"
+    BILLED = "BILLED"
+    POSSIBLY_BILLED = "POSSIBLY_BILLED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,12 +68,72 @@ class ModelRequest:
     messages: tuple[ModelMessage, ...]
     temperature: float
     max_output_tokens: int
+    output_format: OutputFormat = OutputFormat.TEXT
+    thinking_mode: ThinkingMode = ThinkingMode.DISABLED
+    prompt_template_version: str = "unspecified"
+    parser_schema_version: str = "none"
 
     def __post_init__(self) -> None:
         if not self.model.strip() or not self.messages:
             raise ValueError("Model and messages are required")
         if self.max_output_tokens < 1:
             raise ValueError("max_output_tokens must be positive")
+        if not self.prompt_template_version.strip():
+            raise ValueError("prompt_template_version cannot be empty")
+        if not self.parser_schema_version.strip():
+            raise ValueError("parser_schema_version cannot be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class ModelInvocationContext:
+    tenant_id: UUID
+    run_id: UUID
+    step_id: UUID
+    step_key: str
+    attempt_id: UUID
+    attempt_no: int
+    trace_context: TraceContext
+    input_refs: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.step_key.strip():
+            raise ValueError("Model invocation step key cannot be empty")
+        if self.attempt_no < 1:
+            raise ValueError("Model invocation attempt number must be positive")
+        if any(not value.strip() for value in self.input_refs):
+            raise ValueError("Model invocation input references cannot be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class ModelInvocationReservation:
+    id: UUID
+    call_no: int
+    logical_call_key: str
+
+    def __post_init__(self) -> None:
+        if self.call_no < 1 or not self.logical_call_key.strip():
+            raise ValueError("Model invocation reservation is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class ReusedModelResponse:
+    response: "ProviderResponse"
+    source_invocation_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class RedactedInvocationError:
+    category: str
+    code: str
+    retryable: bool
+
+    @classmethod
+    def from_exception(cls, error: BaseException) -> "RedactedInvocationError":
+        if isinstance(error, TypedError):
+            return cls(error.category.value, error.code, error.retryable)
+        if isinstance(error, asyncio.CancelledError):
+            return cls(ErrorCategory.CANCELLED.value, "model_call_cancelled", False)
+        return cls(ErrorCategory.INFRASTRUCTURE.value, "model_provider_error", False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,12 +142,13 @@ class ProviderResponse:
     model: str
     prompt_tokens: int = 0
     completion_tokens: int = 0
-    raw: Mapping[str, Any] = field(default_factory=dict)
+    response_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.prompt_tokens < 0 or self.completion_tokens < 0:
             raise ValueError("Token usage cannot be negative")
-        object.__setattr__(self, "raw", MappingProxyType(dict(self.raw)))
+        if self.response_id is not None and not self.response_id.strip():
+            raise ValueError("response_id cannot be blank")
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +160,7 @@ class ModelResult:
     completion_tokens: int = 0
     provider_calls: int = 1
     repaired: bool = False
+    reused: bool = False
 
 
 class ModelBudgetExceeded(TypedError):

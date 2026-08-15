@@ -39,11 +39,14 @@ class StepBudgetCost:
             raise ValueError("Step budget cost cannot be negative")
 
     def apply(self, usage: BudgetUsage, *, elapsed_seconds: float | None = None) -> BudgetUsage:
+        # Provider calls are reserved atomically by ModelInvocationAuditSink.
+        # ``llm_calls`` remains readable for old graph snapshots but is never
+        # applied here, preventing Step completion from counting it twice.
         return usage.add(
             queries=self.queries,
             providers=self.providers,
             fetches=self.fetches,
-            llm_calls=self.llm_calls,
+            llm_calls=0,
             phase=self.phase.value,
             elapsed_seconds=(
                 self.estimated_seconds if elapsed_seconds is None else elapsed_seconds
@@ -232,7 +235,6 @@ class FastSearchGraph:
                 StepBudgetCost(
                     BudgetPhase.ROUTE_PLAN,
                     estimated_seconds=0.8,
-                    llm_calls=1,
                 ),
                 False,
             )
@@ -334,14 +336,14 @@ class FastSearchGraph:
         *,
         fetch_seconds: float = 1.0,
         verify_seconds: float = 0.3,
-    ) -> tuple[str, str, str]:
+    ) -> tuple[str, str]:
+        del verify_seconds
         if self._stage is not _GraphStage.DISCOVERY_SEALED:
             raise ValueError("Fetch pipelines require sealed discovery")
         if not source_key.strip():
             raise ValueError("Fetch source key cannot be empty")
         fetch_key = f"fetch:{source_key}"
         extract_key = f"extract:{source_key}"
-        verify_key = f"verify:{source_key}"
         self._add(
             WorkflowStepSpec(
                 fetch_key,
@@ -364,32 +366,31 @@ class FastSearchGraph:
                 True,
             )
         )
-        self._add(
-            WorkflowStepSpec(
-                verify_key,
-                StepType.VERIFY,
-                (extract_key,),
-                StepBudgetCost(BudgetPhase.VERIFY, estimated_seconds=verify_seconds),
-                True,
-            )
-        )
-        return fetch_key, extract_key, verify_key
+        return fetch_key, extract_key
 
     def seal_synthesis(self) -> None:
         if self._stage is not _GraphStage.DISCOVERY_SEALED:
             raise ValueError("Synthesis requires sealed discovery")
         dependencies = tuple(
-            key for key, node in self._nodes.items() if node.step_type is StepType.VERIFY
+            key for key, node in self._nodes.items() if node.step_type is StepType.EXTRACT
         ) or ("select",)
+        self._add(
+            WorkflowStepSpec(
+                "verify",
+                StepType.VERIFY,
+                dependencies,
+                StepBudgetCost(BudgetPhase.VERIFY, estimated_seconds=0.3),
+                True,
+            )
+        )
         self._add(
             WorkflowStepSpec(
                 "synthesize",
                 StepType.SYNTHESIZE,
-                dependencies,
+                ("verify",),
                 StepBudgetCost(
                     BudgetPhase.SYNTHESIZE,
                     estimated_seconds=0.8,
-                    llm_calls=1,
                 ),
                 False,
             )
@@ -449,9 +450,16 @@ class FastSearchGraph:
             if node.step_type in {StepType.EXTRACT, StepType.VERIFY}
             and statuses.get(key, StepStatus.READY) is StepStatus.READY
             and all(statuses.get(dependency) in terminal for dependency in node.dependencies)
-            and any(
-                statuses.get(dependency) is not StepStatus.SUCCEEDED
-                for dependency in node.dependencies
+            and (
+                any(
+                    statuses.get(dependency) is not StepStatus.SUCCEEDED
+                    for dependency in node.dependencies
+                )
+                if node.step_type is StepType.EXTRACT
+                else all(
+                    statuses.get(dependency) is not StepStatus.SUCCEEDED
+                    for dependency in node.dependencies
+                )
             )
         )
 
@@ -465,6 +473,13 @@ class FastSearchGraph:
                 for dependency in node.dependencies
             ):
                 return all(status in terminal for status in dependency_statuses)
+            if node.step_type is StepType.VERIFY and all(
+                self._nodes[dependency].step_type is StepType.EXTRACT
+                for dependency in node.dependencies
+            ):
+                return all(status in terminal for status in dependency_statuses) and any(
+                    status is StepStatus.SUCCEEDED for status in dependency_statuses
+                )
             return all(status is StepStatus.SUCCEEDED for status in dependency_statuses)
 
         ready = tuple(

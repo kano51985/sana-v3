@@ -6,7 +6,12 @@ from typing import Any
 
 import httpx
 
-from sana.modules.model_gateway.domain import ModelOutputError, ModelRequest, ProviderResponse
+from sana.modules.model_gateway.domain import (
+    ModelOutputError,
+    ModelRequest,
+    OutputFormat,
+    ProviderResponse,
+)
 from sana.modules.model_gateway.ports import SecretProvider
 from sana.modules.shared.errors import ErrorCategory, TypedError
 from sana.platform.security.secrets import require_secret
@@ -41,13 +46,8 @@ class OpenAICompatibleModelProvider:
             )
         return headers
 
-    async def invoke(
-        self,
-        request: ModelRequest,
-        *,
-        timeout_seconds: float,
-    ) -> ProviderResponse:
-        payload = {
+    def _request_payload(self, request: ModelRequest) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "model": request.model,
             "messages": [
                 {"role": message.role.value, "content": message.content}
@@ -56,6 +56,17 @@ class OpenAICompatibleModelProvider:
             "temperature": request.temperature,
             "max_tokens": request.max_output_tokens,
         }
+        if request.output_format is OutputFormat.JSON_OBJECT:
+            payload["response_format"] = {"type": "json_object"}
+        return payload
+
+    async def invoke(
+        self,
+        request: ModelRequest,
+        *,
+        timeout_seconds: float,
+    ) -> ProviderResponse:
+        payload = self._request_payload(request)
         try:
             response = await self._client.post(
                 f"{self._base_url}/chat/completions",
@@ -86,10 +97,22 @@ class OpenAICompatibleModelProvider:
                 retryable=False,
             )
         try:
-            data: dict[str, Any] = response.json()
+            data = response.json()
+            if not isinstance(data, dict):
+                raise TypeError("response body must be an object")
             text = data["choices"][0]["message"]["content"]
             usage = data.get("usage", {})
+            if not isinstance(usage, dict):
+                raise TypeError("usage must be an object")
             model = str(data.get("model") or request.model)
+            prompt_tokens = int(usage.get("prompt_tokens", 0))
+            completion_tokens = int(usage.get("completion_tokens", 0))
+            response_id_value = data.get("id")
+            response_id = (
+                response_id_value
+                if isinstance(response_id_value, str) and response_id_value.strip()
+                else None
+            )
         except (ValueError, KeyError, IndexError, TypeError) as exc:
             raise ModelOutputError(f"Model provider returned invalid response data: {exc}") from exc
         if not isinstance(text, str) or not text.strip():
@@ -97,9 +120,9 @@ class OpenAICompatibleModelProvider:
         return ProviderResponse(
             text=text,
             model=model,
-            prompt_tokens=int(usage.get("prompt_tokens", 0)),
-            completion_tokens=int(usage.get("completion_tokens", 0)),
-            raw=data,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            response_id=response_id,
         )
 
     async def aclose(self) -> None:

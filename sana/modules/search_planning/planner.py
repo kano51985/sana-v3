@@ -9,6 +9,7 @@ from typing import Any, Protocol
 from sana.modules.model_gateway.domain import (
     MessageRole,
     ModelCallBudget,
+    ModelInvocationContext,
     ModelMessage,
     ModelResult,
     ModelRole,
@@ -39,12 +40,16 @@ class IntentParser:
         facts = tuple(
             FactRequirement(
                 key=str(raw["key"]),
-                fact_type=FactType(str(raw["fact_type"])),
+                fact_type=FactType(str(raw["fact_type"]).strip().lower()),
                 description=str(raw["description"]),
                 subject=str(raw.get("subject") or payload["entity"]),
                 required=bool(raw.get("required", True)),
-                freshness=Freshness(str(raw.get("freshness", "STABLE"))),
-                consequence=Consequence(str(raw.get("consequence", "LOW"))),
+                freshness=Freshness(
+                    str(raw.get("freshness", "STABLE")).strip().upper()
+                ),
+                consequence=Consequence(
+                    str(raw.get("consequence", "LOW")).strip().upper()
+                ),
                 preferred_source_kinds=tuple(
                     str(item) for item in raw.get("preferred_source_kinds", [])
                 ),
@@ -64,9 +69,14 @@ class IntentParser:
 
     def repair_instruction(self, error: Exception) -> str:
         return (
-            "Return only valid JSON with entity, aliases, locale, and facts. "
-            "Each fact needs key, fact_type, description, subject, required, "
-            f"freshness, consequence, preferred_source_kinds. Error: {error}"
+            "Return only one valid JSON object with entity, aliases, locale, "
+            "requires_comparison, requires_complete_sources, and facts. Each fact "
+            "must contain key, fact_type, description, subject, required, freshness, "
+            "consequence, and preferred_source_kinds. fact_type must be one of "
+            "character_changes, version, patch_notes, team_meta, current_value, "
+            "comparison, background. freshness must be exactly STABLE, RECENT, or "
+            "CURRENT. consequence must be exactly LOW, MEDIUM, or HIGH. Do not add "
+            f"markdown or commentary. Validation error type: {type(error).__name__}."
         )
 
 
@@ -87,11 +97,18 @@ class SearchPlanner:
         allowed_conversation_summary: str = "",
         deadline: datetime,
         model_budget: ModelCallBudget,
+        invocation_context: ModelInvocationContext | None = None,
     ) -> NormalizedIntent:
         system = (
             "Normalize the current request into a canonical entity and atomic fact "
             "requirements. Do not turn conversational filler into search terms. "
-            "Return JSON only."
+            "Return one JSON object only with entity, aliases, locale, "
+            "requires_comparison, requires_complete_sources, and facts. Each fact "
+            "must contain key, fact_type, description, subject, required, freshness, "
+            "consequence, and preferred_source_kinds. Allowed fact_type values are "
+            "character_changes, version, patch_notes, team_meta, current_value, "
+            "comparison, background. Use uppercase STABLE, RECENT, or CURRENT for "
+            "freshness and uppercase LOW, MEDIUM, or HIGH for consequence."
         )
         user = f"Current request:\n{user_message.strip()}"
         if allowed_conversation_summary.strip():
@@ -108,6 +125,7 @@ class SearchPlanner:
             deadline=deadline,
             budget=model_budget,
             parser=self._parser,
+            invocation_context=invocation_context,
         )
         if not isinstance(result.parsed, NormalizedIntent):
             raise TypeError("Planner gateway did not return a NormalizedIntent")

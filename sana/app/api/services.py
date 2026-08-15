@@ -287,7 +287,7 @@ class DatabaseRunApplicationService:
                         FactRequirement.tenant_id == principal.tenant_id,
                         FactRequirement.run_id == run_id,
                         FactRequirement.required.is_(True),
-                        FactRequirement.status != "COVERED",
+                        FactRequirement.status.not_in(("COVERED", "VERIFIED")),
                     )
                     .order_by(FactRequirement.fact_key)
                 )

@@ -113,6 +113,15 @@ async def run_dispatcher(*, once: bool = False) -> None:
                         "dispatched": recovery.dispatched,
                     },
                 )
+            if recovery.sealed_model_invocations:
+                logger.warning(
+                    "Reconciliation sealed orphaned model invocations",
+                    extra={
+                        "sealed_model_invocations": (
+                            recovery.sealed_model_invocations
+                        )
+                    },
+                )
             cycle = await pump.run_once(batch_size=settings.outbox_batch_size)
             if cycle.failed:
                 logger.warning(

@@ -62,6 +62,8 @@ def usage_to_dict(usage: BudgetUsage) -> dict[str, Any]:
         "provider_count": usage.provider_count,
         "fetch_count": usage.fetch_count,
         "llm_call_count": usage.llm_call_count,
+        "prompt_token_count": usage.prompt_token_count,
+        "completion_token_count": usage.completion_token_count,
         "expansion_rounds": usage.expansion_rounds,
         "phase_seconds": dict(usage.phase_seconds),
     }
@@ -73,6 +75,8 @@ def usage_from_dict(payload: dict[str, Any]) -> BudgetUsage:
         provider_count=int(payload.get("provider_count", 0)),
         fetch_count=int(payload.get("fetch_count", 0)),
         llm_call_count=int(payload.get("llm_call_count", 0)),
+        prompt_token_count=int(payload.get("prompt_token_count", 0)),
+        completion_token_count=int(payload.get("completion_token_count", 0)),
         expansion_rounds=int(payload.get("expansion_rounds", 0)),
         phase_seconds={
             str(key): float(value)

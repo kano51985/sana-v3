@@ -63,7 +63,12 @@ class QuerySpec(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 class ProviderAttempt(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "provider_attempts"
     __table_args__ = (
-        UniqueConstraint("query_spec_id", "attempt_no", name="uq_provider_attempts_query_number"),
+        UniqueConstraint(
+            "query_spec_id",
+            "provider",
+            "attempt_no",
+            name="uq_provider_attempts_query_provider_number",
+        ),
         Index("ix_provider_attempts_tenant_run_started", "tenant_id", "run_id", "started_at"),
     )
 
@@ -200,6 +205,8 @@ class EvidenceCandidate(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     end_offset: Mapped[int] = mapped_column(Integer, nullable=False)
     support_type: Mapped[str] = mapped_column(String(32), nullable=False)
     candidate_score: Mapped[float] = mapped_column(Float, nullable=False)
+    source_identity: Mapped[str] = mapped_column(String(500), nullable=False)
+    source_authority: Mapped[str] = mapped_column(String(32), nullable=False)
 
 
 class VerifiedEvidence(UUIDPrimaryKeyMixin, Base):
@@ -249,3 +256,16 @@ class Citation(UUIDPrimaryKeyMixin, Base):
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     label: Mapped[str] = mapped_column(String(100), nullable=False)
     rendered_url: Mapped[str] = mapped_column(Text, nullable=False)
+    document_version_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("document_versions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    document_chunk_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("document_chunks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    quote: Mapped[str] = mapped_column(Text, nullable=False)
+    start_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_offset: Mapped[int] = mapped_column(Integer, nullable=False)

@@ -237,11 +237,20 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
         run: SearchRun,
         current: SearchStep,
         trace_context: TraceContext,
+        *,
+        degradation_codes: tuple[str, ...] = (),
     ) -> None:
         rows = await self._step_rows(uow, run)
         non_synthesis = [row for row in rows if row.step_type != StepType.SYNTHESIZE.value]
         if any(self._status(row, current) not in _TERMINAL for row in non_synthesis):
             return
+        pipeline_degradation_codes = set(degradation_codes)
+        for row in non_synthesis:
+            status = self._status(row, current)
+            if status in {StepStatus.FAILED.value, StepStatus.CANCELLED.value}:
+                pipeline_degradation_codes.add(
+                    f"{str(row.step_type).lower()}_{status.lower()}"
+                )
         plan_ref = await self._plan_reference(uow, run, current)
         verify_refs = [
             dict(row.output_ref)
@@ -257,6 +266,8 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
             and _ref_dict(current.output_ref) not in verify_refs
         ):
             verify_refs.append(_ref_dict(current.output_ref))
+        if len(verify_refs) > 1:
+            raise ValueError("Workflow produced more than one VERIFY output")
         provider_failures = 0
         select_row = next(
             (row for row in rows if row.step_type == StepType.SELECT.value),
@@ -277,10 +288,11 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
             run.tenant_id,
             run.id,
             {
-                "schema": "sana.synthesis-input.v1",
+                "schema": "sana.synthesis-input.v2",
                 "plan_ref": _ref_dict(plan_ref),
-                "verify_refs": verify_refs,
+                "verify_ref": verify_refs[0] if verify_refs else None,
                 "provider_failures": provider_failures,
+                "pipeline_degradation_codes": sorted(pipeline_degradation_codes),
             },
         )
         await self._add_step(
@@ -288,6 +300,65 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
             run,
             key="synthesize",
             step_type=StepType.SYNTHESIZE,
+            input_ref=input_ref,
+            trace_context=trace_context,
+        )
+
+    async def _maybe_verify(
+        self,
+        uow: TenantUnitOfWork,
+        run: SearchRun,
+        current: SearchStep,
+        trace_context: TraceContext,
+        *,
+        degradation_codes: tuple[str, ...] = (),
+    ) -> None:
+        rows = await self._step_rows(uow, run)
+        fetch_extract = [
+            row
+            for row in rows
+            if row.step_type in {StepType.FETCH.value, StepType.EXTRACT.value}
+        ]
+        if any(self._status(row, current) not in _TERMINAL for row in fetch_extract):
+            return
+        plan_ref = await self._plan_reference(uow, run, current)
+        extract_refs = [
+            dict(row.output_ref)
+            for row in rows
+            if row.step_type == StepType.EXTRACT.value
+            and self._status(row, current) == StepStatus.SUCCEEDED.value
+            and row.output_ref is not None
+        ]
+        if (
+            current.step_type is StepType.EXTRACT
+            and current.status is StepStatus.SUCCEEDED
+            and current.output_ref is not None
+            and _ref_dict(current.output_ref) not in extract_refs
+        ):
+            extract_refs.append(_ref_dict(current.output_ref))
+        if not extract_refs:
+            await self._maybe_synthesize(
+                uow,
+                run,
+                current,
+                trace_context,
+                degradation_codes=degradation_codes,
+            )
+            return
+        input_ref = await self._artifacts.put_json(
+            run.tenant_id,
+            run.id,
+            {
+                "schema": "sana.verify-input.v2",
+                "plan_ref": _ref_dict(plan_ref),
+                "extract_refs": extract_refs,
+            },
+        )
+        await self._add_step(
+            uow,
+            run,
+            key="verify",
+            step_type=StepType.VERIFY,
             input_ref=input_ref,
             trace_context=trace_context,
         )
@@ -481,50 +552,50 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
         run: SearchRun,
         payload: dict[str, Any],
     ) -> None:
-        evidence = payload.get("evidence")
-        if not evidence:
-            return
-        await uow.session.execute(
-            insert(EvidenceCandidate)
-            .values(
-                id=UUID(str(evidence["candidate_id"])),
-                tenant_id=run.tenant_id,
-                run_id=run.id,
-                fact_requirement_id=UUID(str(evidence["fact_id"])),
-                document_version_id=UUID(str(evidence["document_version_id"])),
-                document_chunk_id=UUID(str(evidence["document_chunk_id"])),
-                quote=str(evidence["quote"]),
-                quote_hash=str(evidence["quote_hash"]),
-                start_offset=int(evidence["start_offset"]),
-                end_offset=int(evidence["end_offset"]),
-                support_type=str(evidence["support_type"]),
-                candidate_score=float(evidence["candidate_score"]),
+        for evidence in payload.get("evidence", ()):
+            await uow.session.execute(
+                insert(EvidenceCandidate)
+                .values(
+                    id=UUID(str(evidence["candidate_id"])),
+                    tenant_id=run.tenant_id,
+                    run_id=run.id,
+                    fact_requirement_id=UUID(str(evidence["fact_id"])),
+                    document_version_id=UUID(str(evidence["document_version_id"])),
+                    document_chunk_id=UUID(str(evidence["document_chunk_id"])),
+                    quote=str(evidence["quote"]),
+                    quote_hash=str(evidence["quote_hash"]),
+                    start_offset=int(evidence["start_offset"]),
+                    end_offset=int(evidence["end_offset"]),
+                    support_type=str(evidence["support_type"]),
+                    candidate_score=float(evidence["candidate_score"]),
+                    source_identity=str(evidence["source_identity"]),
+                    source_authority=str(evidence["source_authority"]),
+                )
+                .on_conflict_do_nothing()
             )
-            .on_conflict_do_nothing()
-        )
-        await uow.session.execute(
-            insert(VerifiedEvidence)
-            .values(
-                id=UUID(str(evidence["verified_id"])),
-                tenant_id=run.tenant_id,
-                run_id=run.id,
-                candidate_id=UUID(str(evidence["candidate_id"])),
-                verdict=str(evidence["verdict"]),
-                confidence=float(evidence["confidence"]),
-                reason_codes=list(evidence["reason_codes"]),
-                verifier_version=str(evidence["verifier_version"]),
-                verified_at=datetime.fromisoformat(str(evidence["verified_at"])),
+            await uow.session.execute(
+                insert(VerifiedEvidence)
+                .values(
+                    id=UUID(str(evidence["verified_id"])),
+                    tenant_id=run.tenant_id,
+                    run_id=run.id,
+                    candidate_id=UUID(str(evidence["candidate_id"])),
+                    verdict=str(evidence["verdict"]),
+                    confidence=float(evidence["confidence"]),
+                    reason_codes=list(evidence["reason_codes"]),
+                    verifier_version=str(evidence["verifier_version"]),
+                    verified_at=datetime.fromisoformat(str(evidence["verified_at"])),
+                )
+                .on_conflict_do_nothing()
             )
-            .on_conflict_do_nothing()
-        )
-        if payload.get("accepted"):
+        for assessment in payload.get("coverage", ()):
             await uow.session.execute(
                 update(FactRequirement)
                 .where(
                     FactRequirement.tenant_id == run.tenant_id,
-                    FactRequirement.id == UUID(str(evidence["fact_id"])),
+                    FactRequirement.id == UUID(str(assessment["fact_id"])),
                 )
-                .values(status="COVERED")
+                .values(status=str(assessment["status"]))
             )
 
     async def _persist_answer(
@@ -547,20 +618,28 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
                 )
                 .on_conflict_do_nothing()
             )
-            await uow.session.execute(
-                insert(Citation)
-                .values(
-                    id=UUID(str(claim["citation_id"])),
-                    tenant_id=run.tenant_id,
-                    run_id=run.id,
-                    answer_claim_id=claim_id,
-                    verified_evidence_id=UUID(str(claim["evidence_id"])),
-                    ordinal=1,
-                    label="[1]",
-                    rendered_url=str(claim["url"]),
+            for citation in claim.get("citations", ()):
+                await uow.session.execute(
+                    insert(Citation)
+                    .values(
+                        id=UUID(str(citation["id"])),
+                        tenant_id=run.tenant_id,
+                        run_id=run.id,
+                        answer_claim_id=claim_id,
+                        verified_evidence_id=UUID(str(citation["evidence_id"])),
+                        ordinal=int(citation["ordinal"]),
+                        label=str(citation["label"]),
+                        rendered_url=str(citation["url"]),
+                        document_version_id=UUID(
+                            str(citation["document_version_id"])
+                        ),
+                        document_chunk_id=UUID(str(citation["document_chunk_id"])),
+                        quote=str(citation["quote"]),
+                        start_offset=int(citation["start_offset"]),
+                        end_offset=int(citation["end_offset"]),
+                    )
+                    .on_conflict_do_nothing()
                 )
-                .on_conflict_do_nothing()
-            )
         message_id = uuid5(run.id, "assistant-message")
         now = self._clock.now()
         await uow.session.execute(
@@ -696,14 +775,7 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
             return
         if step.step_type is StepType.EXTRACT:
             await self._persist_extract(uow, run, payload)
-            await self._add_step(
-                uow,
-                run,
-                key=step.step_key.replace("extract:", "verify:", 1),
-                step_type=StepType.VERIFY,
-                input_ref=result.output_ref,
-                trace_context=trace_context,
-            )
+            await self._maybe_verify(uow, run, step, trace_context)
             return
         if step.step_type is StepType.VERIFY:
             await self._persist_verification(uow, run, payload)
@@ -726,7 +798,6 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
         disposition: ExecutionDisposition,
         trace_context: TraceContext,
     ) -> None:
-        del error
         if disposition is ExecutionDisposition.RETRY_SCHEDULED or run.is_terminal:
             return
         if step.step_type in {StepType.ROUTE, StepType.PLAN, StepType.SYNTHESIZE}:
@@ -735,7 +806,22 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
         if step.step_type is StepType.DISCOVERY:
             await self._maybe_select(uow, run, step, trace_context)
             return
-        await self._maybe_synthesize(uow, run, step, trace_context)
+        if step.step_type in {StepType.FETCH, StepType.EXTRACT}:
+            await self._maybe_verify(
+                uow,
+                run,
+                step,
+                trace_context,
+                degradation_codes=(error.code,),
+            )
+            return
+        await self._maybe_synthesize(
+            uow,
+            run,
+            step,
+            trace_context,
+            degradation_codes=(error.code,),
+        )
 
 
 __all__ = ["WorkflowCompletionCoordinator"]

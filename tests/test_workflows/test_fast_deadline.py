@@ -24,6 +24,7 @@ from sana.modules.orchestration.step_handlers import (
 )
 from sana.modules.shared.clock import FrozenClock
 from sana.modules.shared.errors import ErrorCategory, TypedError
+from sana.modules.shared.ids import TraceContext
 
 
 NOW = datetime(2026, 8, 14, tzinfo=timezone.utc)
@@ -89,6 +90,9 @@ async def test_worker_checks_cancellation_before_external_operation() -> None:
         step_id=uuid4(),
         step_key="fetch:cancelled",
         step_type=StepType.FETCH,
+        attempt_id=uuid4(),
+        attempt_no=1,
+        trace_context=TraceContext.create(),
         deadline_at=NOW + timedelta(seconds=5),
         input_ref=ArtifactRef(
             "memory://input",

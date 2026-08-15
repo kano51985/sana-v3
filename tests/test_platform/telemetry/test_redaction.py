@@ -39,6 +39,8 @@ def test_diagnostic_payload_keeps_metrics_but_redacts_content_and_unknown_fields
         "document": {"body": "do not retain this body"},
         "notes": "free form user content",
         "url": "https://example.com/private/path",
+        "reasoning_content": "private chain of thought",
+        "raw_provider_payload": {"content": "private"},
     }
 
     result = TelemetryRedactor().diagnostic_payload(payload)
@@ -48,6 +50,7 @@ def test_diagnostic_payload_keeps_metrics_but_redacts_content_and_unknown_fields
     assert result["metrics"]["latency_ms"] == 420
     assert result["metrics"]["coverage"] == {"covered": 2, "total": 3}
     assert "do not retain" not in rendered
+    assert "private chain of thought" not in rendered
     assert "private/path" not in rendered
     assert result["prompt"] == "[REDACTED]"
     assert result["document"] == "[REDACTED]"

@@ -16,4 +16,5 @@ redis>=5.2,<6
 requests>=2.34,<3
 sqlalchemy[asyncio]>=2.0.52,<3
 streamlit>=1.60,<2
+tldextract>=5.3,<6
 uvicorn[standard]>=0.35,<1

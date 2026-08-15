@@ -9,6 +9,10 @@ from uuid import UUID
 
 from sqlalchemy import exists, func, or_, select, update
 
+from sana.modules.model_gateway.domain import (
+    BillingDisposition,
+    ModelInvocationStatus,
+)
 from sana.modules.orchestration.domain import SearchMode, StepStatus
 from sana.modules.orchestration.outbox import trace_context_to_dict
 from sana.modules.orchestration.reconciler import (
@@ -24,6 +28,7 @@ from sana.platform.db.models.orchestration import (
     SearchStepRecord,
     StepAttemptRecord,
 )
+from sana.platform.db.models.model_gateway import ModelInvocationRecord
 from sana.platform.db.uow import TenantUnitOfWorkFactory
 from sana.platform.queue.dispatcher import CeleryStepDispatcher, SearchQueue
 
@@ -44,6 +49,7 @@ class ReconciliationCycle:
     recovered: int
     dispatched: int
     failed: int
+    sealed_model_invocations: int = 0
 
 
 class TenantReconciliationScanner:
@@ -57,6 +63,60 @@ class TenantReconciliationScanner:
             raise ValueError("Redelivery grace cannot be negative")
         self._uow_factory = uow_factory
         self._redelivery_grace = timedelta(seconds=redelivery_grace_seconds)
+
+    async def seal_orphaned_model_invocations(
+        self,
+        tenant_id: UUID,
+        now: datetime,
+        *,
+        limit: int,
+    ) -> int:
+        async with self._uow_factory(tenant_id) as uow:
+            orphaned_ids = (
+                select(ModelInvocationRecord.id)
+                .join(
+                    StepAttemptRecord,
+                    (StepAttemptRecord.tenant_id == ModelInvocationRecord.tenant_id)
+                    & (StepAttemptRecord.id == ModelInvocationRecord.attempt_id),
+                )
+                .where(
+                    ModelInvocationRecord.tenant_id == tenant_id,
+                    ModelInvocationRecord.status
+                    == ModelInvocationStatus.STARTED.value,
+                    or_(
+                        StepAttemptRecord.completed_at.is_not(None),
+                        StepAttemptRecord.deadline_at <= now,
+                        StepAttemptRecord.leased_until <= now,
+                    ),
+                )
+                .order_by(ModelInvocationRecord.started_at)
+                .limit(limit)
+                .with_for_update(skip_locked=True)
+                .cte("orphaned_model_invocations")
+            )
+            sealed = list(
+                (
+                    await uow.session.scalars(
+                        update(ModelInvocationRecord)
+                        .where(
+                            ModelInvocationRecord.tenant_id == tenant_id,
+                            ModelInvocationRecord.id.in_(select(orphaned_ids.c.id)),
+                        )
+                        .values(
+                            status=ModelInvocationStatus.ABANDONED.value,
+                            billing_disposition=(
+                                BillingDisposition.POSSIBLY_BILLED.value
+                            ),
+                            error_category="TRANSIENT",
+                            error_code="model_invocation_orphaned",
+                            completed_at=now,
+                        )
+                        .returning(ModelInvocationRecord.id)
+                    )
+                ).all()
+            )
+            await uow.commit()
+            return len(sealed)
 
     async def candidates(
         self,
@@ -177,6 +237,30 @@ class TenantReconciliationScanner:
                 )
                 if current_lease is None or current_lease > now:
                     return False
+                expired_attempt_ids = select(StepAttemptRecord.id).where(
+                    StepAttemptRecord.tenant_id == candidate.tenant_id,
+                    StepAttemptRecord.step_id == candidate.step_id,
+                    StepAttemptRecord.completed_at.is_(None),
+                    StepAttemptRecord.leased_until <= now,
+                )
+                await uow.session.execute(
+                    update(ModelInvocationRecord)
+                    .where(
+                        ModelInvocationRecord.tenant_id == candidate.tenant_id,
+                        ModelInvocationRecord.attempt_id.in_(expired_attempt_ids),
+                        ModelInvocationRecord.status
+                        == ModelInvocationStatus.STARTED.value,
+                    )
+                    .values(
+                        status=ModelInvocationStatus.ABANDONED.value,
+                        billing_disposition=(
+                            BillingDisposition.POSSIBLY_BILLED.value
+                        ),
+                        error_category="TRANSIENT",
+                        error_code="worker_lease_expired",
+                        completed_at=now,
+                    )
+                )
                 await uow.session.execute(
                     update(StepAttemptRecord)
                     .where(
@@ -248,7 +332,15 @@ class ReconciliationPump:
         recovered = 0
         dispatched = 0
         failed = 0
+        sealed_model_invocations = 0
         for tenant_id in tenant_ids:
+            sealed_model_invocations += (
+                await self._scanner.seal_orphaned_model_invocations(
+                    tenant_id,
+                    now,
+                    limit=limit,
+                )
+            )
             items = await self._scanner.candidates(tenant_id, now, limit=limit)
             for item in items:
                 decision = self._policy.decide(item.candidate, now)
@@ -278,4 +370,5 @@ class ReconciliationPump:
             recovered,
             dispatched,
             failed,
+            sealed_model_invocations,
         )

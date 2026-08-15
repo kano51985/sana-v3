@@ -38,6 +38,7 @@ EXPECTED_TABLES = {
     "memory_embeddings",
     "migration_ledger",
     "legacy_archives",
+    "model_invocations",
 }
 TENANT_TABLES = EXPECTED_TABLES - {"tenants"}
 
@@ -103,6 +104,7 @@ def test_document_and_memory_rows_have_tenant_local_identity_constraints() -> No
         "evidence_candidates",
         "verified_evidence",
         "memory_items",
+        "model_invocations",
     ):
         table = Base.metadata.tables[table_name]
         tenant_identity = [
@@ -122,6 +124,45 @@ def test_evidence_candidates_persist_exact_quote_offsets() -> None:
     assert "ck_evidence_candidates_quote_offsets" in _constraint_names(
         "evidence_candidates"
     )
+    assert table.c.source_identity.nullable is False
+    assert table.c.source_authority.nullable is False
+
+
+def test_model_audit_and_citation_lineage_are_complete() -> None:
+    audit = Base.metadata.tables["model_invocations"]
+    citation = Base.metadata.tables["citations"]
+
+    assert "uq_model_invocations_attempt_role_call" in _constraint_names(
+        "model_invocations"
+    )
+    assert "ix_model_invocations_logical_call" in _index_names(
+        "model_invocations"
+    )
+    for column in (
+        "document_version_id",
+        "document_chunk_id",
+        "quote",
+        "start_offset",
+        "end_offset",
+    ):
+        assert citation.c[column].nullable is False
+    for forbidden in ("prompt", "raw_request", "raw_response", "reasoning"):
+        assert forbidden not in audit.c
+
+
+def test_provider_attempt_identity_includes_provider() -> None:
+    table = Base.metadata.tables["provider_attempts"]
+    constraint = next(
+        item
+        for item in table.constraints
+        if item.name == "uq_provider_attempts_query_provider_number"
+    )
+
+    assert {column.name for column in constraint.columns} == {
+        "query_spec_id",
+        "provider",
+        "attempt_no",
+    }
 
 
 def test_migrations_cover_every_tenant_table_with_forced_rls() -> None:

@@ -25,6 +25,11 @@ class FakeScanner:
         self.items = items
         self.released = []
         self.marked = []
+        self.sealed = []
+
+    async def seal_orphaned_model_invocations(self, tenant_id, now, *, limit):
+        self.sealed.append((tenant_id, now, limit))
+        return 2
 
     async def candidates(self, tenant_id, now, *, limit):
         return self.items
@@ -63,6 +68,7 @@ async def test_reconciliation_releases_expired_lease_before_redis_redelivery() -
 
     assert cycle.recovered == cycle.dispatched == 1
     assert cycle.failed == 0
+    assert cycle.sealed_model_invocations == 2
     assert scanner.released == [step_id]
     assert scanner.marked == [(step_id, NOW)]
     assert dispatcher.calls[0][0:2] == (tenant_id, step_id)
@@ -82,6 +88,7 @@ async def test_ready_step_is_redis_redelivered_without_state_rewrite() -> None:
     ).run_once(NOW)
 
     assert cycle.recovered == 0
+    assert cycle.sealed_model_invocations == 2
     assert cycle.dispatched == 1
     assert scanner.released == []
     assert scanner.marked == [(step_id, NOW)]

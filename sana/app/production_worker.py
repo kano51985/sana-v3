@@ -29,8 +29,10 @@ from sana.app.search_operations import (
 from sana.app.settings import SanaSettings
 from sana.app.sql_step_execution import RedisEventMirror, SqlStepExecutionStore
 from sana.app.workflow_completion import WorkflowCompletionCoordinator
+from sana.modules.answer.model_synthesizer import ConstrainedModelSynthesizer
 from sana.modules.discovery.service import DiscoveryService
-from sana.modules.model_gateway.domain import ModelRole
+from sana.modules.evidence.model_verifier import ModelEvidenceVerifier
+from sana.modules.model_gateway.domain import ModelRole, OutputFormat, ThinkingMode
 from sana.modules.model_gateway.service import ModelGateway, RoleConfig
 from sana.modules.orchestration.executor import DurableStepExecutor
 from sana.modules.orchestration.lease import LeaseService
@@ -39,6 +41,7 @@ from sana.modules.search_planning.planner import SearchPlanner
 from sana.modules.shared.clock import SystemClock
 from sana.modules.shared.ids import RandomIdFactory, TraceContext
 from sana.platform.db.session import create_database_engine, create_session_factory
+from sana.platform.db.model_audit import SqlModelInvocationAuditSink
 from sana.platform.db.uow import TenantUnitOfWorkFactory
 from sana.platform.events.redis_stream import RedisEventStream
 from sana.platform.fetch.http_fetcher import HttpContentFetcher
@@ -46,6 +49,7 @@ from sana.platform.models.deepseek import DeepSeekModelProvider
 from sana.platform.models.local import LocalModelProvider
 from sana.platform.models.openai import OpenAIModelProvider
 from sana.platform.search.bing_rss import BingRssProvider
+from sana.platform.search.direct_source import DirectSourceProvider
 from sana.platform.search.circuit_breaker import CircuitBreaker
 from sana.platform.search.searxng import SearxngProvider
 from sana.platform.security.secrets import EnvironmentSecretProvider
@@ -54,11 +58,20 @@ from sana.platform.storage.local_artifacts import LocalArtifactStore
 
 
 class ProductionWorkerSettings(SanaSettings):
+    worker_model_pipeline_enabled: bool = False
     worker_planner_provider: Literal[
         "heuristic", "deepseek", "openai", "local"
-    ] = "heuristic"
-    worker_planner_model: str = ""
-    worker_discovery_providers: str = "bing_rss"
+    ] = "deepseek"
+    worker_planner_model: str = "deepseek-v4-flash"
+    worker_verifier_provider: Literal["deepseek", "openai", "local"] = "deepseek"
+    worker_verifier_model: str = "deepseek-v4-flash"
+    worker_synthesizer_provider: Literal["deepseek", "openai", "local"] = "deepseek"
+    worker_synthesizer_model: str = "deepseek-v4-flash"
+    worker_deepseek_base_url: str = "https://api.deepseek.com"
+    worker_model_thinking: Literal["disabled"] = "disabled"
+    worker_model_output_format: Literal["json_object"] = "json_object"
+    worker_live_eval_max_runs: int = 20
+    worker_discovery_providers: str = "direct,bing_rss"
     worker_searxng_url: str = ""
     worker_max_selected_hits: int = 4
     worker_heartbeat_seconds: float = 2.0
@@ -66,15 +79,32 @@ class ProductionWorkerSettings(SanaSettings):
 
     @model_validator(mode="after")
     def validate_worker(self) -> "ProductionWorkerSettings":
-        if self.environment == "production" and self.worker_planner_provider == "heuristic":
-            raise ValueError("Production Worker requires a model-backed planner")
-        if (
-            self.worker_planner_provider != "heuristic"
-            and not self.worker_planner_model.strip()
-        ):
-            raise ValueError("Model-backed Worker planner requires a model name")
+        if self.worker_model_pipeline_enabled:
+            roles = (
+                ("planner", self.worker_planner_provider, self.worker_planner_model),
+                ("verifier", self.worker_verifier_provider, self.worker_verifier_model),
+                (
+                    "synthesizer",
+                    self.worker_synthesizer_provider,
+                    self.worker_synthesizer_model,
+                ),
+            )
+            for role, provider, model in roles:
+                if provider == "heuristic" or not model.strip():
+                    raise ValueError(
+                        f"Enabled model pipeline requires a configured {role} model"
+                    )
+            configured_providers = {provider for _, provider, _ in roles}
+            if len(configured_providers) != 1:
+                raise ValueError(
+                    "Enabled model pipeline requires one shared provider for all roles"
+                )
+        if not self.worker_deepseek_base_url.strip():
+            raise ValueError("DeepSeek base URL cannot be empty")
+        if not 1 <= self.worker_live_eval_max_runs <= 20:
+            raise ValueError("Live eval run limit must be between 1 and 20")
         providers = self.discovery_provider_names
-        unsupported = set(providers) - {"bing_rss", "searxng"}
+        unsupported = set(providers) - {"direct", "bing_rss", "searxng"}
         if unsupported:
             raise ValueError(f"Unsupported Worker discovery providers: {sorted(unsupported)}")
         if "searxng" in providers and not self.worker_searxng_url.strip():
@@ -119,33 +149,90 @@ class WorkerRuntime:
         await self.engine.dispose()
 
 
-def _planner(settings: ProductionWorkerSettings, clock: SystemClock):
-    if settings.worker_planner_provider == "heuristic":
+def _model_stack(
+    settings: ProductionWorkerSettings,
+    clock: SystemClock,
+    uow_factory: TenantUnitOfWorkFactory,
+    artifacts: LocalArtifactStore,
+    ids: RandomIdFactory,
+):
+    if (
+        not settings.worker_model_pipeline_enabled
+        or settings.worker_planner_provider == "heuristic"
+    ):
         from sana.modules.orchestration.policy import SearchPolicy
 
-        return HeuristicIntentPlanner(SearchPolicy.default().version), None
+        return (
+            HeuristicIntentPlanner(SearchPolicy.default().version),
+            None,
+            None,
+            None,
+        )
     secrets = EnvironmentSecretProvider()
-    if settings.worker_planner_provider == "deepseek":
-        provider = DeepSeekModelProvider(secrets)
-    elif settings.worker_planner_provider == "openai":
+    provider_name = settings.worker_planner_provider
+    if provider_name == "deepseek" and not secrets.get_secret("DEEPSEEK_API_KEY"):
+        raise ValueError("Enabled DeepSeek model pipeline requires a Worker credential")
+    if provider_name == "deepseek":
+        provider = DeepSeekModelProvider(
+            secrets,
+            base_url=settings.worker_deepseek_base_url,
+        )
+    elif provider_name == "openai":
+        if not secrets.get_secret("OPENAI_API_KEY"):
+            raise ValueError("Enabled OpenAI model pipeline requires a Worker credential")
         provider = OpenAIModelProvider(secrets)
     else:
         provider = LocalModelProvider()
+    audit = SqlModelInvocationAuditSink(uow_factory, artifacts, clock, ids)
     gateway = ModelGateway(
-        {settings.worker_planner_provider: provider},
+        {provider_name: provider},
         {
             ModelRole.PLANNER: RoleConfig(
-                settings.worker_planner_provider,
+                provider_name,
                 settings.worker_planner_model,
+                temperature=0.0,
+                max_output_tokens=1_024,
+                max_retries=1,
+                request_timeout_seconds=30.0,
+                output_format=OutputFormat(settings.worker_model_output_format),
+                thinking_mode=ThinkingMode(settings.worker_model_thinking),
+                prompt_template_version="planner-v1",
+                parser_schema_version="search-intent-v1",
+            ),
+            ModelRole.VERIFIER: RoleConfig(
+                provider_name,
+                settings.worker_verifier_model,
                 temperature=0.0,
                 max_output_tokens=2_048,
                 max_retries=1,
                 request_timeout_seconds=30.0,
-            )
+                output_format=OutputFormat(settings.worker_model_output_format),
+                thinking_mode=ThinkingMode(settings.worker_model_thinking),
+                prompt_template_version="verifier-v1",
+                parser_schema_version="evidence-verdicts-v1",
+            ),
+            ModelRole.SYNTHESIZER: RoleConfig(
+                provider_name,
+                settings.worker_synthesizer_model,
+                temperature=0.0,
+                max_output_tokens=2_048,
+                max_retries=1,
+                request_timeout_seconds=30.0,
+                output_format=OutputFormat(settings.worker_model_output_format),
+                thinking_mode=ThinkingMode(settings.worker_model_thinking),
+                prompt_template_version="synthesizer-v1",
+                parser_schema_version="proposed-claims-v1",
+            ),
         },
         clock,
+        audit,
     )
-    return ModelIntentPlanner(SearchPlanner(gateway)), provider
+    return (
+        ModelIntentPlanner(SearchPlanner(gateway)),
+        ModelEvidenceVerifier(gateway),
+        ConstrainedModelSynthesizer(gateway),
+        provider,
+    )
 
 
 async def build_worker_runtime(
@@ -156,13 +243,22 @@ async def build_worker_runtime(
     engine = create_database_engine(settings.database_url)
     sessions = create_session_factory(engine)
     uow_factory = TenantUnitOfWorkFactory(sessions)
+    artifacts = LocalArtifactStore(settings.artifact_root)
+    planner, model_verifier, model_synthesizer, model_provider = _model_stack(
+        settings,
+        clock,
+        uow_factory,
+        artifacts,
+        ids,
+    )
     redis = Redis.from_url(settings.redis_url)
     event_stream = RedisEventStream(redis)
-    artifacts = LocalArtifactStore(settings.artifact_root)
     discovery_client = httpx.AsyncClient(follow_redirects=False, trust_env=False)
     providers = {}
     for name in settings.discovery_provider_names:
-        if name == "bing_rss":
+        if name == "direct":
+            providers[name] = DirectSourceProvider()
+        elif name == "bing_rss":
             providers[name] = BingRssProvider(discovery_client)
         elif name == "searxng":
             providers[name] = SearxngProvider(
@@ -175,7 +271,6 @@ async def build_worker_runtime(
         breakers={name: CircuitBreaker(clock) for name in providers},
     )
     fetcher = HttpContentFetcher(SSRFGuard(), clock)
-    planner, model_provider = _planner(settings, clock)
     operations = SearchStepOperations(
         uow_factory,
         artifacts,
@@ -184,6 +279,8 @@ async def build_worker_runtime(
         fetcher,
         settings.discovery_provider_names,
         settings.worker_max_selected_hits,
+        model_verifier,
+        model_synthesizer,
     )
     completion = WorkflowCompletionCoordinator(artifacts, clock, ids)
     store = SqlStepExecutionStore(

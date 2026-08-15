@@ -61,6 +61,25 @@ def test_compose_declares_durable_services_and_opt_in_workers() -> None:
     assert "user_profile.json" not in read("deployment/Dockerfile")
 
 
+def test_compose_injects_deepseek_key_into_worker_only() -> None:
+    compose = read("deployment/docker-compose.yml")
+    worker = compose.split("\n  worker:\n", maxsplit=1)[1].split(
+        "\n  streamlit:\n", maxsplit=1
+    )[0]
+    api = compose.split("\n  api:\n", maxsplit=1)[1].split(
+        "\n  dispatcher:\n", maxsplit=1
+    )[0]
+    streamlit = compose.split("\n  streamlit:\n", maxsplit=1)[1].split(
+        "\nvolumes:\n", maxsplit=1
+    )[0]
+
+    assert compose.count("      DEEPSEEK_API_KEY:") == 1
+    assert "DEEPSEEK_API_KEY:" in worker
+    assert "DEEPSEEK_API_KEY" not in api
+    assert "DEEPSEEK_API_KEY" not in streamlit
+    assert "SANA_WORKER_MODEL_PIPELINE_ENABLED" in worker
+
+
 def test_operations_runbook_preserves_rollback_data_and_lists_blockers() -> None:
     runbook = read("docs/operations/search-platform.md")
 

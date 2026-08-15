@@ -64,8 +64,30 @@ def test_fast_query_limit_and_per_fact_limit_are_enforced() -> None:
         fact.key: sum(query.fact_key == fact.key for query in queries)
         for fact in intent.facts
     }
-    assert all(count <= 2 for count in counts.values())
-    assert all(count >= 1 for count in counts.values())
+    assert all(count == 1 for count in counts.values())
+
+
+def test_fast_version_query_prefers_official_stable_release_language() -> None:
+    intent = NormalizedIntent(
+        entity="Python",
+        aliases=(),
+        locale="en",
+        facts=(
+            FactRequirement(
+                key="stable-version",
+                fact_type=FactType.VERSION,
+                description="current stable version",
+                subject="Python",
+                freshness=Freshness.CURRENT,
+                consequence=Consequence.LOW,
+            ),
+        ),
+    )
+
+    query = QueryCompiler().compile(intent, SearchMode.FAST)[0]
+
+    assert query.text == "Python latest stable version official"
+    assert "season" not in query.text
 
 
 def test_existing_signatures_are_deduplicated_during_expansion() -> None:

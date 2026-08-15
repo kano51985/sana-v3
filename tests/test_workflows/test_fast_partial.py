@@ -94,9 +94,9 @@ def test_failed_fetch_is_skipped_forward_to_partial_synthesis() -> None:
 
     statuses["extract:source"] = StepStatus.SKIPPED
     after_extract = workflow_graph.advance(statuses, guard=guard, clock=clock)
-    assert after_extract.skip == ("verify:source",)
+    assert after_extract.skip == ("verify",)
 
-    statuses["verify:source"] = StepStatus.SKIPPED
+    statuses["verify"] = StepStatus.SKIPPED
     after_verify = workflow_graph.advance(statuses, guard=guard, clock=clock)
     assert tuple(node.key for node in after_verify.submit) == ("synthesize",)
 

@@ -137,6 +137,22 @@ def test_parallel_reservation_is_atomic_when_batch_exceeds_budget() -> None:
     assert ledger.reservations == ()
 
 
+def test_all_extracts_fan_in_to_exactly_one_verify_step() -> None:
+    workflow_graph = graph()
+    verify_nodes = [
+        node
+        for node in workflow_graph.nodes.values()
+        if node.step_type is StepType.VERIFY
+    ]
+
+    assert len(verify_nodes) == 1
+    assert verify_nodes[0].key == "verify"
+    assert set(verify_nodes[0].dependencies) == {
+        "extract:official",
+        "extract:publisher",
+    }
+
+
 def test_every_fast_step_type_has_an_explicit_worker_handler() -> None:
     async def unused_operation(context):
         raise AssertionError("registry construction must not execute operations")

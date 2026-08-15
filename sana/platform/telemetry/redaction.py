@@ -11,7 +11,7 @@ from typing import Any
 _SAFE_STRING = re.compile(r"^[\w./:@+-]{1,128}$", re.UNICODE)
 _SENSITIVE_KEY = re.compile(
     r"(authorization|cookie|password|secret|api.?key|token|prompt|message|"
-    r"body|content|snippet|quote|query|url)",
+    r"body|content|snippet|quote|query|url|reasoning|raw.?provider)",
     re.I,
 )
 _DIAGNOSTIC_CONTAINER_KEYS = frozenset(
@@ -68,6 +68,8 @@ class TelemetryRedactor:
             "search.usage.providers",
             "search.usage.fetches",
             "search.usage.llm_calls",
+            "search.usage.prompt_tokens",
+            "search.usage.completion_tokens",
             "search.usage.expansion_rounds",
             "workflow.step.type",
             "workflow.step.status",

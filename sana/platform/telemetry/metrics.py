@@ -77,6 +77,8 @@ class SearchMetrics:
             ("providers", usage.provider_count),
             ("fetches", usage.fetch_count),
             ("llm_calls", usage.llm_call_count),
+            ("prompt_tokens", usage.prompt_token_count),
+            ("completion_tokens", usage.completion_token_count),
             ("expansion_rounds", usage.expansion_rounds),
         ):
             self._usage.record(value, {**attributes, "workflow.step.type": name})

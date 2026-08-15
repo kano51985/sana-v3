@@ -169,6 +169,8 @@ class BudgetUsage:
     provider_count: int = 0
     fetch_count: int = 0
     llm_call_count: int = 0
+    prompt_token_count: int = 0
+    completion_token_count: int = 0
     expansion_rounds: int = 0
     phase_seconds: Mapping[str, float] = field(default_factory=dict)
 
@@ -180,6 +182,8 @@ class BudgetUsage:
                 self.provider_count,
                 self.fetch_count,
                 self.llm_call_count,
+                self.prompt_token_count,
+                self.completion_token_count,
                 self.expansion_rounds,
             )
         ):
@@ -199,11 +203,21 @@ class BudgetUsage:
         providers: int = 0,
         fetches: int = 0,
         llm_calls: int = 0,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
         expansion_rounds: int = 0,
         phase: str | None = None,
         elapsed_seconds: float = 0.0,
     ) -> "BudgetUsage":
-        increments = (queries, providers, fetches, llm_calls, expansion_rounds)
+        increments = (
+            queries,
+            providers,
+            fetches,
+            llm_calls,
+            prompt_tokens,
+            completion_tokens,
+            expansion_rounds,
+        )
         if any(value < 0 for value in increments) or elapsed_seconds < 0:
             raise ValueError("Usage increments cannot be negative")
         phase_usage = dict(self.phase_seconds)
@@ -216,6 +230,8 @@ class BudgetUsage:
             provider_count=self.provider_count + providers,
             fetch_count=self.fetch_count + fetches,
             llm_call_count=self.llm_call_count + llm_calls,
+            prompt_token_count=self.prompt_token_count + prompt_tokens,
+            completion_token_count=self.completion_token_count + completion_tokens,
             expansion_rounds=self.expansion_rounds + expansion_rounds,
             phase_seconds=phase_usage,
         )
@@ -386,6 +402,8 @@ class SearchRun:
                 (usage.provider_count, self.usage.provider_count),
                 (usage.fetch_count, self.usage.fetch_count),
                 (usage.llm_call_count, self.usage.llm_call_count),
+                (usage.prompt_token_count, self.usage.prompt_token_count),
+                (usage.completion_token_count, self.usage.completion_token_count),
                 (usage.expansion_rounds, self.usage.expansion_rounds),
             )
         ):

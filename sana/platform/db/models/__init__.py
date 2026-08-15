@@ -8,6 +8,7 @@ from sana.platform.db.models.memory import (
     MemoryItem,
     MigrationLedger,
 )
+from sana.platform.db.models.model_gateway import ModelInvocationRecord
 from sana.platform.db.models.orchestration import (
     OutboxEvent,
     RunEvent,
@@ -45,6 +46,7 @@ __all__ = [
     "MemoryItem",
     "Message",
     "MigrationLedger",
+    "ModelInvocationRecord",
     "OutboxEvent",
     "ProviderAttempt",
     "QuerySpec",

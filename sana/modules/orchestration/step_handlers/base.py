@@ -13,6 +13,7 @@ from sana.modules.orchestration.domain import ArtifactRef, StepType
 from sana.modules.orchestration.search_workflow import StepBudgetCost
 from sana.modules.shared.clock import Clock
 from sana.modules.shared.errors import ErrorCategory, TypedError
+from sana.modules.shared.ids import TraceContext
 
 
 class CancellationProbe(Protocol):
@@ -26,6 +27,9 @@ class StepExecutionContext:
     step_id: UUID
     step_key: str
     step_type: StepType
+    attempt_id: UUID
+    attempt_no: int
+    trace_context: TraceContext
     deadline_at: datetime
     input_ref: ArtifactRef
     cancellation: CancellationProbe
@@ -34,6 +38,8 @@ class StepExecutionContext:
     def __post_init__(self) -> None:
         if not self.step_key.strip():
             raise ValueError("Step execution key cannot be empty")
+        if self.attempt_no < 1:
+            raise ValueError("Step execution attempt number must be positive")
         if self.deadline_at.tzinfo is None or self.deadline_at.utcoffset() is None:
             raise ValueError("Step deadline must be timezone-aware")
 

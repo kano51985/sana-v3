@@ -15,6 +15,7 @@ from sana.modules.orchestration.domain import (
     SearchRun,
     SearchStep,
     StepStatus,
+    StepType,
     StopReason,
 )
 from sana.modules.orchestration.events import RunEventData
@@ -24,6 +25,7 @@ from sana.modules.orchestration.executor import (
     ExecutionDisposition,
 )
 from sana.modules.orchestration.lease import LeaseService
+from sana.modules.orchestration.policy import BudgetGuard, BudgetPhase
 from sana.modules.orchestration.step_handlers import (
     StepExecutionContext,
     StepExecutionResult,
@@ -142,6 +144,18 @@ class SqlStepExecutionStore:
             run = await uow.runs.get(tenant_id, run_id)
             return run is None or run.is_terminal
 
+    @staticmethod
+    def _phase_for_step(step_type: StepType) -> BudgetPhase:
+        if step_type in {StepType.ROUTE, StepType.PLAN}:
+            return BudgetPhase.ROUTE_PLAN
+        if step_type in {StepType.DISCOVERY, StepType.SELECT}:
+            return BudgetPhase.DISCOVERY
+        if step_type in {StepType.FETCH, StepType.EXTRACT}:
+            return BudgetPhase.FETCH_EXTRACT
+        if step_type is StepType.VERIFY:
+            return BudgetPhase.VERIFY
+        return BudgetPhase.SYNTHESIZE
+
     async def claim(
         self,
         tenant_id: UUID,
@@ -149,7 +163,6 @@ class SqlStepExecutionStore:
         worker_id: str,
         trace_context: TraceContext,
     ) -> ClaimResult:
-        del trace_context
         event: RunEventData | None = None
         now = self._clock.now()
         async with self._uow_factory(tenant_id) as uow:
@@ -179,51 +192,97 @@ class SqlStepExecutionStore:
                 await uow.commit()
                 disposition = ClaimResult.skipped(ExecutionDisposition.FAILED)
             else:
-                if run.status is RunStatus.QUEUED:
-                    run.start(now)
-                elif run.status is RunStatus.WAITING:
-                    run.resume()
-                attempt = self._leases.claim(
-                    step,
-                    attempt_no=await uow.attempts.next_attempt_no(
-                        tenant_id,
-                        step.id,
-                    ),
-                    worker_id=worker_id,
-                    now=now,
-                    deadline_at=run.budget.hard_deadline_at,
+                execution_deadline = BudgetGuard(run.budget).deadline_for(
+                    self._phase_for_step(step.step_type)
                 )
-                await uow.attempts.add(attempt)
-                await uow.steps.save(step)
-                await uow.runs.save(run)
-                event = await self._add_event(
-                    uow,
-                    run,
-                    "STEP_STARTED",
-                    {
-                        "step_id": str(step.id),
-                        "step_key": step.step_key,
-                        "step_type": step.step_type.value,
-                        "attempt_no": attempt.attempt_no,
-                    },
-                )
-                await uow.commit()
-                disposition = ClaimResult.acquired(
-                    ClaimedStep(
-                        attempt,
-                        StepExecutionContext(
-                            tenant_id=tenant_id,
-                            run_id=step.run_id,
-                            step_id=step.id,
-                            step_key=step.step_key,
-                            step_type=step.step_type,
-                            deadline_at=run.budget.hard_deadline_at,
-                            input_ref=step.input_ref,
-                            cancellation=self,
-                            clock=self._clock,
-                        ),
+                if now >= execution_deadline:
+                    if run.status is RunStatus.QUEUED:
+                        run.start(now)
+                    elif run.status is RunStatus.WAITING:
+                        run.resume()
+                    step.start()
+                    step.fail()
+                    error = TypedError(
+                        ErrorCategory.BUDGET,
+                        "phase_deadline_exceeded",
+                        "Step phase deadline was exhausted before admission",
+                        retryable=False,
                     )
-                )
+                    await self._completion.on_failure(
+                        uow,
+                        run,
+                        step,
+                        error,
+                        ExecutionDisposition.FAILED,
+                        trace_context,
+                    )
+                    await uow.steps.save(step)
+                    await uow.runs.save(run)
+                    event = await self._add_event(
+                        uow,
+                        run,
+                        "STEP_PHASE_DEADLINE_EXCEEDED",
+                        {
+                            "step_id": str(step.id),
+                            "step_key": step.step_key,
+                            "phase": self._phase_for_step(step.step_type).value,
+                        },
+                    )
+                    await uow.commit()
+                    disposition = ClaimResult.skipped(ExecutionDisposition.FAILED)
+                    # Skip lease creation and never enter the external operation.
+                    execution_deadline = None
+                if execution_deadline is None:
+                    pass
+                else:
+                    if run.status is RunStatus.QUEUED:
+                        run.start(now)
+                    elif run.status is RunStatus.WAITING:
+                        run.resume()
+                    attempt = self._leases.claim(
+                        step,
+                        attempt_no=await uow.attempts.next_attempt_no(
+                            tenant_id,
+                            step.id,
+                        ),
+                        worker_id=worker_id,
+                        now=now,
+                        deadline_at=execution_deadline,
+                    )
+                    await uow.attempts.add(attempt)
+                    await uow.steps.save(step)
+                    await uow.runs.save(run)
+                    event = await self._add_event(
+                        uow,
+                        run,
+                        "STEP_STARTED",
+                        {
+                            "step_id": str(step.id),
+                            "step_key": step.step_key,
+                            "step_type": step.step_type.value,
+                            "attempt_no": attempt.attempt_no,
+                        },
+                    )
+                    await uow.commit()
+                    disposition = ClaimResult.acquired(
+                        ClaimedStep(
+                            attempt,
+                            StepExecutionContext(
+                                tenant_id=tenant_id,
+                                run_id=step.run_id,
+                                step_id=step.id,
+                                step_key=step.step_key,
+                                step_type=step.step_type,
+                                attempt_id=attempt.id,
+                                attempt_no=attempt.attempt_no,
+                                trace_context=trace_context,
+                                deadline_at=execution_deadline,
+                                input_ref=step.input_ref,
+                                cancellation=self,
+                                clock=self._clock,
+                            ),
+                        )
+                    )
         await self._publish(event)
         return disposition
 

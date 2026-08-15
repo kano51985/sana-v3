@@ -10,7 +10,7 @@ class SearchPlanningPolicy:
     version: str = "search-v1"
     max_facts: int = 8
     max_query_characters: int = 64
-    fast_max_queries_per_fact: int = 2
+    fast_max_queries_per_fact: int = 1
     research_max_queries_per_fact: int = 3
     fast_max_queries: int = 4
     research_initial_max_queries: int = 8

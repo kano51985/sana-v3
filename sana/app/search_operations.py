@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 from uuid import UUID, uuid5
@@ -19,11 +19,32 @@ from uuid import UUID, uuid5
 from sqlalchemy import select
 
 from sana.modules.content.chunker import DocumentChunker
-from sana.modules.content.domain import FetchArtifact, FetchRequest, FetchStatus
+from sana.modules.answer.domain import ClaimKind
+from sana.modules.answer.model_synthesizer import ConstrainedModelSynthesizer
+from sana.modules.content.domain import (
+    DocumentChunk as DomainDocumentChunk,
+    DocumentVersion as DomainDocumentVersion,
+    FetchArtifact,
+    FetchRequest,
+    FetchStatus,
+)
 from sana.modules.content.extractor import ContentExtractor
 from sana.modules.discovery.domain import DiscoveryQuery
+from sana.modules.discovery.official_sources import OfficialSourcePolicy
 from sana.modules.discovery.service import DiscoveryService
-from sana.modules.model_gateway.domain import ModelCallBudget
+from sana.modules.evidence.candidate_selector import (
+    CandidateDocument,
+    CandidateSelector,
+)
+from sana.modules.evidence.coverage import CoverageEvaluator, FactCoverage
+from sana.modules.evidence.domain import SourceAuthority
+from sana.modules.evidence.model_verifier import (
+    ModelEvidenceVerifier,
+    evidence_from_payload,
+    evidence_to_payload,
+)
+from sana.modules.evidence.source_authority import SourceAuthorityPolicy
+from sana.modules.model_gateway.domain import ModelCallBudget, ModelInvocationContext
 from sana.modules.orchestration.artifact_store import ArtifactStore
 from sana.modules.orchestration.domain import ArtifactRef, SearchMode
 from sana.modules.orchestration.policy import BudgetPhase
@@ -52,6 +73,13 @@ class ContentFetcher(Protocol):
     async def fetch(self, request: FetchRequest) -> FetchArtifact: ...
 
 
+@dataclass(frozen=True, slots=True)
+class IntentPlanningResult:
+    intent: NormalizedIntent
+    llm_calls: int
+    degraded: bool = False
+
+
 class IntentPlanner(Protocol):
     async def plan(
         self,
@@ -60,7 +88,8 @@ class IntentPlanner(Protocol):
         mode: SearchMode,
         deadline: datetime,
         max_llm_calls: int,
-    ) -> tuple[NormalizedIntent, int]: ...
+        invocation_context: ModelInvocationContext | None = None,
+    ) -> IntentPlanningResult: ...
 
 
 class ModelIntentPlanner:
@@ -68,6 +97,7 @@ class ModelIntentPlanner:
 
     def __init__(self, planner: SearchPlanner) -> None:
         self._planner = planner
+        self._fallback = HeuristicIntentPlanner(QueryCompiler().policy.version)
 
     async def plan(
         self,
@@ -76,18 +106,33 @@ class ModelIntentPlanner:
         mode: SearchMode,
         deadline: datetime,
         max_llm_calls: int,
-    ) -> tuple[NormalizedIntent, int]:
-        del mode
+        invocation_context: ModelInvocationContext | None = None,
+    ) -> IntentPlanningResult:
         budget = ModelCallBudget(
             max_calls=max(1, min(2, max_llm_calls)),
             max_total_tokens=12_000,
         )
-        intent = await self._planner.plan(
-            message,
-            deadline=deadline,
-            model_budget=budget,
-        )
-        return intent, budget.used_calls
+        try:
+            intent = await self._planner.plan(
+                message,
+                deadline=deadline,
+                model_budget=budget,
+                invocation_context=invocation_context,
+            )
+            return IntentPlanningResult(intent, budget.used_calls)
+        except TypedError:
+            fallback = await self._fallback.plan(
+                message,
+                mode=mode,
+                deadline=deadline,
+                max_llm_calls=max_llm_calls,
+                invocation_context=invocation_context,
+            )
+            return IntentPlanningResult(
+                fallback.intent,
+                budget.used_calls,
+                degraded=True,
+            )
 
 
 class HeuristicIntentPlanner:
@@ -137,8 +182,9 @@ class HeuristicIntentPlanner:
         mode: SearchMode,
         deadline: datetime,
         max_llm_calls: int,
-    ) -> tuple[NormalizedIntent, int]:
-        del mode, deadline, max_llm_calls
+        invocation_context: ModelInvocationContext | None = None,
+    ) -> IntentPlanningResult:
+        del mode, deadline, max_llm_calls, invocation_context
         fact_types = tuple(self._router.infer_fact_types(message)) or (
             FactType.BACKGROUND,
         )
@@ -166,7 +212,10 @@ class HeuristicIntentPlanner:
                 )
             )
         locale = "zh-CN" if re.search(r"[\u3400-\u9fff]", message) else "en"
-        return NormalizedIntent(entity, (), locale, tuple(facts)), 0
+        return IntentPlanningResult(
+            NormalizedIntent(entity, (), locale, tuple(facts)),
+            0,
+        )
 
 
 def _reference(value: dict[str, str]) -> ArtifactRef:
@@ -203,6 +252,81 @@ def _fact_dict(run_id: UUID, fact: FactRequirement) -> dict[str, Any]:
     }
 
 
+def _fact_from_dict(payload: dict[str, Any]) -> FactRequirement:
+    return FactRequirement(
+        key=str(payload["key"]),
+        fact_type=FactType(str(payload["fact_type"])),
+        description=str(payload["description"]),
+        subject=str(payload["subject"]),
+        required=bool(payload.get("required", True)),
+        freshness=Freshness(str(payload.get("freshness", Freshness.STABLE.value))),
+        consequence=Consequence(
+            str(payload.get("consequence", Consequence.LOW.value))
+        ),
+        preferred_source_kinds=tuple(
+            map(str, payload.get("preferred_source_kinds", ()))
+        ),
+    )
+
+
+def _select_ranked_hits(
+    candidates: tuple[dict[str, Any], ...],
+    *,
+    authority_policy: SourceAuthorityPolicy,
+    entity: str,
+    mode: SearchMode,
+    max_selected_hits: int,
+) -> list[dict[str, Any]]:
+    classified: list[tuple[dict[str, Any], str, SourceAuthority]] = []
+    for item in candidates:
+        try:
+            identity, authority = authority_policy.classify(
+                str(item["canonical_url"]),
+                entity=entity,
+            )
+        except ValueError:
+            identity = str(item["canonical_url"])
+            authority = SourceAuthority.INDEPENDENT
+        classified.append((item, identity, authority))
+    ranked = sorted(
+        classified,
+        key=lambda value: (
+            0 if value[2] is SourceAuthority.OFFICIAL else 1,
+            -float(value[0]["score"]),
+            int(value[0]["rank"]),
+            value[0]["canonical_url"],
+        ),
+    )
+    diverse = []
+    deferred = []
+    seen_identities: set[str] = set()
+    for item, identity, _ in ranked:
+        if identity in seen_identities:
+            deferred.append(item)
+        else:
+            diverse.append(item)
+            seen_identities.add(identity)
+    selection_limit = (
+        min(2, max_selected_hits)
+        if mode is SearchMode.FAST
+        else max_selected_hits
+    )
+    return (diverse + deferred)[:selection_limit]
+
+
+def _model_context(context: StepExecutionContext) -> ModelInvocationContext:
+    return ModelInvocationContext(
+        tenant_id=context.tenant_id,
+        run_id=context.run_id,
+        step_id=context.step_id,
+        step_key=context.step_key,
+        attempt_id=context.attempt_id,
+        attempt_no=context.attempt_no,
+        trace_context=context.trace_context,
+        input_refs=(f"artifact-sha256:{context.input_ref.sha256}",),
+    )
+
+
 @dataclass(slots=True)
 class SearchStepOperations:
     uow_factory: TenantUnitOfWorkFactory
@@ -212,9 +336,14 @@ class SearchStepOperations:
     fetcher: ContentFetcher
     provider_names: tuple[str, ...]
     max_selected_hits: int = 4
+    model_verifier: ModelEvidenceVerifier | None = None
+    model_synthesizer: ConstrainedModelSynthesizer | None = None
     _compiler: QueryCompiler = field(init=False, repr=False)
     _extractor: ContentExtractor = field(init=False, repr=False)
     _chunker: DocumentChunker = field(init=False, repr=False)
+    _candidate_selector: CandidateSelector = field(init=False, repr=False)
+    _authority: SourceAuthorityPolicy = field(init=False, repr=False)
+    _official_sources: OfficialSourcePolicy = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not self.provider_names:
@@ -224,6 +353,9 @@ class SearchStepOperations:
         self._compiler = QueryCompiler()
         self._extractor = ContentExtractor()
         self._chunker = DocumentChunker()
+        self._authority = SourceAuthorityPolicy()
+        self._candidate_selector = CandidateSelector(self._authority)
+        self._official_sources = OfficialSourcePolicy()
 
     def registry_operations(self) -> FastStepOperations:
         return FastStepOperations(
@@ -326,12 +458,14 @@ class SearchStepOperations:
                 "Search Run no longer exists",
                 retryable=False,
             )
-        intent, llm_calls = await self.planner.plan(
+        planning = await self.planner.plan(
             str(route["message"]),
             mode=run.mode,
             deadline=context.deadline_at,
             max_llm_calls=run.budget.max_llm_calls,
+            invocation_context=_model_context(context),
         )
+        intent = planning.intent
         queries = self._compiler.compile(intent, run.mode)
         fact_payloads = [_fact_dict(context.run_id, fact) for fact in intent.facts]
         fact_ids = {item["key"]: item["id"] for item in fact_payloads}
@@ -347,6 +481,16 @@ class SearchStepOperations:
                 "freshness_days": query.freshness_days,
                 "plan_revision": query.plan_revision,
                 "metadata": dict(query.metadata),
+                "direct_urls": list(
+                    self._official_sources.urls_for(
+                        intent.entity,
+                        next(
+                            fact.fact_type
+                            for fact in intent.facts
+                            if fact.key == query.fact_key
+                        ),
+                    )
+                ),
             }
             for query in queries
         ]
@@ -356,6 +500,7 @@ class SearchStepOperations:
                 "schema": "sana.plan.v1",
                 "message": str(route["message"]),
                 "mode": run.mode.value,
+                "degraded": planning.degraded,
                 "intent": {
                     "entity": intent.entity,
                     "aliases": list(intent.aliases),
@@ -367,7 +512,10 @@ class SearchStepOperations:
                 "queries": query_payloads,
                 "providers": list(self.provider_names),
             },
-            StepBudgetCost(BudgetPhase.ROUTE_PLAN, llm_calls=llm_calls),
+            StepBudgetCost(
+                BudgetPhase.ROUTE_PLAN,
+                llm_calls=planning.llm_calls,
+            ),
         )
 
     async def discovery_step(
@@ -376,6 +524,23 @@ class SearchStepOperations:
     ) -> StepExecutionResult:
         payload = await self._json(context)
         query = dict(payload["query"])
+        plan = await self.artifacts.get_json(
+            context.tenant_id,
+            _reference(dict(payload["plan_ref"])),
+        )
+        if not isinstance(plan, dict):
+            raise TypedError(
+                ErrorCategory.CONTENT,
+                "discovery_plan_invalid",
+                "Discovery plan artifact must contain a JSON object",
+                retryable=False,
+            )
+        mode = SearchMode(str(plan["mode"]))
+        provider_window = 2.0 if mode is SearchMode.FAST else 8.0
+        provider_deadline = min(
+            context.deadline_at,
+            context.clock.now() + timedelta(seconds=provider_window),
+        )
         provider_names = tuple(map(str, payload.get("providers", self.provider_names)))
         responses = await self.discovery.discover(
             context.tenant_id,
@@ -385,10 +550,11 @@ class SearchStepOperations:
                     text=str(query["text"]),
                     locale=str(query["locale"]),
                     freshness_days=query.get("freshness_days"),
+                    direct_urls=tuple(map(str, query.get("direct_urls", ()))),
                 ),
             ),
             provider_names,
-            deadline=context.deadline_at,
+            deadline=provider_deadline,
         )
         serialized = []
         for response in responses:
@@ -442,12 +608,25 @@ class SearchStepOperations:
             StepBudgetCost(
                 BudgetPhase.DISCOVERY,
                 queries=1,
-                providers=len(provider_names),
+                providers=sum(name != "direct" for name in provider_names),
             ),
         )
 
     async def select(self, context: StepExecutionContext) -> StepExecutionResult:
         payload = await self._json(context)
+        plan = await self.artifacts.get_json(
+            context.tenant_id,
+            _reference(dict(payload["plan_ref"])),
+        )
+        if not isinstance(plan, dict):
+            raise TypedError(
+                ErrorCategory.CONTENT,
+                "selection_plan_invalid",
+                "Selection plan artifact must contain a JSON object",
+                retryable=False,
+            )
+        mode = SearchMode(str(plan["mode"]))
+        entity = str(plan["intent"]["entity"])
         candidates: dict[str, dict[str, Any]] = {}
         provider_failures = 0
         for raw_ref in payload.get("discovery_refs", []):
@@ -463,10 +642,13 @@ class SearchStepOperations:
                     previous = candidates.get(canonical)
                     if previous is None or float(hit["score"]) > float(previous["score"]):
                         candidates[canonical] = dict(hit)
-        selected = sorted(
-            candidates.values(),
-            key=lambda item: (-float(item["score"]), int(item["rank"]), item["canonical_url"]),
-        )[: self.max_selected_hits]
+        selected = _select_ranked_hits(
+            tuple(candidates.values()),
+            authority_policy=self._authority,
+            entity=entity,
+            mode=mode,
+            max_selected_hits=self.max_selected_hits,
+        )
         return await self._result(
             context,
             {
@@ -588,95 +770,121 @@ class SearchStepOperations:
             StepBudgetCost(BudgetPhase.FETCH_EXTRACT),
         )
 
-    @staticmethod
-    def _fact_terms(plan: dict[str, Any], fact: dict[str, Any]) -> tuple[str, ...]:
-        mapping = {
-            FactType.CHARACTER_CHANGES.value: ("改动", "调整", "buff", "nerf", "change"),
-            FactType.VERSION.value: ("版本", "赛季", "version", "season"),
-            FactType.PATCH_NOTES.value: ("补丁", "更新", "patch", "changelog"),
-            FactType.TEAM_META.value: ("阵容", "配队", "meta", "lineup", "team"),
-            FactType.CURRENT_VALUE.value: ("当前", "价格", "current", "price", "score"),
-            FactType.COMPARISON.value: ("比较", "对比", "compare", "versus"),
-            FactType.BACKGROUND.value: (),
-        }
-        entity = str(plan["intent"]["entity"]).casefold()
-        subject = str(fact["subject"]).casefold()
-        return tuple(dict.fromkeys((entity, subject, *mapping[str(fact["fact_type"])])))
-
     async def verify(self, context: StepExecutionContext) -> StepExecutionResult:
         payload = await self._json(context)
         plan = await self.artifacts.get_json(
             context.tenant_id,
             _reference(dict(payload["plan_ref"])),
         )
-        hit = dict(payload["hit"])
-        fact = next(
-            (item for item in plan["facts"] if item["id"] == hit["fact_id"]),
-            None,
+        facts = {
+            UUID(str(raw["id"])): _fact_from_dict(dict(raw))
+            for raw in plan.get("facts", ())
+        }
+        documents: list[CandidateDocument] = []
+        for raw_ref in payload.get("extract_refs", ()):
+            extracted = await self.artifacts.get_json(
+                context.tenant_id,
+                _reference(dict(raw_ref)),
+            )
+            if not isinstance(extracted, dict):
+                continue
+            text = (
+                await self.artifacts.get_bytes(
+                    context.tenant_id,
+                    _reference(dict(extracted["version"]["text_ref"])),
+                )
+            ).decode("utf-8")
+            document_id = UUID(str(extracted["document"]["id"]))
+            version = DomainDocumentVersion(
+                UUID(str(extracted["version"]["id"])),
+                context.tenant_id,
+                document_id,
+                str(extracted["version"]["content_hash"]),
+                text,
+                str(extracted["version"]["media_type"]),
+                extracted["version"].get("language"),
+                datetime.fromisoformat(str(extracted["version"]["fetched_at"])),
+            )
+            chunks = tuple(
+                (
+                    UUID(str(raw_chunk["id"])),
+                    DomainDocumentChunk(
+                        int(raw_chunk["ordinal"]),
+                        str(raw_chunk["text"]),
+                        str(raw_chunk["text_hash"]),
+                        int(raw_chunk["token_count"]),
+                        int(raw_chunk["start_offset"]),
+                        int(raw_chunk["end_offset"]),
+                    ),
+                )
+                for raw_chunk in extracted.get("chunks", ())
+            )
+            documents.append(
+                CandidateDocument(
+                    document_id,
+                    version,
+                    chunks,
+                    str(extracted["document"]["canonical_url"]),
+                    str(extracted["document"]["title"]),
+                    UUID(str(extracted["hit"]["fact_id"])),
+                )
+            )
+        candidates = self._candidate_selector.select(
+            run_id=context.run_id,
+            entity=str(plan["intent"]["entity"]),
+            facts=facts,
+            documents=tuple(documents),
         )
-        if fact is None:
-            raise TypedError(
-                ErrorCategory.CONTENT,
-                "verification_fact_missing",
-                "Selected hit does not map to a planned fact",
-                retryable=False,
+        if self.model_verifier is None:
+            batch = ModelEvidenceVerifier.deterministic(
+                candidates,
+                run_id=context.run_id,
+                verified_at=context.clock.now(),
             )
-        terms = self._fact_terms(plan, fact)
-        entity_terms = {str(plan["intent"]["entity"]).casefold(), str(fact["subject"]).casefold()}
-        keyword_terms = set(terms) - entity_terms
-        ranked = []
-        for chunk in payload.get("chunks", []):
-            text = str(chunk["text"])
-            folded = text.casefold()
-            matched = {term for term in terms if term and term in folded}
-            ranked.append((len(matched), matched, chunk))
-        ranked.sort(key=lambda item: (-item[0], int(item[2]["ordinal"])))
-        accepted = False
-        evidence = None
-        if ranked and ranked[0][0] > 0:
-            _, matched, chunk = ranked[0]
-            entity_match = bool(matched & entity_terms)
-            keyword_match = bool(matched & keyword_terms) or not keyword_terms
-            accepted = entity_match and keyword_match
-            quote = str(chunk["text"])[:600]
-            quote_start = int(chunk["start_offset"])
-            candidate_id = uuid5(
+        else:
+            batch = await self.model_verifier.verify(
+                candidates,
+                invocation_context=_model_context(context),
+                deadline=context.deadline_at,
+                verified_at=context.clock.now(),
+            )
+        coverage = {
+            fact_id: CoverageEvaluator().evaluate(
+                context.tenant_id,
                 context.run_id,
-                f"evidence:{fact['id']}:{chunk['id']}:{hashlib.sha256(quote.encode('utf-8')).hexdigest()}",
+                fact_id,
+                fact,
+                batch.evidence,
             )
-            verified_id = uuid5(candidate_id, "verified:lexical-v1")
-            evidence = {
-                "candidate_id": str(candidate_id),
-                "verified_id": str(verified_id),
-                "fact_id": fact["id"],
-                "document_id": payload["document"]["id"],
-                "document_version_id": payload["version"]["id"],
-                "document_chunk_id": chunk["id"],
-                "quote": quote,
-                "quote_hash": hashlib.sha256(quote.encode("utf-8")).hexdigest(),
-                "start_offset": quote_start,
-                "end_offset": quote_start + len(quote),
-                "support_type": "SUPPORTS",
-                "candidate_score": min(1.0, len(matched) / max(1, len(terms))),
-                "verdict": "ACCEPTED" if accepted else "REJECTED",
-                "confidence": 0.65 if accepted else 0.2,
-                "reason_codes": [
-                    "exact_source_span",
-                    "lexical_fact_match" if accepted else "insufficient_lexical_match",
-                ],
-                "verifier_version": "deterministic-lexical-v1",
-                "verified_at": context.clock.now().isoformat(),
-                "url": payload["document"]["canonical_url"],
-                "title": payload["document"]["title"],
-            }
+            for fact_id, fact in facts.items()
+        }
         return await self._result(
             context,
             {
-                "schema": "sana.verify.v1",
+                "schema": "sana.verify.v2",
                 "plan_ref": payload["plan_ref"],
-                "fact": fact,
-                "accepted": accepted,
-                "evidence": evidence,
+                "evidence": [evidence_to_payload(item) for item in batch.evidence],
+                "coverage": [
+                    {
+                        "fact_id": str(fact_id),
+                        "fact_key": assessment.fact_key,
+                        "status": assessment.status.value,
+                        "level": (
+                            assessment.level.value
+                            if assessment.level is not None
+                            else None
+                        ),
+                        "evidence_ids": list(map(str, assessment.evidence_ids)),
+                        "supporting_ids": list(map(str, assessment.supporting_ids)),
+                        "contradicting_ids": list(
+                            map(str, assessment.contradicting_ids)
+                        ),
+                        "reason_codes": list(assessment.reason_codes),
+                    }
+                    for fact_id, assessment in coverage.items()
+                ],
+                "degraded": batch.degraded,
+                "degradation_code": batch.degradation_code,
             },
             StepBudgetCost(BudgetPhase.VERIFY),
         )
@@ -687,64 +895,145 @@ class SearchStepOperations:
             context.tenant_id,
             _reference(dict(payload["plan_ref"])),
         )
-        accepted_by_fact: dict[str, list[dict[str, Any]]] = {}
-        for raw_ref in payload.get("verify_refs", []):
-            verification = await self.artifacts.get_json(
+        verification: dict[str, Any] = {}
+        raw_verify_ref = payload.get("verify_ref")
+        if raw_verify_ref is not None:
+            loaded = await self.artifacts.get_json(
                 context.tenant_id,
-                _reference(dict(raw_ref)),
+                _reference(dict(raw_verify_ref)),
             )
-            if verification.get("accepted") and verification.get("evidence"):
-                accepted_by_fact.setdefault(
-                    str(verification["fact"]["id"]), []
-                ).append(dict(verification["evidence"]))
-        required = [fact for fact in plan["facts"] if fact.get("required", True)]
-        complete = bool(required) and all(fact["id"] in accepted_by_fact for fact in required)
+            if isinstance(loaded, dict):
+                verification = loaded
+        facts = {
+            UUID(str(raw["id"])): _fact_from_dict(dict(raw))
+            for raw in plan.get("facts", ())
+        }
+        evidence = tuple(
+            evidence_from_payload(
+                dict(raw),
+                tenant_id=context.tenant_id,
+                run_id=context.run_id,
+            )
+            for raw in verification.get("evidence", ())
+        )
+        coverage = {
+            fact_id: CoverageEvaluator().evaluate(
+                context.tenant_id,
+                context.run_id,
+                fact_id,
+                fact,
+                evidence,
+            )
+            for fact_id, fact in facts.items()
+        }
+        pipeline_degradation_codes = tuple(
+            str(value)
+            for value in payload.get("pipeline_degradation_codes", ())
+            if value
+        )
+        if self.model_synthesizer is None:
+            synthesized = ConstrainedModelSynthesizer.deterministic(
+                tenant_id=context.tenant_id,
+                run_id=context.run_id,
+                facts=facts,
+                coverage=coverage,
+                evidence=evidence,
+            )
+        else:
+            synthesized = await self.model_synthesizer.synthesize(
+                tenant_id=context.tenant_id,
+                run_id=context.run_id,
+                facts=facts,
+                coverage=coverage,
+                evidence=evidence,
+                invocation_context=_model_context(context),
+                deadline=context.deadline_at,
+            )
+        model_pipeline_degraded = (
+            bool(plan.get("degraded"))
+            or bool(verification.get("degraded"))
+            or synthesized.degraded
+        )
+        degraded = model_pipeline_degraded or bool(pipeline_degradation_codes)
+        required_ids = {
+            fact_id for fact_id, fact in facts.items() if fact.required
+        }
+        supported_fact_ids = {
+            claim.fact_requirement_id
+            for claim in synthesized.answer.claims
+            if claim.kind is ClaimKind.FACTUAL and claim.evidence_ids
+        }
+        complete = bool(required_ids) and required_ids <= supported_fact_ids and all(
+            coverage[fact_id].status in {FactCoverage.COVERED, FactCoverage.VERIFIED}
+            for fact_id in required_ids
+        ) and not degraded
         zh = str(plan["intent"]["locale"]).lower().startswith("zh")
         lines = [
             "我找到并核对了以下网页原文：" if zh else "I found and checked these source excerpts:"
         ]
+        citations_by_claim: dict[UUID, list[Any]] = {}
+        for citation in synthesized.answer.citations:
+            citations_by_claim.setdefault(citation.answer_claim_id, []).append(citation)
         claims = []
-        missing = []
-        for fact in required:
-            evidence_items = accepted_by_fact.get(str(fact["id"]), [])
-            if not evidence_items:
-                missing.append(str(fact["description"]))
-                continue
-            evidence = evidence_items[0]
-            quote = str(evidence["quote"]).replace("\n", " ").strip()
-            if len(quote) > 280:
-                quote = quote[:277].rstrip() + "…"
-            lines.append(
-                f"- **{fact['description']}**：{quote} ([来源]({evidence['url']}))"
-                if zh
-                else f"- **{fact['description']}**: {quote} ([source]({evidence['url']}))"
+        for claim in synthesized.answer.claims:
+            claim_citations = citations_by_claim.get(claim.id, [])
+            links = " ".join(
+                f"[{citation.label}]({citation.rendered_url})"
+                for citation in claim_citations
             )
-            claim_id = uuid5(context.run_id, f"claim:{fact['id']}")
+            lines.append(f"- {claim.text}{(' ' + links) if links else ''}")
             claims.append(
                 {
-                    "id": str(claim_id),
-                    "claim_key": str(fact["key"]),
-                    "text": quote,
-                    "support_status": "GROUNDED",
-                    "fact_id": fact["id"],
-                    "evidence_id": evidence["verified_id"],
-                    "citation_id": str(uuid5(claim_id, f"citation:{evidence['verified_id']}")),
-                    "url": evidence["url"],
+                    "id": str(claim.id),
+                    "claim_key": claim.claim_key,
+                    "text": claim.text,
+                    "support_status": claim.support.value,
+                    "fact_id": (
+                        str(claim.fact_requirement_id)
+                        if claim.fact_requirement_id is not None
+                        else None
+                    ),
+                    "evidence_ids": list(map(str, claim.evidence_ids)),
+                    "citations": [
+                        {
+                            "id": str(citation.id),
+                            "evidence_id": str(citation.verified_evidence_id),
+                            "ordinal": citation.ordinal,
+                            "label": citation.label,
+                            "url": citation.rendered_url,
+                            "document_version_id": str(
+                                citation.document_version_id
+                            ),
+                            "document_chunk_id": str(citation.document_chunk_id),
+                            "quote": citation.quote,
+                            "start_offset": citation.start_offset,
+                            "end_offset": citation.end_offset,
+                        }
+                        for citation in claim_citations
+                    ],
                 }
             )
+        missing_ids = required_ids - supported_fact_ids
+        missing = [facts[fact_id].description for fact_id in missing_ids]
         if missing:
             prefix = "仍未获得足够证据" if zh else "Evidence is still insufficient"
             lines.append(f"\n{prefix}：" + "、".join(missing))
+        if len(lines) == 1:
+            lines.append(
+                "- 暂无可验证的网页证据。" if zh else "- No verifiable web evidence is available."
+            )
         if complete:
             quality = "COMPLETE"
             reason = "FACTS_COVERED"
         else:
             quality = "PARTIAL"
             reason = (
-                "PROVIDER_FAILURE"
-                if not claims and int(payload.get("provider_failures", 0)) > 0
-                else "TIME_BUDGET"
+                "TIME_BUDGET"
                 if context.clock.now() >= context.deadline_at
+                or "phase_deadline_exceeded" in pipeline_degradation_codes
+                else "PROVIDER_FAILURE"
+                if model_pipeline_degraded
+                or (not claims and int(payload.get("provider_failures", 0)) > 0)
                 else "INSUFFICIENT_EVIDENCE"
             )
         return await self._result(
@@ -755,9 +1044,19 @@ class SearchStepOperations:
                 "quality": quality,
                 "stop_reason": reason,
                 "claims": claims,
-                "missing_fact_ids": [
-                    fact["id"] for fact in required if fact["id"] not in accepted_by_fact
-                ],
+                "missing_fact_ids": list(map(str, missing_ids)),
+                "degraded": degraded,
+                "degradation_codes": list(
+                    dict.fromkeys(
+                        value
+                        for value in (
+                            *pipeline_degradation_codes,
+                            verification.get("degradation_code"),
+                            synthesized.degradation_code,
+                        )
+                        if value
+                    )
+                ),
             },
             StepBudgetCost(BudgetPhase.SYNTHESIZE),
         )
@@ -766,6 +1065,7 @@ class SearchStepOperations:
 __all__ = [
     "HeuristicIntentPlanner",
     "IntentPlanner",
+    "IntentPlanningResult",
     "ModelIntentPlanner",
     "SearchStepOperations",
 ]

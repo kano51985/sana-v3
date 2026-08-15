@@ -19,13 +19,26 @@ PostgreSQL 是 Run、Step、Attempt、证据与记忆的唯一事实源。Redis 
 | `SANA_AUTH_MODE` | `dev` 或 `oidc` | `dev` |
 | `SANA_STEP_HANDLER_FACTORY` | Worker 处理器工厂，格式 `module:function` | `sana.app.production_worker:create_handler` |
 | `SANA_ARTIFACT_ROOT` | 跨 Step 的 content-addressed artifact 根目录 | `var/artifacts` |
-| `SANA_WORKER_PLANNER_PROVIDER` | `heuristic`、`deepseek`、`openai` 或 `local` | `heuristic` |
-| `SANA_WORKER_PLANNER_MODEL` | 模型型 planner 的显式模型名 | 空 |
-| `SANA_WORKER_DISCOVERY_PROVIDERS` | 逗号分隔的 `bing_rss`/`searxng` | `bing_rss` |
+| `SANA_WORKER_MODEL_PIPELINE_ENABLED` | 启用 Planner/Verifier/Synthesizer 模型质量闭环 | `false` |
+| `SANA_WORKER_PLANNER_PROVIDER` | Planner provider | `deepseek` |
+| `SANA_WORKER_PLANNER_MODEL` | Planner 模型 | `deepseek-v4-flash` |
+| `SANA_WORKER_VERIFIER_PROVIDER` | Verifier provider | `deepseek` |
+| `SANA_WORKER_VERIFIER_MODEL` | Verifier 模型 | `deepseek-v4-flash` |
+| `SANA_WORKER_SYNTHESIZER_PROVIDER` | Synthesizer provider | `deepseek` |
+| `SANA_WORKER_SYNTHESIZER_MODEL` | Synthesizer 模型 | `deepseek-v4-flash` |
+| `SANA_WORKER_DEEPSEEK_BASE_URL` | DeepSeek 官方 API 根地址 | `https://api.deepseek.com` |
+| `SANA_WORKER_MODEL_THINKING` | DeepSeek 思考模式 | `disabled` |
+| `SANA_WORKER_MODEL_OUTPUT_FORMAT` | 结构化输出格式 | `json_object` |
+| `SANA_WORKER_LIVE_EVAL_MAX_RUNS` | 单轮真实评测硬上限 | `20` |
+| `SANA_WORKER_DISCOVERY_PROVIDERS` | 逗号分隔的 `direct`/`bing_rss`/`searxng` | `direct,bing_rss` |
 | `SANA_WORKER_SEARXNG_URL` | 启用 `searxng` 时的服务地址 | 空 |
 | `SANA_WORKER_MAX_SELECTED_HITS` | 每个 Run 最多抓取的候选数 | `4` |
 
-生产环境必须使用 OIDC，并设置 issuer、audience 与 JWKS URL。`SanaSettings` 会拒绝在 `SANA_ENVIRONMENT=production` 时启用开发认证；`ProductionWorkerSettings` 也会拒绝生产环境使用离线 heuristic planner。模型密钥只能通过 Worker 进程环境或外部秘密管理器注入，不能放进 Streamlit、数据库配置面板、镜像或仓库。离线 heuristic 只供本地连通性和恢复验证，它会在证据不足时返回 `PARTIAL`，不会把猜测包装成完整答案。
+生产环境必须使用 OIDC，并设置 issuer、audience 与 JWKS URL。`SanaSettings` 会拒绝在 `SANA_ENVIRONMENT=production` 时启用开发认证。模型密钥只能通过 Worker 进程环境或外部秘密管理器注入，不能放进 API、Streamlit、数据库配置面板、镜像或仓库。功能开关关闭时，Worker 保持 deterministic/heuristic 管线用于回滚、连通性和恢复验证；开启时，三个角色任一配置缺失、Provider 不一致或密钥缺失都会 fail closed，不会静默降级启动。
+
+当前质量管线由同一 DeepSeek API 承担 Planner、Verifier 和 Synthesizer，默认使用 `deepseek-v4-flash`、关闭 thinking 并要求 JSON object。Model Gateway 对外部调用施加独立的总墙钟超时，并在 Step deadline 前保留 2 秒用于审计封账、本地降级和事务提交；Planner 失败时转入启发式计划，Verifier/Synthesizer 失败时转入确定性证据约束路径。所有降级都会进入最终 `degraded`、`degradation_codes` 与 `stop_reason`，不能伪装成完整模型结果。
+
+`direct` 不是任意 URL 访问能力。它只读取版本化、代码审查可见的官方来源注册表；模型不能生成或提升 URL 权威等级。当前注册表覆盖 Python、DeepSeek 与 Apex Legends 的已知稳定入口，其他实体仍依赖搜索 provider，生产扩展时必须通过配置变更和 SSRF 测试加入。
 
 ## 外部 PostgreSQL/Redis 启动
 
@@ -76,8 +89,11 @@ docker compose -f deployment/docker-compose.yml --profile workers up --build
 - Compose 和 `start-worker.ps1` 默认使用内置生产处理器；直接调用底层 Worker 且既未注入工厂也未使用入口默认值时会退出，禁止产生“空 Worker 已健康”的假象。
 - Dispatcher 每轮先枚举 ACTIVE tenant，再在各自 `app.tenant_id` RLS 事务中领取 Outbox。
 - 同一控制进程扫描 PostgreSQL 中超出 grace period 的 READY、到期 RETRY_WAIT 和 lease 过期 RUNNING Step；Redis 丢失任务后会按稳定 task ID 重投，并用数据库 `updated_at` 开启下一段重投冷却，避免 Worker 离线时形成毫秒级投递风暴。
+- Reconciler 还会封口已完成/已过期 Attempt 留下的 `STARTED` 模型调用，写为 `ABANDONED/POSSIBLY_BILLED`；告警和成本系统不得把这类记录当作零成本成功。
 - `fast`、`research`、`crawl`、`maintenance` 使用各自独立的 direct exchange 与 routing key。
 - Celery 消息只传 `tenant_id`、`step_id` 与 trace context，不传 prompt、正文或密钥。
+
+当前数据库 head 为 `0008_provider_attempt_identity`。`provider_attempts` 按 `(query_spec_id, provider, attempt_no)` 唯一，允许 Direct 与 Bing 对同一 Query 并发落库；`model_invocations`、证据与引用表均强制 PostgreSQL RLS。引用必须保存 document version、chunk、原文 quote 与精确 offset，缺任一项都不能进入用户答案。
 
 ## 切流门槛
 
@@ -112,16 +128,30 @@ $env:SANA_UI_MODE = "legacy"
 
 API/Worker 回滚必须先停止新流量，再停止 Dispatcher，等待运行中的外部调用结束或取消，最后回到旧入口。不要回滚数据库迁移来恢复旧界面；旧界面在回滚窗口内仍使用自己的原数据。数据清理必须是窗口结束后的独立变更，并带备份清单与抽样核验记录。
 
+模型质量管线可以独立回滚，无需降级数据库：
+
+```powershell
+$env:SANA_WORKER_MODEL_PIPELINE_ENABLED = "false"
+docker compose -f deployment/docker-compose.yml --profile workers up -d --force-recreate worker
+```
+
 ## 尚未解除的生产阻断项
 
-截至 2026-08-14，本仓库仍有以下阻断项，因此不能宣称最终切流完成：
+截至 2026-08-15，本仓库仍有以下阻断项，因此不能宣称最终切流完成：
 
 1. 已提供带 tenant/hash 校验的本地共享卷 artifact adapter；多主机 Worker 上线前仍需接入 S3/MinIO 或经过验证的共享文件系统，不能让每台 Worker 使用独立本地目录。
-2. 内置 completion coordinator 已在本机 Docker 完成真实 planner、Bing RSS discovery、HTTP fetch、extract、verify、synthesize 的 FAST/RESEARCH 闭环；也已在两个并行 FETCH 期间 SIGKILL Worker，验证 6 秒租约回收、旧 Attempt `lease_expired` 封账、attempt 2 续跑、重复消息吸收以及单一助手回复。生产切流前仍需用获批的模型型 planner/provider 完成质量与时延验收。
+2. 内置 completion coordinator 已在本机 Docker 完成 DeepSeek Planner/Verifier/Synthesizer、Direct/Bing discovery、HTTP fetch、extract、单一 fan-in Verify 与受约束 synthesize 的 FAST/RESEARCH 闭环；也已验证 Worker 强杀后的租约回收、重复消息吸收、孤儿模型调用封口和单一助手回复。当前仅是受控小样本 smoke，不是生产 SLO 证明；仍需扩大真实流量样本，统计 FAST/RESEARCH p95、Fact 覆盖率、Provider 失败率与降级率。
 3. 本机 Docker 已验证迁移、非绕过应用角色、RLS、双租户 API、Outbox 发布、Redis 清空后的 READY Step 重投及 Worker crash/lease 恢复；尚未执行记忆正式导入与召回抽样。
 4. 生产 OIDC tenant/user provisioning 仍需外部身份管理流程。
 
 这些阻断项必须通过实现和真实集成环境证据关闭，不能通过降低就绪条件或改文档绕过。
+
+## 2026-08-15 受控验证摘要
+
+- 三例 DeepSeek smoke（2 FAST + 1 RESEARCH）全部在调用预算内完成：FAST 为 11.7–12.3 秒、最多 3 次模型调用；RESEARCH 为 13.7 秒、3 次模型调用；引用回溯率为 100%。结果以 PARTIAL 为主，暴露的是真实证据覆盖不足，不能据此宣布质量门槛达标。
+- 慢响应演练中，Verifier 与 Synthesizer 均触发 Gateway 总墙钟超时；运行仍在 14.0 秒内以确定性路径成功结束，覆盖 1/1 Fact、生成 3 条完整引用，并明确标记降级。模型审计记录为 `FAILED/POSSIBLY_BILLED`，无遗留 `STARTED`。
+- 模型管线关闭回滚实测为 11.7 秒、0 次模型调用、覆盖 1/1 Fact、2 条完整引用；验证后已恢复 DeepSeek 管线。
+- 以上均为本地 Docker、单机、有限样本结果，不能替代持续压测、生产网络和真实多租户验收。
 
 ## 发布验收记录模板
 

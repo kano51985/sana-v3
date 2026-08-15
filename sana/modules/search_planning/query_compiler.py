@@ -26,7 +26,7 @@ class QueryCompiler:
         if chinese:
             mapping = {
                 FactType.CHARACTER_CHANGES: (("改动", "官方补丁"), ("平衡性调整", "更新"), ("技能改动",)),
-                FactType.VERSION: (("当前版本", "赛季"), ("版本号", "官方"), ("最新更新",)),
+                FactType.VERSION: (("当前稳定版本", "官方"), ("最新版本号",), ("最新更新",)),
                 FactType.PATCH_NOTES: (("补丁说明", "官方"), ("更新日志",), ("版本公告",)),
                 FactType.TEAM_META: (("当前版本", "配队"), ("阵容", "meta"), ("排位热门阵容",)),
                 FactType.CURRENT_VALUE: (("当前",), ("最新",), ("官方数据",)),
@@ -36,7 +36,7 @@ class QueryCompiler:
         else:
             mapping = {
                 FactType.CHARACTER_CHANGES: (("changes", "official patch"), ("balance update",), ("ability changes",)),
-                FactType.VERSION: (("current version", "season"), ("version number", "official"), ("latest update",)),
+                FactType.VERSION: (("latest stable version", "official"), ("current version number",), ("latest release",)),
                 FactType.PATCH_NOTES: (("official patch notes",), ("changelog",), ("release notes",)),
                 FactType.TEAM_META: (("current meta", "team composition"), ("best lineup",), ("ranked team picks",)),
                 FactType.CURRENT_VALUE: (("current",), ("latest",), ("official data",)),
