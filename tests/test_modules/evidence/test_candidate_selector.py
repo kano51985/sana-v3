@@ -424,6 +424,62 @@ def test_purpose_fact_prefers_definition_over_incidental_object_mentions() -> No
     assert selected[0].chunk.ordinal == 1
 
 
+def test_git_object_type_fact_prefers_reviewed_type_list_over_tree_example() -> None:
+    fact_id = uuid4()
+    fact = FactRequirement(
+        "git_object_types",
+        FactType.BACKGROUND,
+        "The four types in the Git object model",
+        "Git object types",
+    )
+    tenant_id, document_id = uuid4(), uuid4()
+    raw_chunks = (
+        "A tree example contains blobs, commits, tags, and object type metadata.",
+        "Objects: commits, trees, blobs, and tag objects.",
+    )
+    chunks = tuple(
+        (
+            uuid4(),
+            DocumentChunk(
+                ordinal,
+                text,
+                hashlib.sha256(text.encode()).hexdigest(),
+                10,
+                ordinal * 100,
+                ordinal * 100 + len(text),
+            ),
+        )
+        for ordinal, text in enumerate(raw_chunks)
+    )
+    full_text = "\n".join(raw_chunks)
+    candidate_document = CandidateDocument(
+        document_id,
+        DocumentVersion(
+            uuid4(),
+            tenant_id,
+            document_id,
+            hashlib.sha256(full_text.encode()).hexdigest(),
+            full_text,
+            "text/plain",
+            "en",
+            NOW,
+        ),
+        chunks,
+        "https://git-scm.com/docs/gitdatamodel.html",
+        "Git data model",
+        (fact_id,),
+    )
+
+    selected = CandidateSelector(max_per_fact=1, max_total=1).select(
+        run_id=uuid4(),
+        entity="Git",
+        facts={fact_id: fact},
+        documents=(candidate_document,),
+    )
+
+    assert selected[0].chunk.ordinal == 1
+
+
 def test_http_status_semantics_prefers_normative_definition_over_mentions() -> None:
     fact_id = uuid4()
     fact = FactRequirement(
