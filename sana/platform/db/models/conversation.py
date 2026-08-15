@@ -6,7 +6,16 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,6 +26,16 @@ class Conversation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "conversations"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_conversations_tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "user_id",
+            "creation_idempotency_key",
+            name="uq_conversations_tenant_user_creation_key",
+        ),
+        CheckConstraint(
+            "(creation_idempotency_key IS NULL) = (creation_request_hash IS NULL)",
+            name="creation_idempotency_pair",
+        ),
         Index("ix_conversations_tenant_user_updated", "tenant_id", "user_id", "updated_at"),
     )
 
@@ -32,6 +51,8 @@ class Conversation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     title: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    creation_idempotency_key: Mapped[str | None] = mapped_column(String(200))
+    creation_request_hash: Mapped[str | None] = mapped_column(String(64))
 
 
 class Message(UUIDPrimaryKeyMixin, Base):

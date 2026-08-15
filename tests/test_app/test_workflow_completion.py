@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from sana.app.workflow_completion import WorkflowCompletionCoordinator
 from sana.modules.orchestration.domain import (
@@ -31,6 +32,14 @@ class RecordingArtifacts:
         del tenant_id, run_id
         self.payloads.append(payload)
         return ArtifactRef(f"artifact://{len(self.payloads)}", f"{len(self.payloads):064x}")
+
+
+class RecordingSession:
+    def __init__(self) -> None:
+        self.statements = []
+
+    async def execute(self, statement):
+        self.statements.append(statement)
 
 
 class RecordingCoordinator(WorkflowCompletionCoordinator):
@@ -190,3 +199,38 @@ async def test_failed_verify_is_reported_as_pipeline_degradation() -> None:
         "phase_deadline_exceeded",
         "verify_failed",
     ]
+
+
+@pytest.mark.asyncio
+async def test_answer_persistence_records_claim_measurement_and_replays_legacy_artifacts() -> None:
+    run = _run()
+    coordinator = RecordingCoordinator(
+        RecordingArtifacts(),
+        ArtifactRef("artifact://plan", "1" * 64),
+    )
+    fact_id = uuid4()
+
+    async def persist(claim: dict) -> dict:
+        session = RecordingSession()
+        await coordinator._persist_answer(
+            SimpleNamespace(session=session),
+            run,
+            {"answer": "answer", "claims": [claim]},
+        )
+        compiled = session.statements[0].compile(dialect=postgresql.dialect())
+        return compiled.params
+
+    base_claim = {
+        "id": str(uuid4()),
+        "claim_key": "claim-1",
+        "text": "A measurable claim.",
+        "support_status": "SUPPORTED",
+        "fact_id": str(fact_id),
+    }
+    current = await persist({**base_claim, "kind": "FACTUAL"})
+    legacy = await persist(base_claim)
+
+    assert current["claim_kind"] == "FACTUAL"
+    assert current["fact_requirement_id"] == fact_id
+    assert legacy["claim_kind"] is None
+    assert legacy["fact_requirement_id"] == fact_id

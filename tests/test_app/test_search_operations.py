@@ -133,6 +133,10 @@ async def test_synthesis_reports_pipeline_deadline_degradation() -> None:
         "phase_deadline_exceeded",
         "verify_failed",
     ]
+    assert all(
+        "kind" in claim and "fact_id" in claim
+        for claim in artifacts.last_payload["claims"]
+    )
 
     artifacts.payloads[plan_ref.uri]["degraded"] = True
     artifacts.payloads[input_ref.uri]["pipeline_degradation_codes"] = []

@@ -39,6 +39,9 @@ EXPECTED_TABLES = {
     "migration_ledger",
     "legacy_archives",
     "model_invocations",
+    "shadow_campaigns",
+    "shadow_run_results",
+    "shadow_manual_reviews",
 }
 TENANT_TABLES = EXPECTED_TABLES - {"tenants"}
 
@@ -105,6 +108,9 @@ def test_document_and_memory_rows_have_tenant_local_identity_constraints() -> No
         "verified_evidence",
         "memory_items",
         "model_invocations",
+        "shadow_campaigns",
+        "shadow_run_results",
+        "shadow_manual_reviews",
     ):
         table = Base.metadata.tables[table_name]
         tenant_identity = [

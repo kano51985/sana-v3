@@ -30,6 +30,11 @@ from sana.platform.db.models.search import (
     SearchHit,
     VerifiedEvidence,
 )
+from sana.platform.db.models.shadow_campaign import (
+    ShadowCampaignRecord,
+    ShadowManualReviewRecord,
+    ShadowRunResultRecord,
+)
 
 __all__ = [
     "AnswerClaim",
@@ -55,6 +60,9 @@ __all__ = [
     "SearchHit",
     "SearchRunRecord",
     "SearchStepRecord",
+    "ShadowCampaignRecord",
+    "ShadowManualReviewRecord",
+    "ShadowRunResultRecord",
     "StepAttemptRecord",
     "Tenant",
     "User",

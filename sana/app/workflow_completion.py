@@ -606,6 +606,7 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
     ) -> None:
         for claim in payload.get("claims", []):
             claim_id = UUID(str(claim["id"]))
+            claim_kind = claim.get("kind")
             await uow.session.execute(
                 insert(AnswerClaim)
                 .values(
@@ -614,6 +615,12 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
                     run_id=run.id,
                     claim_key=str(claim["claim_key"]),
                     claim_text=str(claim["text"]),
+                    claim_kind=str(claim_kind) if claim_kind is not None else None,
+                    fact_requirement_id=(
+                        UUID(str(claim["fact_id"]))
+                        if claim.get("fact_id") is not None
+                        else None
+                    ),
                     support_status=str(claim["support_status"]),
                 )
                 .on_conflict_do_nothing()

@@ -987,6 +987,7 @@ class SearchStepOperations:
                     "id": str(claim.id),
                     "claim_key": claim.claim_key,
                     "text": claim.text,
+                    "kind": claim.kind.value,
                     "support_status": claim.support.value,
                     "fact_id": (
                         str(claim.fact_requirement_id)

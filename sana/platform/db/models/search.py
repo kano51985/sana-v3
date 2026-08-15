@@ -12,6 +12,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -28,6 +29,12 @@ class FactRequirement(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "fact_requirements"
     __table_args__ = (
         UniqueConstraint("run_id", "fact_key", name="uq_fact_requirements_run_key"),
+        UniqueConstraint(
+            "tenant_id",
+            "run_id",
+            "id",
+            name="uq_fact_requirements_tenant_run_id",
+        ),
         Index("ix_fact_requirements_tenant_run_status", "tenant_id", "run_id", "status"),
     )
 
@@ -232,6 +239,24 @@ class AnswerClaim(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("run_id", "claim_key", name="uq_answer_claims_run_key"),
         UniqueConstraint("tenant_id", "id", name="uq_answer_claims_tenant_id_id"),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "fact_requirement_id"],
+            [
+                "fact_requirements.tenant_id",
+                "fact_requirements.run_id",
+                "fact_requirements.id",
+            ],
+            name="fk_answer_claims_tenant_run_fact",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        CheckConstraint(
+            "(claim_kind IS NULL OR claim_kind IN "
+            "('FACTUAL', 'UNCERTAINTY', 'COMMENTARY')) AND "
+            "(claim_kind IS DISTINCT FROM 'FACTUAL' OR fact_requirement_id IS NOT NULL)",
+            name="kind_fact_binding",
+        ),
         Index("ix_answer_claims_tenant_run", "tenant_id", "run_id"),
     )
 
@@ -240,6 +265,8 @@ class AnswerClaim(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     claim_key: Mapped[str] = mapped_column(String(200), nullable=False)
     claim_text: Mapped[str] = mapped_column(Text, nullable=False)
     support_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    claim_kind: Mapped[str | None] = mapped_column(String(32))
+    fact_requirement_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
 
 
 class Citation(UUIDPrimaryKeyMixin, Base):
