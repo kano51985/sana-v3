@@ -178,6 +178,7 @@ def test_post_campaign_auditor_is_fail_closed_and_secret_safe() -> None:
     assert "LLEN" in auditor
     assert "{{.State.Status}}|{{.State.Health.Status}}|{{.State.Paused}}" in auditor
     assert "worker process count" in auditor
+    assert "@('logs', $container)" in auditor
     assert "Campaign report integrity/privacy scan failed" in auditor
     assert "privacy_scan=PASS" in auditor
     assert "Write-Output $protectedValues" not in auditor

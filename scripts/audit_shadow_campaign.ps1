@@ -268,15 +268,11 @@ foreach ($line in Get-Content -LiteralPath $ManifestPath) {
     }
 }
 
-$composeArguments = @(
-    'compose', '--project-name', $ProjectName,
-    '-f', (Join-Path $WorkspaceRoot 'deployment/docker-compose.shadow-eval.yml')
-)
-if ($OfflineFixture) {
-    $composeArguments += @('-f', (Join-Path $WorkspaceRoot 'deployment/docker-compose.shadow-fake.yml'))
+$serviceLogs = foreach ($service in $CandidateServices) {
+    $container = Get-ServiceContainer $service
+    Invoke-DockerText @('logs', $container) "read $service logs"
 }
-$composeArguments += @('logs', '--no-color', 'api', 'dispatcher', 'worker')
-$logs = Invoke-DockerText $composeArguments 'read candidate service logs'
+$logs = $serviceLogs -join "`n"
 $logLeakCount = @($protectedValues | Where-Object { $logs.Contains($_) }).Count
 if ($logLeakCount -ne 0) {
     throw "privacy scan detected $logLeakCount protected value(s) in logs"
