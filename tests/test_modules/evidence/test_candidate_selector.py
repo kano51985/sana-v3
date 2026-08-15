@@ -232,6 +232,32 @@ def test_global_candidate_cap_round_robins_across_facts() -> None:
     assert {item.fact_id for item in selected} == set(fact_ids)
 
 
+def test_request_word_advice_does_not_filter_relevant_meta_page() -> None:
+    fact_id = uuid4()
+    fact = FactRequirement(
+        "current_meta_legend_advice",
+        FactType.TEAM_META,
+        "Current community recommendations for legend composition",
+        "Apex Legends",
+        freshness=Freshness.CURRENT,
+    )
+
+    selected = CandidateSelector(max_per_fact=1, max_total=1).select(
+        run_id=uuid4(),
+        entity="Apex Legends",
+        facts={fact_id: fact},
+        documents=(
+            document(
+                "https://apexranked.com/meta",
+                fact_id,
+                "Apex Legends Season 29 team comps and ranked meta picks",
+            ),
+        ),
+    )
+
+    assert len(selected) == 1
+
+
 def test_one_fetched_document_can_ground_multiple_planned_facts() -> None:
     first, second = uuid4(), uuid4()
     facts = {

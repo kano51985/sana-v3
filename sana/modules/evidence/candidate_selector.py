@@ -16,6 +16,7 @@ from sana.modules.search_planning.domain import FactRequirement, Freshness
 _TERM = re.compile(r"[\w\u3400-\u9fff]+", re.UNICODE)
 _GENERIC_ANCHORS = frozenset(
     {
+        "advice",
         "answer",
         "background",
         "code",
@@ -35,11 +36,13 @@ _GENERIC_ANCHORS = frozenset(
         "phrase",
         "private",
         "purpose",
+        "recommendation",
         "recent",
         "reason",
         "result",
         "source",
         "status",
+        "suggestion",
         "type",
     }
 )

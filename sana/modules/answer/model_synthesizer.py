@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
@@ -44,6 +45,7 @@ class ConstrainedSynthesisResult:
 
 class ProposedClaimParser:
     _FIELDS = frozenset({"claim_key", "text", "fact_id", "evidence_ids"})
+    _NUMERIC_IDENTIFIER = re.compile(r"\d+(?:[.-]\d+)*")
 
     def __init__(
         self,
@@ -56,6 +58,57 @@ class ProposedClaimParser:
             for item in evidence
             if item.verdict is EvidenceVerdict.ACCEPTED
         }
+        self._evidence_quote = {
+            item.id: item.candidate.quote
+            for item in evidence
+            if item.verdict is EvidenceVerdict.ACCEPTED
+        }
+
+    @classmethod
+    def _numeric_identifiers(cls, fact: FactRequirement) -> tuple[str, ...]:
+        values = cls._NUMERIC_IDENTIFIER.findall(
+            f"{fact.key} {fact.description} {fact.subject}"
+        )
+        return tuple(dict.fromkeys(values))
+
+    @staticmethod
+    def _contains_identifier(text: str, identifier: str) -> bool:
+        return bool(
+            re.search(
+                rf"(?<![A-Za-z0-9]){re.escape(identifier)}(?![A-Za-z0-9])",
+                text,
+                re.I,
+            )
+        )
+
+    def _self_contained_text(
+        self,
+        fact: FactRequirement,
+        claim_text: str,
+        evidence_ids: tuple[UUID, ...],
+    ) -> str:
+        missing = tuple(
+            identifier
+            for identifier in self._numeric_identifiers(fact)
+            if not self._contains_identifier(claim_text, identifier)
+        )
+        if not missing:
+            return claim_text
+        cited_quotes = tuple(self._evidence_quote[value] for value in evidence_ids)
+        if any(
+            not any(
+                self._contains_identifier(quote, identifier)
+                for quote in cited_quotes
+            )
+            for identifier in missing
+        ):
+            raise ValueError(
+                "claim omitted a numeric identifier not grounded by citations"
+            )
+        normalized = f"{', '.join(missing)}: {claim_text}"
+        if len(normalized) > 1_200:
+            raise ValueError("self-contained claim is too long")
+        return normalized
 
     def parse(self, text: str) -> tuple[ProposedClaim, ...]:
         payload = json.loads(text)
@@ -83,6 +136,11 @@ class ProposedClaimParser:
                 raise ValueError("factual claim must reference accepted evidence")
             if any(self._evidence_fact.get(value) != fact_id for value in evidence_ids):
                 raise ValueError("claim references unavailable or cross-fact evidence")
+            claim_text = self._self_contained_text(
+                self._facts[fact_id],
+                claim_text,
+                evidence_ids,
+            )
             parsed.append(
                 ProposedClaim(
                     claim_key,
@@ -149,6 +207,8 @@ class ConstrainedModelSynthesizer:
             ModelMessage(
                 MessageRole.SYSTEM,
                 "Write concise factual claims using only supplied accepted evidence. "
+                "Keep each claim self-contained by preserving requested numeric "
+                "identifiers when they also appear in its cited evidence. "
                 "Return one JSON object with a claims array. Every claim must contain "
                 "only claim_key, text, fact_id, and evidence_ids, using exact supplied "
                 "IDs. Never emit URLs, citation labels, support labels, or answer "

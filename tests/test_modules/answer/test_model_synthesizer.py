@@ -5,7 +5,10 @@ from uuid import uuid4
 
 import pytest
 
-from sana.modules.answer.model_synthesizer import ConstrainedModelSynthesizer
+from sana.modules.answer.model_synthesizer import (
+    ConstrainedModelSynthesizer,
+    ProposedClaimParser,
+)
 from sana.modules.evidence.coverage import CoverageEvaluator
 from sana.modules.evidence.domain import SourceAuthority
 from sana.modules.model_gateway.domain import ModelInvocationContext, ModelResult
@@ -25,6 +28,67 @@ class ParsingGateway:
 class ForbiddenGateway:
     async def generate(self, *args, **kwargs):
         raise AssertionError("No model call is allowed without accepted evidence")
+
+
+def test_claim_parser_restores_only_grounded_requested_numeric_identifier() -> None:
+    fact_id = uuid4()
+    evidence = grounded_evidence(
+        tenant_id=uuid4(),
+        run_id=uuid4(),
+        fact_id=fact_id,
+        source_identity="official.example",
+        authority=SourceAuthority.OFFICIAL,
+        seed="self-contained",
+    )
+    parser = ProposedClaimParser(
+        {
+            fact_id: FactRequirement(
+                "launch_2026",
+                FactType.CURRENT_VALUE,
+                "Launch year 2026",
+                "launch",
+            )
+        },
+        (evidence,),
+    )
+
+    claims = parser.parse(
+        '{"claims":[{'
+        '"claim_key":"launch","text":"Launches August 14",'
+        f'"fact_id":"{fact_id}","evidence_ids":["{evidence.id}"]}}]}}'
+    )
+
+    assert claims[0].text == "2026: Launches August 14"
+
+
+def test_claim_parser_rejects_ungrounded_missing_numeric_identifier() -> None:
+    fact_id = uuid4()
+    evidence = grounded_evidence(
+        tenant_id=uuid4(),
+        run_id=uuid4(),
+        fact_id=fact_id,
+        source_identity="official.example",
+        authority=SourceAuthority.OFFICIAL,
+        seed="ungrounded-identifier",
+    )
+    parser = ProposedClaimParser(
+        {
+            fact_id: FactRequirement(
+                "http_404",
+                FactType.CURRENT_VALUE,
+                "HTTP status 404 reason phrase",
+                "HTTP",
+            )
+        },
+        (evidence,),
+    )
+
+    with pytest.raises(ValueError, match="not grounded"):
+        parser.parse(
+            '{"claims":[{'
+            '"claim_key":"http","text":"Not Found",'
+            f'"fact_id":"{fact_id}","evidence_ids":["{evidence.id}"]}}]}}'
+        )
 
 
 @pytest.mark.asyncio

@@ -50,7 +50,7 @@ async def test_local_heuristic_planner_removes_conversation_filler_from_queries(
 
 @pytest.mark.asyncio
 async def test_local_heuristic_planner_preserves_enumerated_fact_floor() -> None:
-    planner = HeuristicIntentPlanner("search-v6")
+    planner = HeuristicIntentPlanner("search-v7")
 
     planning = await planner.plan(
         "\u8bf7\u7814\u7a76 Git \u5bf9\u8c61\u6a21\u578b\uff1a"
