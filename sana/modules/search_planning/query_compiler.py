@@ -114,6 +114,17 @@ class QueryCompiler:
             query = query[: self.policy.max_query_characters].rstrip()
         return query
 
+    @classmethod
+    def _safe_entity(cls, intent: NormalizedIntent, fact: FactRequirement) -> str:
+        """Choose a bounded semantic anchor without carrying unsafe memory text."""
+
+        candidates = (intent.entity, *intent.aliases, fact.subject)
+        for candidate in candidates:
+            normalized = " ".join(candidate.split()).strip()
+            if normalized and not cls._UNSAFE_SEMANTIC_FRAGMENT.search(normalized):
+                return normalized
+        return "public evidence"
+
     @staticmethod
     def signature(query: str, *, fact_key: str | None = None) -> str:
         normalized = unicodedata.normalize("NFKC", query).casefold()
@@ -170,22 +181,23 @@ class QueryCompiler:
         queries: list[QuerySpec] = []
         signatures = set(existing_signatures)
         for fact, variant_index, keywords in candidates:
+            entity = self._safe_entity(intent, fact)
             subject = fact.subject.strip()
             if self._UNSAFE_SEMANTIC_FRAGMENT.search(subject):
-                subject = intent.entity.strip()
+                subject = entity
             components = []
-            if subject.casefold() != intent.entity.casefold():
+            if subject.casefold() != entity.casefold():
                 components.append(subject)
             components.extend(
                 self._semantic_key_terms(
                     fact,
-                    entity=intent.entity,
+                    entity=entity,
                     subject=subject,
                     keyword_groups=keywords,
                 )
             )
             components.extend(keywords)
-            text = self._fit(intent.entity.strip(), components)
+            text = self._fit(entity, components)
             # QuerySpec has exactly one Fact binding. Text-identical queries for
             # different Facts must therefore remain distinct; otherwise the
             # later Fact silently loses discovery and evidence lineage.

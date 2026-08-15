@@ -63,6 +63,10 @@ from sana.modules.search_planning.domain import (
 )
 from sana.modules.search_planning.planner import SearchPlanner, minimum_fact_count
 from sana.modules.search_planning.query_compiler import QueryCompiler
+from sana.modules.search_planning.reviewed_templates import (
+    REVIEWED_TEMPLATE_VERSION,
+    reviewed_intent_template,
+)
 from sana.modules.search_planning.router import AutomaticModeRouter
 from sana.modules.shared.errors import ErrorCategory, TypedError
 from sana.platform.db.models.conversation import Message
@@ -78,6 +82,8 @@ class IntentPlanningResult:
     intent: NormalizedIntent
     llm_calls: int
     degraded: bool = False
+    strategy: str = "model"
+    strategy_version: str = "model-normalization-v1"
 
 
 class IntentPlanner(Protocol):
@@ -108,6 +114,14 @@ class ModelIntentPlanner:
         max_llm_calls: int,
         invocation_context: ModelInvocationContext | None = None,
     ) -> IntentPlanningResult:
+        reviewed = reviewed_intent_template(message)
+        if reviewed is not None:
+            return IntentPlanningResult(
+                reviewed,
+                0,
+                strategy="reviewed_template",
+                strategy_version=REVIEWED_TEMPLATE_VERSION,
+            )
         budget = ModelCallBudget(
             max_calls=max(1, min(2, max_llm_calls)),
             max_total_tokens=12_000,
@@ -132,6 +146,8 @@ class ModelIntentPlanner:
                 fallback.intent,
                 budget.used_calls,
                 degraded=True,
+                strategy=fallback.strategy,
+                strategy_version=fallback.strategy_version,
             )
 
 
@@ -215,6 +231,14 @@ class HeuristicIntentPlanner:
         invocation_context: ModelInvocationContext | None = None,
     ) -> IntentPlanningResult:
         del mode, deadline, max_llm_calls, invocation_context
+        reviewed = reviewed_intent_template(message)
+        if reviewed is not None:
+            return IntentPlanningResult(
+                reviewed,
+                0,
+                strategy="reviewed_template",
+                strategy_version=REVIEWED_TEMPLATE_VERSION,
+            )
         fact_types = tuple(self._router.infer_fact_types(message)) or (
             FactType.BACKGROUND,
         )
@@ -264,6 +288,8 @@ class HeuristicIntentPlanner:
         return IntentPlanningResult(
             NormalizedIntent(entity, (), locale, tuple(facts)),
             0,
+            strategy="heuristic",
+            strategy_version=self._policy_version,
         )
 
 
@@ -655,6 +681,10 @@ class SearchStepOperations:
                 "message": str(route["message"]),
                 "mode": run.mode.value,
                 "degraded": planning.degraded,
+                "planning": {
+                    "strategy": planning.strategy,
+                    "strategy_version": planning.strategy_version,
+                },
                 "intent": {
                     "entity": intent.entity,
                     "aliases": list(intent.aliases),

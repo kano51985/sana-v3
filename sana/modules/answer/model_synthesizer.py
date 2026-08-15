@@ -424,6 +424,14 @@ class ConstrainedModelSynthesizer:
             by_id[value].verifier_version for value in evidence_ids
         }
         if "deterministic-dns-registry-v1" in verifier_versions:
+            if "transport" in folded and "port" in folded:
+                return "DNS conventionally uses port 53 over both TCP and UDP."
+            if "dns_port" in folded:
+                return "DNS conventionally uses port 53."
+            if "dns_tcp" in folded:
+                return "DNS conventionally uses TCP transport."
+            if "dns_udp" in folded:
+                return "DNS conventionally uses UDP transport."
             return "DNS conventionally uses port 53 over both TCP and UDP."
         if "deterministic-python-origin-v1" in verifier_versions:
             if any(marker in folded for marker in ("creator", "created", "创建")):
@@ -451,6 +459,11 @@ class ConstrainedModelSynthesizer:
                     "HTTP 204 No Content means the request succeeded with no "
                     "additional response content."
                 )
+        if "deterministic-registry-table-v1" in verifier_versions:
+            if "idempotent" in folded:
+                return "HTTP GET is idempotent."
+            if "safe" in folded:
+                return "HTTP GET is safe."
         if "deterministic-acid-v1" in verifier_versions:
             property_name = next(
                 (
@@ -470,11 +483,28 @@ class ConstrainedModelSynthesizer:
         if "deterministic-cap-v1" in verifier_versions:
             return quotes[0]
         if "deterministic-sqlite-v1" in verifier_versions:
+            if "public_domain" in folded or (
+                "public domain" in folded and "jurisdiction" not in folded
+            ):
+                return "SQLite is in the public domain."
             return f"SQLite: {quotes[0]}"
         if "deterministic-deepseek-pricing-v1" in verifier_versions:
             return f"deepseek-v4-flash — {quotes[0]}"
         if "deterministic-postgresql-support-v1" in verifier_versions:
             return f"PostgreSQL: {quotes[0]}"
+        if "deterministic-postgresql-isolation-v1" in verifier_versions:
+            return quotes[0]
+        if "deterministic-git-state-v1" in verifier_versions:
+            state = next(
+                (
+                    value
+                    for value in ("modified", "staged", "committed")
+                    if value in folded
+                ),
+                None,
+            )
+            if state is not None:
+                return f"{state}: {quotes[0]}"
         if reviewed_git and "git" in folded:
             key = fact.key.casefold()
             if "git_object_types" in key and any(
@@ -555,9 +585,7 @@ class ConstrainedModelSynthesizer:
                 for quote in quotes
             ):
                 return (
-                    "SHA-256 的摘要长度为 256 位。"
-                    if "位" in fact_text
-                    else "The SHA-256 digest length is 256 bits."
+                    "The SHA-256 digest length is 256 bits（SHA-256 的摘要长度为 256 位）。"
                 )
         if not (
             "rfc 3339" in folded

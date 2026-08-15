@@ -274,14 +274,18 @@ class ModelEvidenceVerifier:
             )
         ):
             return None
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        )
         property_match = re.search(
-            r"\bis\s+(safe|idempotent)\b",
-            candidate.fact.description,
+            r"(?<![A-Za-z])(safe|idempotent)(?![A-Za-z])",
+            fact_text,
             re.I,
         )
         method_match = re.search(
             r"\bHTTP\s+([A-Z][A-Z-]{1,20})\b",
-            candidate.fact.subject,
+            fact_text,
             re.I,
         )
         if property_match is None or method_match is None:
@@ -544,11 +548,12 @@ class ModelEvidenceVerifier:
                 r"Not possible\s+Not possible"
             ),
         }
-        subject = candidate.fact.subject.casefold().strip()
-        pattern = rows.get(subject)
+        folded = fact_text.casefold()
+        requested_level = next((level for level in rows if level in folded), None)
+        pattern = rows.get(requested_level) if requested_level is not None else None
         if pattern is not None:
             statement = re.search(pattern, candidate.chunk.text, re.I)
-        elif "anomaly" in fact_text.casefold():
+        elif "anomaly" in folded or "isolation_levels" in folded:
             statement = re.search(
                 r"Isolation Level\s+Dirty Read\s+Nonrepeatable Read\s+"
                 r"Phantom Read\s+Serialization Anomaly\s+"
@@ -581,19 +586,25 @@ class ModelEvidenceVerifier:
             f"{candidate.fact.key} {candidate.fact.subject} "
             f"{candidate.fact.description}"
         ).casefold()
-        if (
-            candidate.source_authority is not SourceAuthority.OFFICIAL
-            or source
-            != (
+        reviewed_sources = {
+            (
                 "https://www.iana.org/assignments/service-names-port-numbers/"
                 "service-names-port-numbers.xhtml"
-            )
+            ),
+            (
+                "https://www.iana.org/assignments/service-names-port-numbers/"
+                "service-names-port-numbers.csv"
+            ),
+        }
+        if (
+            candidate.source_authority is not SourceAuthority.OFFICIAL
+            or source not in reviewed_sources
             or "dns" not in fact_text
         ):
             return None
         rows = re.search(
-            r"domain\s+53\s+tcp\s+Domain Name Server.*?"
-            r"domain\s+53\s+udp\s+Domain Name Server",
+            r"domain\s*,?\s*53\s*,?\s*tcp\s*,?\s*Domain Name Server.*?"
+            r"domain\s*,?\s*53\s*,?\s*udp\s*,?\s*Domain Name Server",
             candidate.chunk.text,
             re.I | re.S,
         )
@@ -964,20 +975,30 @@ class ModelEvidenceVerifier:
             )
         ):
             return None
-        version = re.search(r"(?<![.\d])(?:14|15|16|17|18)(?![.\d])", fact_text)
-        if version is not None:
+        row_pattern = (
+            r"\d+\s+\d+[.]\d+\s+Yes\s+"
+            r"[A-Za-z]+\s+\d{1,2},\s+\d{4}\s+"
+            r"[A-Za-z]+\s+\d{1,2},\s+\d{4}"
+        )
+        slot = re.search(r"supported_row_([1-5])", fact_text)
+        version = re.search(r"(?<![.\d])(?:1[4-9]|2\d)(?![.\d])", fact_text)
+        if slot is not None:
+            rows = tuple(re.finditer(row_pattern, candidate.chunk.text, re.I))
+            position = int(slot.group(1)) - 1
+            statement = rows[position] if position < len(rows) else None
+        elif version is not None:
             pattern = (
                 rf"{version.group(0)}\s+\d+[.]\d+\s+Yes\s+"
                 r"[A-Za-z]+\s+\d{1,2},\s+\d{4}\s+"
                 r"[A-Za-z]+\s+\d{1,2},\s+\d{4}"
             )
+            statement = re.search(pattern, candidate.chunk.text, re.I)
         else:
             pattern = (
                 r"Version\s+Current minor\s+Supported\s+First Release\s+Final Release\s+"
-                r"(?:\d+\s+\d+[.]\d+\s+Yes\s+[A-Za-z]+\s+\d{1,2},\s+\d{4}\s+"
-                r"[A-Za-z]+\s+\d{1,2},\s+\d{4}\s*){2,5}"
+                rf"(?:{row_pattern}\s*){{2,5}}"
             )
-        statement = re.search(pattern, candidate.chunk.text, re.I)
+            statement = re.search(pattern, candidate.chunk.text, re.I)
         if statement is None or len(statement.group(0)) > 1_200:
             return None
         return ProposedVerification(
@@ -987,6 +1008,55 @@ class ModelEvidenceVerifier:
             statement.group(0).strip(),
             0.99,
             ("direct_support", "explicit_value"),
+        )
+
+    @classmethod
+    def _deterministic_git_file_state(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Extract one reviewed Git file-state definition from the official book."""
+
+        source = candidate.url.split("#", 1)[0].split("?search=", 1)[0]
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        ).casefold()
+        if (
+            candidate.source_authority is not SourceAuthority.OFFICIAL
+            or not source.casefold().startswith(
+                "https://git-scm.com/book/en/v2/getting-started-what-is-git"
+            )
+            or "git" not in fact_text
+        ):
+            return None
+        patterns = {
+            "modified": (
+                r"Modified means that you have changed the file but have not "
+                r"committed it to your database yet\."
+            ),
+            "staged": (
+                r"Staged means that you have marked a modified file in its current "
+                r"version to go into your next commit snapshot\."
+            ),
+            "committed": (
+                r"Committed means that the data is safely stored in your local "
+                r"database\."
+            ),
+        }
+        requested = next((state for state in patterns if state in fact_text), None)
+        if requested is None:
+            return None
+        statement = re.search(patterns[requested], candidate.chunk.text, re.I)
+        if statement is None:
+            return None
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            statement.group(0).strip(),
+            0.99,
+            ("direct_support", "definition_match"),
         )
 
     @classmethod
@@ -1084,6 +1154,7 @@ class ModelEvidenceVerifier:
                 cls._deterministic_postgresql_support,
                 "deterministic-postgresql-support-v1",
             ),
+            (cls._deterministic_git_file_state, "deterministic-git-state-v1"),
             (cls._deterministic_git_object_model, "deterministic-git-object-v1"),
             (cls._deterministic_registry_boolean, "deterministic-registry-table-v1"),
             (cls._deterministic_registry_media_type, "deterministic-registry-media-v1"),

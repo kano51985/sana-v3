@@ -215,7 +215,7 @@ def test_current_campaign_semantics_resolve_to_reviewed_pages() -> None:
         "Apex Legends",
     )
 
-    assert policy.version == "direct-sources-v8"
+    assert policy.version == "direct-sources-v9"
     assert policy.urls_for_fact("DeepSeek V4 Flash", deepseek_price) == (
         "https://api-docs.deepseek.com/quick_start/pricing/",
     )

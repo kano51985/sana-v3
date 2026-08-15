@@ -338,7 +338,7 @@ def test_rfc3339_plus_zero_example_rejects_a_z_suffixed_timestamp() -> None:
             ),
             "The SHA-224 and SHA-256 algorithms produce 224-bit and 256-bit message digests",
             "https://www.rfc-editor.org/rfc/rfc6234.txt",
-            "The SHA-256 digest length is 256 bits.",
+            "The SHA-256 digest length is 256 bits（SHA-256 的摘要长度为 256 位）。",
         ),
     ],
 )

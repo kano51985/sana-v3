@@ -23,6 +23,7 @@ from sana.modules.search_planning.domain import (
     NormalizedIntent,
 )
 from sana.modules.search_planning.policy import SearchPlanningPolicy
+from sana.modules.search_planning.reviewed_templates import reviewed_intent_template
 from sana.modules.search_planning.router import AutomaticModeRouter
 
 
@@ -472,6 +473,9 @@ class SearchPlanner:
         model_budget: ModelCallBudget,
         invocation_context: ModelInvocationContext | None = None,
     ) -> NormalizedIntent:
+        reviewed = reviewed_intent_template(user_message)
+        if reviewed is not None:
+            return reviewed
         minimum_facts = minimum_fact_count(user_message, self._policy.version)
         maximum_facts = maximum_fact_count(user_message, self._policy.version)
         system = (

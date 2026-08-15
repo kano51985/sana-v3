@@ -759,6 +759,101 @@ async def test_reviewed_registry_table_skips_model_verification() -> None:
 
 
 @pytest.mark.asyncio
+async def test_registry_adapter_accepts_reviewed_fact_keys_not_just_description_grammar() -> None:
+    item = http_method_registry_candidate()
+    item = replace(
+        item,
+        fact=FactRequirement(
+            "http_get_idempotent",
+            FactType.BACKGROUND,
+            "HTTP method property required by the request",
+            "HTTP GET",
+        ),
+    )
+
+    result = await ModelEvidenceVerifier(ForbiddenGateway()).verify(
+        (item,),
+        invocation_context=context(item),
+        deadline=NOW + timedelta(seconds=5),
+        verified_at=NOW,
+    )
+
+    assert result.degraded is False
+    assert result.evidence[0].verifier_version == "deterministic-registry-table-v1"
+
+
+@pytest.mark.asyncio
+async def test_dns_csv_rows_are_a_reviewed_deterministic_source() -> None:
+    text = (
+        "domain,53,tcp,Domain Name Server,,,,,,,,\n"
+        "domain,53,udp,Domain Name Server,,,,,,,,"
+    )
+    fact = FactRequirement(
+        "dns_port",
+        FactType.BACKGROUND,
+        "DNS conventional port number",
+        "DNS port",
+    )
+    item = reviewed_text_candidate(
+        text,
+        fact,
+        (
+            "https://www.iana.org/assignments/service-names-port-numbers/"
+            "service-names-port-numbers.csv"
+        ),
+    )
+    item = replace(
+        item,
+        source_identity="iana.org",
+        source_authority=SourceAuthority.OFFICIAL,
+    )
+
+    result = await ModelEvidenceVerifier(ForbiddenGateway()).verify(
+        (item,),
+        invocation_context=context(item),
+        deadline=NOW + timedelta(seconds=5),
+        verified_at=NOW,
+    )
+
+    assert result.degraded is False
+    assert result.evidence[0].verifier_version == "deterministic-dns-registry-v1"
+
+
+@pytest.mark.asyncio
+async def test_git_file_state_uses_reviewed_official_definition() -> None:
+    text = (
+        "Modified means that you have changed the file but have not committed "
+        "it to your database yet."
+    )
+    fact = FactRequirement(
+        "git_state_modified",
+        FactType.BACKGROUND,
+        "Git modified state and its relationship to the working tree",
+        "Git modified working tree",
+    )
+    item = reviewed_text_candidate(
+        text,
+        fact,
+        "https://git-scm.com/book/en/v2/Getting-Started-What-is-Git%3F",
+    )
+    item = replace(
+        item,
+        source_identity="git-scm.com",
+        source_authority=SourceAuthority.OFFICIAL,
+    )
+
+    result = await ModelEvidenceVerifier(ForbiddenGateway()).verify(
+        (item,),
+        invocation_context=context(item),
+        deadline=NOW + timedelta(seconds=5),
+        verified_at=NOW,
+    )
+
+    assert result.degraded is False
+    assert result.evidence[0].verifier_version == "deterministic-git-state-v1"
+
+
+@pytest.mark.asyncio
 async def test_reviewed_media_registry_row_skips_model_verification() -> None:
     item = media_type_registry_candidate()
 

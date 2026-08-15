@@ -42,6 +42,7 @@ async def test_local_heuristic_planner_removes_conversation_filler_from_queries(
     assert planning.intent.entity == "Apex Legends"
     assert planning.llm_calls == 0
     assert planning.degraded is False
+    assert planning.strategy == "heuristic"
     assert queries
     assert all("sana" not in query.text.casefold() for query in queries)
     assert all("我好久" not in query.text for query in queries)
@@ -49,7 +50,7 @@ async def test_local_heuristic_planner_removes_conversation_filler_from_queries(
 
 
 @pytest.mark.asyncio
-async def test_local_heuristic_planner_preserves_enumerated_fact_floor() -> None:
+async def test_local_planner_preserves_all_reviewed_git_object_relationships() -> None:
     planner = HeuristicIntentPlanner("search-v12")
 
     planning = await planner.plan(
@@ -62,8 +63,10 @@ async def test_local_heuristic_planner_preserves_enumerated_fact_floor() -> None
     )
     queries = QueryCompiler().compile(planning.intent, SearchMode.RESEARCH)
 
-    assert len(planning.intent.facts) == 4
-    assert len({query.fact_key for query in queries}) == 4
+    assert len(planning.intent.facts) == 5
+    assert len({query.fact_key for query in queries}) == 5
+    assert planning.strategy == "reviewed_template"
+    assert planning.strategy_version == "reviewed-intents-v1"
 
 
 @pytest.mark.asyncio
@@ -78,6 +81,7 @@ async def test_model_planner_failure_uses_explicit_degraded_local_plan() -> None
     assert planning.degraded is True
     assert planning.intent.entity == "Python"
     assert planning.intent.facts
+    assert planning.strategy == "heuristic"
 
 
 @pytest.mark.asyncio

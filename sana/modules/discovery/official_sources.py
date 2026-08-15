@@ -29,7 +29,7 @@ class DirectSourceRule:
 class DirectSourcePolicy:
     """Reviewed direct URLs; authority remains owned by SourceAuthorityPolicy."""
 
-    version: str = "direct-sources-v8"
+    version: str = "direct-sources-v9"
     sources: Mapping[str, Mapping[str, tuple[str, ...]]] = field(
         default_factory=lambda: {
             "python": {
@@ -207,6 +207,12 @@ class DirectSourcePolicy:
                 FactType.BACKGROUND.value: (
                     "https://www.sqlite.org/copyright.html",
                 ),
+                FactType.CURRENT_VALUE.value: (
+                    "https://www.sqlite.org/copyright.html",
+                ),
+                FactType.COMPARISON.value: (
+                    "https://www.sqlite.org/copyright.html",
+                ),
             },
             "cap theorem": {
                 FactType.BACKGROUND.value: (
@@ -240,14 +246,14 @@ class DirectSourcePolicy:
         default_factory=lambda: {
             "python": (
                 DirectSourceRule(
-                    frozenset({FactType.BACKGROUND}),
+                    frozenset({FactType.BACKGROUND, FactType.CURRENT_VALUE}),
                     ("creator", "创建者"),
                     (
                         "https://www.python.org/download/releases/2.1/license/",
                     ),
                 ),
                 DirectSourceRule(
-                    frozenset({FactType.BACKGROUND}),
+                    frozenset({FactType.BACKGROUND, FactType.CURRENT_VALUE}),
                     ("first_release", "首次公开", "release_year"),
                     (
                         "https://docs.python.org/3/"
@@ -275,7 +281,17 @@ class DirectSourcePolicy:
                 ),
                 DirectSourceRule(
                     frozenset({FactType.BACKGROUND}),
-                    ("file_states", "staging_area", "working_tree", "directory_relation"),
+                    (
+                        "file_states",
+                        "git_state_",
+                        "staging_area",
+                        "working_tree",
+                        "directory_relation",
+                        "modified state",
+                        "staged state",
+                        "committed state",
+                        "git directory",
+                    ),
                     (
                         "https://git-scm.com/book/en/v2/"
                         "Getting-Started-What-is-Git%3F",
@@ -311,8 +327,13 @@ class DirectSourcePolicy:
                     frozenset({FactType.BACKGROUND, FactType.CURRENT_VALUE}),
                     (
                         "dns_default_port",
+                        "dns_port",
+                        "dns_tcp",
+                        "dns_udp",
                         "dns_transport_protocols",
                         "port number",
+                        "tcp transport",
+                        "udp transport",
                         "transport protocols",
                     ),
                     (
@@ -370,6 +391,26 @@ class DirectSourcePolicy:
                         "https://www.postgresql.org/docs/current/"
                         "transaction-iso.html",
                     ),
+                ),
+            ),
+            "sqlite": (
+                DirectSourceRule(
+                    frozenset(
+                        {
+                            FactType.BACKGROUND,
+                            FactType.CURRENT_VALUE,
+                            FactType.COMPARISON,
+                        }
+                    ),
+                    (
+                        "public_domain",
+                        "public domain",
+                        "jurisdiction",
+                        "warranty",
+                        "license",
+                        "licensing",
+                    ),
+                    ("https://www.sqlite.org/copyright.html",),
                 ),
             ),
             "deepseek": (

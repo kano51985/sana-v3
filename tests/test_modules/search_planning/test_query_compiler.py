@@ -199,3 +199,25 @@ def test_private_memory_instructions_cannot_reach_provider_query_text() -> None:
     assert "apex legends" in folded
     assert "mmr" in folded
     assert all(term not in folded for term in ("sana", "memory", "user"))
+
+
+def test_unsafe_entity_is_replaced_even_without_a_safe_alias() -> None:
+    intent = NormalizedIntent(
+        entity="Sana's memory",
+        aliases=(),
+        locale="en",
+        facts=(
+            FactRequirement(
+                key="apex_mmr_public_disclosure",
+                fact_type=FactType.BACKGROUND,
+                description="Whether an Apex Legends MMR is publicly disclosed",
+                subject="Sana's private memory",
+            ),
+        ),
+    )
+
+    queries = QueryCompiler().compile(intent, SearchMode.FAST)
+
+    assert queries
+    assert all("sana's memory" not in query.text.casefold() for query in queries)
+    assert all("private memory" not in query.text.casefold() for query in queries)

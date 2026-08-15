@@ -38,6 +38,11 @@ class ParsingGateway:
         return ModelResult(text=text, model="fake", parsed=parser.parse(text))
 
 
+class ForbiddenGateway:
+    async def generate(self, *args, **kwargs):
+        raise AssertionError("reviewed intent templates must bypass model planning")
+
+
 @pytest.mark.asyncio
 async def test_planner_makes_one_primary_call_and_returns_semantic_facts() -> None:
     gateway = ParsingGateway(
@@ -75,6 +80,23 @@ async def test_planner_makes_one_primary_call_and_returns_semantic_facts() -> No
     assert "never turn the instruction to report an evidence gap" in gateway.calls[0][1][0].content
     assert "ordinary standards and software facts" in gateway.calls[0][1][0].content
     assert "required=true" in gateway.calls[0][1][0].content
+
+
+@pytest.mark.asyncio
+async def test_reviewed_standards_request_skips_model_planning() -> None:
+    budget = ModelCallBudget(2, 1000)
+
+    intent = await SearchPlanner(ForbiddenGateway()).plan(
+        "Under HTTP semantics, is GET both safe and idempotent?",
+        deadline=NOW + timedelta(seconds=2),
+        model_budget=budget,
+    )
+
+    assert [fact.key for fact in intent.facts] == [
+        "http_get_safe",
+        "http_get_idempotent",
+    ]
+    assert budget.used_calls == 0
 
 
 def test_intent_parser_normalizes_enum_casing_but_keeps_schema_strict() -> None:
