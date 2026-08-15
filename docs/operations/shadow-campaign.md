@@ -42,6 +42,12 @@
 
 成功后 attestation 位于 `var/shadow-eval/attestation.json`。它只包含可公开复验的身份与计数。
 
+## 费率版本
+
+`deepseek-v4-flash-usd-2026-08-15-v1` 冻结采用 DeepSeek 官方定价页在 2026-08-15 列出的缓存未命中输入价 0.14 美元/百万 token 与输出价 0.28 美元/百万 token；未知出站按每个 run 0.001 美元记 possibly-billed reserve。来源：<https://api-docs.deepseek.com/quick_start/pricing>。
+
+官方价格发生变化时必须新增 cost-rate 版本、重算全部 hash 并重跑 smoke；不得原地修改 v1 或让同一 smoke/full Campaign 使用不同费率身份。
+
 ## 七个 Runner 命令
 
 创建 6-run smoke：
