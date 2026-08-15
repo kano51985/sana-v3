@@ -19,7 +19,7 @@ def test_canonical_product_prefix_uses_configured_vendor_sources() -> None:
     policy = DirectSourcePolicy()
 
     assert policy.urls_for("DeepSeek V4 Flash", FactType.BACKGROUND) == (
-        "https://api-docs.deepseek.com/",
+        "https://api-docs.deepseek.com/quick_start/pricing/",
     )
 
 
@@ -149,7 +149,8 @@ def test_fact_semantics_select_reviewed_primary_pages() -> None:
         "https://www.iana.org/assignments/http-methods/http-methods.xhtml",
     )
     assert policy.urls_for_fact("DNS", dns_transport) == (
-        "https://www.rfc-editor.org/rfc/rfc1035.html",
+        "https://www.iana.org/assignments/service-names-port-numbers/"
+        "service-names-port-numbers.xhtml?search=53",
     )
     assert policy.urls_for_fact("DNS", dns_registry) == (
         "https://www.iana.org/assignments/service-names-port-numbers/"
@@ -190,4 +191,39 @@ def test_full_campaign_standards_have_reviewed_direct_sources() -> None:
     assert policy.urls_for("database ACID", FactType.BACKGROUND)
     assert policy.urls_for("数据库 ACID 性质", FactType.BACKGROUND) == (
         "https://www.ibm.com/think/topics/transaction-management",
+    )
+
+
+def test_current_campaign_semantics_resolve_to_reviewed_pages() -> None:
+    policy = DirectSourcePolicy()
+    deepseek_price = FactRequirement(
+        "output_price",
+        FactType.CURRENT_VALUE,
+        "deepseek-v4-flash output price",
+        "deepseek-v4-flash",
+    )
+    isolation = FactRequirement(
+        "read_committed",
+        FactType.CURRENT_VALUE,
+        "Read Committed anomaly guarantees",
+        "SQL transaction isolation",
+    )
+    apex_community = FactRequirement(
+        "community_team_composition",
+        FactType.TEAM_META,
+        "community team composition perspective",
+        "Apex Legends",
+    )
+
+    assert policy.version == "direct-sources-v8"
+    assert policy.urls_for_fact("DeepSeek V4 Flash", deepseek_price) == (
+        "https://api-docs.deepseek.com/quick_start/pricing/",
+    )
+    assert policy.urls_for_fact("SQL transaction isolation", isolation) == (
+        "https://www.postgresql.org/docs/current/transaction-iso.html",
+    )
+    assert policy.urls_for_fact("Apex Legends", apex_community) == (
+        "https://apexranked.com/meta",
+        "https://games.gg/apex-legends/guides/"
+        "apex-legends-season-29-tier-list/",
     )

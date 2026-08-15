@@ -673,3 +673,68 @@ async def test_empty_model_claims_with_accepted_evidence_fall_back_to_citation()
     assert result.degraded is True
     assert len(result.answer.claims) == 1
     assert len(result.answer.citations) == 1
+
+
+@pytest.mark.asyncio
+async def test_all_deterministic_evidence_skips_synthesis_model_call() -> None:
+    fact_id = uuid4()
+    evidence = grounded_evidence(
+        tenant_id=uuid4(),
+        run_id=uuid4(),
+        fact_id=fact_id,
+        source_identity="iana.org",
+        authority=SourceAuthority.OFFICIAL,
+        seed="dns-registry",
+    )
+    quote = (
+        "domain 53 tcp Domain Name Server domain 53 udp Domain Name Server"
+    )
+    evidence = replace(
+        evidence,
+        verifier_version="deterministic-dns-registry-v1",
+        candidate=replace(
+            evidence.candidate,
+            quote=quote,
+            quote_hash=hashlib.sha256(quote.encode()).hexdigest(),
+            start_offset=0,
+            end_offset=len(quote),
+        ),
+    )
+    fact = FactRequirement(
+        "dns_port_transports",
+        FactType.BACKGROUND,
+        "DNS port and both transport protocols",
+        "DNS",
+    )
+    coverage = CoverageEvaluator().evaluate(
+        evidence.tenant_id,
+        evidence.run_id,
+        fact_id,
+        fact,
+        (evidence,),
+    )
+    invocation = ModelInvocationContext(
+        evidence.tenant_id,
+        evidence.run_id,
+        uuid4(),
+        "synthesize",
+        uuid4(),
+        1,
+        TraceContext.create(),
+        ("verify:sha256",),
+    )
+
+    result = await ConstrainedModelSynthesizer(ForbiddenGateway()).synthesize(
+        tenant_id=evidence.tenant_id,
+        run_id=evidence.run_id,
+        facts={fact_id: fact},
+        coverage={fact_id: coverage},
+        evidence=(evidence,),
+        invocation_context=invocation,
+        deadline=NOW + timedelta(seconds=5),
+    )
+
+    assert result.degraded is False
+    assert len(result.answer.claims) == 1
+    claim = result.answer.claims[0]
+    assert all(term in claim.text for term in ("53", "TCP", "UDP"))

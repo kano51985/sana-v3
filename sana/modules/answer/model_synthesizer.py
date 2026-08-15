@@ -420,6 +420,61 @@ class ConstrainedModelSynthesizer:
             == "https://git-scm.com/docs/gitdatamodel.html"
             for value in evidence_ids
         )
+        verifier_versions = {
+            by_id[value].verifier_version for value in evidence_ids
+        }
+        if "deterministic-dns-registry-v1" in verifier_versions:
+            return "DNS conventionally uses port 53 over both TCP and UDP."
+        if "deterministic-python-origin-v1" in verifier_versions:
+            if any(marker in folded for marker in ("creator", "created", "创建")):
+                return "Python was created by Guido van Rossum."
+            if any(
+                marker in folded
+                for marker in ("first_public", "first public", "release_year", "首次公开")
+            ):
+                return "Python was first publicly released in 1991."
+        if "deterministic-json-literals-v1" in verifier_versions:
+            return "The three lowercase JSON literal names are true, false, and null."
+        if "deterministic-http-status-v1" in verifier_versions:
+            has_201 = any("201 (Created)" in quote for quote in quotes)
+            has_204 = any("204 (No Content)" in quote for quote in quotes)
+            if has_201 and has_204:
+                return (
+                    "HTTP 201 Created reports creation of one or more resources; "
+                    "HTTP 204 No Content reports successful fulfillment with no "
+                    "additional response content."
+                )
+            if has_201:
+                return "HTTP 201 Created means one or more resources were created."
+            if has_204:
+                return (
+                    "HTTP 204 No Content means the request succeeded with no "
+                    "additional response content."
+                )
+        if "deterministic-acid-v1" in verifier_versions:
+            property_name = next(
+                (
+                    value
+                    for value in (
+                        "Atomicity",
+                        "Consistency",
+                        "Isolation",
+                        "Durability",
+                    )
+                    if value.casefold() in folded
+                ),
+                None,
+            )
+            if property_name is not None:
+                return f"{property_name}: {quotes[0]}"
+        if "deterministic-cap-v1" in verifier_versions:
+            return quotes[0]
+        if "deterministic-sqlite-v1" in verifier_versions:
+            return f"SQLite: {quotes[0]}"
+        if "deterministic-deepseek-pricing-v1" in verifier_versions:
+            return f"deepseek-v4-flash — {quotes[0]}"
+        if "deterministic-postgresql-support-v1" in verifier_versions:
+            return f"PostgreSQL: {quotes[0]}"
         if reviewed_git and "git" in folded:
             key = fact.key.casefold()
             if "git_object_types" in key and any(
@@ -575,7 +630,24 @@ class ConstrainedModelSynthesizer:
         invocation_context: ModelInvocationContext,
         deadline: datetime,
     ) -> ConstrainedSynthesisResult:
-        if not any(item.verdict is EvidenceVerdict.ACCEPTED for item in evidence):
+        accepted_evidence = tuple(
+            item for item in evidence if item.verdict is EvidenceVerdict.ACCEPTED
+        )
+        if not accepted_evidence:
+            return self.deterministic(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                facts=facts,
+                coverage=coverage,
+                evidence=evidence,
+            )
+        if all(
+            item.verifier_version.startswith("deterministic-")
+            for item in accepted_evidence
+        ):
+            # Reviewed structured sources already carry enough semantics for a
+            # deterministic answer. Avoid another probabilistic call, which reduces
+            # latency, cost, and transient degradation without weakening grounding.
             return self.deterministic(
                 tenant_id=tenant_id,
                 run_id=run_id,

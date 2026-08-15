@@ -111,6 +111,52 @@ def test_fast_selection_keeps_two_reviewed_official_failovers() -> None:
     }
 
 
+def test_fast_selection_prefers_reviewed_direct_page_over_search_homepage() -> None:
+    homepage = _hit("https://nodejs.org/", score=1.0, rank=1)
+    homepage["provider"] = "bing_rss"
+    reviewed = _hit(
+        "https://nodejs.org/en/about/previous-releases",
+        score=1.0,
+        rank=1,
+    )
+    reviewed["provider"] = "direct"
+
+    selected = _select_ranked_hits(
+        (homepage, reviewed),
+        authority_policy=SourceAuthorityPolicy(),
+        entity="Node.js",
+        mode=SearchMode.FAST,
+        max_selected_hits=4,
+    )
+
+    assert selected[0]["canonical_url"] == reviewed["canonical_url"]
+
+
+def test_fast_selection_keeps_two_reviewed_pages_on_one_official_domain() -> None:
+    creator = _hit(
+        "https://www.python.org/download/releases/2.1/license/",
+        score=1.0,
+        rank=1,
+    )
+    creator["provider"] = "direct"
+    history = _hit(
+        "https://docs.python.org/3/license.html#history-of-the-software",
+        score=1.0,
+        rank=1,
+    )
+    history["provider"] = "direct"
+
+    selected = _select_ranked_hits(
+        (creator, history),
+        authority_policy=SourceAuthorityPolicy(),
+        entity="Python",
+        mode=SearchMode.FAST,
+        max_selected_hits=4,
+    )
+
+    assert len(selected) == 2
+
+
 def test_research_selection_covers_facts_before_redundant_publishers() -> None:
     version, changes, patch, team = (str(uuid4()) for _ in range(4))
     candidates = []

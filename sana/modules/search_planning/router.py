@@ -35,12 +35,24 @@ class AutomaticModeRouter:
         re.I,
     )
     _ENUMERATED_MULTI_FACT = re.compile(
-        r"(列出.{0,24}(?:三|四|五|六|七|八|九|[3-9])(?:种|个|项)?.{0,32}(?:分别|逐一)|"
-        r"(?:三|四|五|六|七|八|九|[3-9])(?:种|个|项|类|条)"
+        r"(列出.{0,24}(?:三|四|五|六|七|八|九|(?<![.\d])[3-9](?![.\d]))(?:种|个|项)?.{0,32}(?:分别|逐一)|"
+        r"(?:三|四|五|六|七|八|九|(?<![.\d])[3-9](?![.\d]))(?:种|个|项|类|条)"
         r"(?:性质|状态|类型|术语|协议)|"
-        r"(?:three|four|five|six|seven|eight|nine|[3-9]).{0,48}"
+        r"(?:three|four|five|six|seven|eight|nine|(?<![.\d])[3-9](?![.\d])).{0,48}"
         r"(?:properties|states?|protocols?|levels?)|"
-        r"(?:three|four|five|six|seven|eight|nine|[3-9]).{0,32}(?:types?|items?|facts?).{0,32}(?:each|explain))",
+        r"(?:three|four|five|six|seven|eight|nine|(?<![.\d])[3-9](?![.\d])).{0,32}(?:types?|items?|facts?).{0,32}(?:each|explain))",
+        re.I,
+    )
+    _CROSS_CONTEXT_UNIVERSAL = re.compile(
+        r"(?:universally|universal|every|all|所有|全部).{0,160}"
+        r"(?:rank|map|region|skill|段位|地图|地区|水平)",
+        re.I,
+    )
+    _PRIVATE_MULTI_ATTRIBUTE = re.compile(
+        r"(?:private|memory|私人记忆|私有|隐藏分).{0,160}"
+        r"(?:teammates?|hidden\s+(?:rating|mmr)|exact\s+time|队友|隐藏分|精确时间)"
+        r".{0,100}(?:,|、|\band\b|和).{0,100}"
+        r"(?:teammates?|hidden\s+(?:rating|mmr)|exact\s+time|队友|隐藏分|精确时间)",
         re.I,
     )
     _EXPLICIT_RESEARCH = re.compile(r"(?:研究|调研|\bresearch\b)", re.I)
@@ -75,6 +87,10 @@ class AutomaticModeRouter:
             reasons.append("enumerated_multi_fact")
         if self._EXPLICIT_RESEARCH.search(message):
             reasons.append("explicit_research_request")
+        if self._CROSS_CONTEXT_UNIVERSAL.search(message):
+            reasons.append("cross_context_universal_claim")
+        if self._PRIVATE_MULTI_ATTRIBUTE.search(message):
+            reasons.append("private_multi_attribute_request")
 
         if reasons:
             return RoutingDecision(

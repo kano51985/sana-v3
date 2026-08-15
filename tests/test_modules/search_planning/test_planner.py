@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -13,12 +14,16 @@ from sana.modules.search_planning.domain import (
 from sana.modules.search_planning.planner import (
     IntentParser,
     SearchPlanner,
+    maximum_fact_count,
     minimum_fact_count,
 )
 from sana.modules.search_planning.policy import SearchPlanningPolicy
 
 
 NOW = datetime(2026, 8, 14, tzinfo=timezone.utc)
+SHADOW_MANIFEST = (
+    Path(__file__).parents[3] / "evals" / "shadow" / "cases-v1.jsonl"
+)
 
 
 class ParsingGateway:
@@ -192,6 +197,148 @@ def test_minimum_fact_count_handles_structured_multi_part_requests(
     expected: int,
 ) -> None:
     assert minimum_fact_count(message, "search-v12") == expected
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        (
+            "Explain the three properties in the CAP theorem and the tradeoff "
+            "asserted during a network partition.",
+            4,
+        ),
+        (
+            "Research the current Apex Legends release and the latest official "
+            "balance changes for Bloodhound. Separate confirmed patch facts from "
+            "community interpretation and cite both source classes.",
+            4,
+        ),
+        (
+            "Sana, research the current ranked rules, map rotation, and two "
+            "evidence-backed team-composition perspectives.",
+            4,
+        ),
+        (
+            "Prove one universally best Apex Legends team composition for every "
+            "rank, map, region, and player skill level.",
+            3,
+        ),
+    ],
+)
+def test_shadow_campaign_prompts_keep_their_semantic_fact_floor(
+    message: str,
+    expected: int,
+) -> None:
+    assert minimum_fact_count(message, "search-v12") == expected
+
+
+def test_scalar_request_caps_model_planning_at_one_fact() -> None:
+    message = (
+        "DeepSeek 官方当前列出的 deepseek-v4-flash 每百万输出 token 的美元价格"
+        "是多少？只回答该价格并引用官方定价页。"
+    )
+
+    assert minimum_fact_count(message, "search-v12") == 1
+    assert maximum_fact_count(message, "search-v12") == 1
+
+
+def test_intent_parser_bounds_long_subject_without_dropping_valid_facts() -> None:
+    parser = IntentParser(SearchPlanningPolicy(), minimum_facts=4)
+    payload = {
+        "entity": "Apex Legends",
+        "facts": [
+            {
+                "key": "map_rotation",
+                "fact_type": "current_value",
+                "description": "current official map rotation",
+                "subject": "Apex Legends",
+            },
+            {
+                "key": "ranked_rules",
+                "fact_type": "current_value",
+                "description": "current ranked rules",
+                "subject": "Apex Legends",
+            },
+            {
+                "key": "team_perspective_one",
+                "fact_type": "team_meta",
+                "description": "first evidence-backed team perspective",
+                "subject": (
+                    "Apex Legends team composition perspective backed by one "
+                    "current analysis source"
+                ),
+            },
+            {
+                "key": "team_perspective_two",
+                "fact_type": "team_meta",
+                "description": "second evidence-backed team perspective",
+                "subject": "Apex Legends",
+            },
+        ],
+    }
+
+    intent = parser.parse(json.dumps(payload))
+
+    assert len(intent.facts) == 4
+    assert intent.facts[2].subject == "Apex Legends"
+
+
+def test_intent_parser_removes_citation_only_fact_but_keeps_cap_semantics() -> None:
+    parser = IntentParser(SearchPlanningPolicy(), minimum_facts=4)
+    payload = {
+        "entity": "CAP theorem",
+        "facts": [
+            {
+                "key": name.casefold().replace(" ", "_"),
+                "fact_type": "background",
+                "description": f"Explain {name}",
+                "subject": "CAP theorem",
+            }
+            for name in (
+                "Consistency",
+                "Availability",
+                "Partition tolerance",
+                "Partition tradeoff",
+            )
+        ] + [
+            {
+                "key": "cap_original_literature",
+                "fact_type": "background",
+                "description": "Identify and cite the original authoritative literature",
+                "subject": "CAP theorem",
+            }
+        ],
+    }
+
+    intent = parser.parse(json.dumps(payload))
+
+    assert len(intent.facts) == 4
+    assert {fact.key for fact in intent.facts} == {
+        "consistency",
+        "availability",
+        "partition_tolerance",
+        "partition_tradeoff",
+    }
+
+
+def test_planner_floor_covers_every_versioned_shadow_case() -> None:
+    cases = [
+        json.loads(line)
+        for line in SHADOW_MANIFEST.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    mismatches = {
+        case["id"]: (
+            minimum_fact_count(case["prompt"], "search-v12"),
+            case["minimum_required_facts"],
+        )
+        for case in cases
+        if minimum_fact_count(case["prompt"], "search-v12")
+        < case["minimum_required_facts"]
+    }
+
+    assert mismatches == {}
 
 
 def test_intent_parser_rejects_semantically_incomplete_fact_list() -> None:

@@ -72,12 +72,110 @@ _OPEN_SUPPORTED_VERSION_SET = re.compile(
     r"(?:停止支持|end[- ]of[- ]support|eol|final release)",
     re.I,
 )
+_EXPLICIT_SOURCE_COUNT = re.compile(
+    r"(?P<zh>[\u4e8c\u4e24\u4e09\u56db\u4e94\u516d\u4e03\u516b2-8])(?:\u4e2a|\u6761|\u4efd)?"
+    r"(?:\u53ef\u9760|\u72ec\u7acb|\u6743\u5a01)?(?:\u7684)?(?:\u6765\u6e90|\u5206\u6790\u6765\u6e90)|"
+    r"(?P<en>two|three|four|five|six|seven|eight|[2-8])\s+"
+    r"(?:reliable\s+|independent\s+|authoritative\s+)?sources?",
+    re.I,
+)
+_SOURCE_PERSPECTIVE_SPLIT = re.compile(
+    r"(?:separate|distinguish|\u533a\u5206).{0,80}"
+    r"(?:official|confirmed|\u5b98\u65b9|\u786e\u8ba4).{0,80}"
+    r"(?:community|independent|\u793e\u533a|\u72ec\u7acb)|"
+    r"(?:official|confirmed|\u5b98\u65b9|\u786e\u8ba4).{0,80}"
+    r"(?:community|independent|\u793e\u533a|\u72ec\u7acb).{0,80}"
+    r"(?:separate|distinguish|\u533a\u5206)",
+    re.I,
+)
+_MULTI_CONTEXT_UNIVERSAL = re.compile(
+    r"(?:universally|universal|every|all|\u6240\u6709|\u5168\u90e8).{0,120}"
+    r"(?:rank|map|region|skill|\u6bb5\u4f4d|\u5730\u56fe|\u5730\u533a|\u6c34\u5e73)",
+    re.I,
+)
+_ENUMERATION_PLUS_RELATION = re.compile(
+    r"(?:three|four|five|six|seven|eight|[3-8]).{0,48}"
+    r"(?:properties|states?|types?|levels?).{0,48}"
+    r"(?:and|plus).{0,48}(?:tradeoff|relationship|constraint)|"
+    r"(?:\u4e09|\u56db|\u4e94|\u516d|\u4e03|\u516b|[3-8])(?:\u79cd|\u4e2a|\u9879|\u7c7b|\u6761)"
+    r".{0,48}(?:\u6027\u8d28|\u72b6\u6001|\u7c7b\u578b|\u5c42\u7ea7).{0,48}(?:\u4ee5\u53ca|\u548c|\u5e76).{0,48}"
+    r"(?:\u53d6\u820d|\u5173\u7cfb|\u7ea6\u675f)",
+    re.I,
+)
+_MAP_RANK_WITH_ANALYSIS_SOURCES = re.compile(
+    r"(?=.*(?:map\s+rotation|\u5730\u56fe\u8f6e\u6362))"
+    r"(?=.*(?:ranked\s+rules?|\u6392\u540d\u89c4\u5219|\u6392\u4f4d\u89c4\u5219))"
+    r"(?=.*(?:(?:two|2|\u4e8c|\u4e24).{0,32}(?:analysis\s+sources?|"
+    r"evidence-backed\s+team-composition\s+perspectives?|\u5206\u6790\u6765\u6e90)))",
+    re.I | re.S,
+)
+_SCALAR_ONLY = re.compile(
+    r"(?:\u53ea(?:\u56de\u7b54|\u6838\u5bf9|\u544a\u8bc9)|\u4ec5(?:\u56de\u7b54|\u6838\u5bf9)|"
+    r"only\s+(?:return|answer|report|check)|return\s+one|give\s+(?:only\s+)?(?:one|a\s+single))",
+    re.I,
+)
+_ORIGIN_PAIR = re.compile(
+    r"(?:\u7531\u8c01\u521b\u5efa|who\s+created).{0,100}"
+    r"(?:\u9996\u6b21\u516c\u5f00|first\s+public\s+release|\u54ea\u4e00\u5e74|what\s+year)|"
+    r"(?:\u9996\u6b21\u516c\u5f00|first\s+public\s+release).{0,100}"
+    r"(?:\u7531\u8c01\u521b\u5efa|who\s+created)",
+    re.I,
+)
+_HTTP_TWO_STATUS_DIMENSIONS = re.compile(
+    r"(?:compare|\u6bd4\u8f83).{0,80}(?<!\d)\d{3}(?!\d).{0,40}(?<!\d)\d{3}(?!\d)"
+    r".{0,100}(?:semantics?|meaning|\u8bed\u4e49).{0,80}"
+    r"(?:content|response|\u54cd\u5e94\u5185\u5bb9).{0,40}(?:constraint|\u7ea6\u675f)",
+    re.I,
+)
+_PUBLIC_DOMAIN_OPTION_PAIR = re.compile(
+    r"public\s+domain.{0,160}(?:what\s+option|option|\u4ec0\u4e48\u9009\u9879|\u63d0\u4f9b\u4e86\u4ec0\u4e48)",
+    re.I,
+)
+_CHECKLIST_CUE = re.compile(
+    r"(?:\u6838\u5bf9|(?:table|documentation|\u8d44\u6599)\s*[:\uff1a])",
+    re.I,
+)
+_TWO_ENTITIES_FOR_EACH = re.compile(
+    r"(?:two\s+(?:newest|latest)|\u4e24(?:\u4e2a|\u6761)?(?:\u6700\u65b0|\u5f53\u524d)).{0,180}"
+    r"(?:for\s+each|\u5404\u81ea|\u6bcf\u4e2a)",
+    re.I,
+)
+
+
+def _explicit_checklist_count(user_message: str) -> int:
+    """Count a bounded, explicitly delimited checklist after a planning cue."""
+
+    cue = _CHECKLIST_CUE.search(user_message)
+    if cue is None:
+        return 1
+    segment = user_message[cue.end() :]
+    segment = re.split(
+        r"(?:\u9010\u9879|\u5206\u522b|\u5e76\u5f15\u7528|\u8bf7\u5f15\u7528|[.\u3002;\uff1b])",
+        segment,
+        maxsplit=1,
+        flags=re.I,
+    )[0]
+    if "\u3001" in segment:
+        parts = [value.strip() for value in segment.split("\u3001") if value.strip()]
+        if parts and re.search(r"\u548c", parts[-1]):
+            tail = [value.strip() for value in re.split(r"\u548c", parts[-1]) if value.strip()]
+            if len(tail) == 2:
+                parts[-1:] = tail
+    elif "," in segment:
+        parts = [value.strip() for value in segment.split(",") if value.strip()]
+        if parts:
+            parts[-1] = re.sub(r"^(?:and|or)\s+", "", parts[-1], flags=re.I)
+    else:
+        return 1
+    return len(parts) if 2 <= len(parts) <= 8 else 1
 
 
 def minimum_fact_count(user_message: str, policy_version: str) -> int:
     """Return the deterministic semantic floor that planner output must retain."""
 
     policy = SearchPlanningPolicy(version=policy_version)
+    if _SCALAR_ONLY.search(user_message):
+        return 1
     router_count = len(AutomaticModeRouter(policy_version).infer_fact_types(user_message))
     explicit_counts: list[int] = []
     for match in _EXPLICIT_COUNT.finditer(user_message):
@@ -89,6 +187,12 @@ def minimum_fact_count(user_message: str, policy_version: str) -> int:
             or ""
         ).casefold()
         explicit_counts.append(int(raw) if raw.isdecimal() else _COUNT_WORDS[raw])
+    explicit_source_counts: list[int] = []
+    for match in _EXPLICIT_SOURCE_COUNT.finditer(user_message):
+        raw = (match.group("zh") or match.group("en") or "").casefold()
+        explicit_source_counts.append(
+            int(raw) if raw.isdecimal() else _COUNT_WORDS[raw]
+        )
     cross_check_count = 2 if _EXPLICIT_CROSS_CHECK.search(user_message) else 1
     both_count = 2 if _BOTH.search(user_message) else 1
     scalar_enumeration_count = 1
@@ -105,6 +209,37 @@ def minimum_fact_count(user_message: str, policy_version: str) -> int:
                 int(raw) if raw.isdecimal() else _COUNT_WORDS[raw]
             )
     open_set_count = 5 if _OPEN_SUPPORTED_VERSION_SET.search(user_message) else 1
+    origin_pair_count = 2 if _ORIGIN_PAIR.search(user_message) else 1
+    http_status_count = 4 if _HTTP_TWO_STATUS_DIMENSIONS.search(user_message) else 1
+    public_domain_count = 2 if _PUBLIC_DOMAIN_OPTION_PAIR.search(user_message) else 1
+    checklist_count = _explicit_checklist_count(user_message)
+    checklist_matrix_count = (
+        min(policy.max_facts, checklist_count * 2)
+        if checklist_count > 1 and _TWO_ENTITIES_FOR_EACH.search(user_message)
+        else 1
+    )
+    source_split_count = 4 if _SOURCE_PERSPECTIVE_SPLIT.search(user_message) else 1
+    map_rank_source_count = (
+        4 if _MAP_RANK_WITH_ANALYSIS_SOURCES.search(user_message) else 1
+    )
+    universal_count = 3 if _MULTI_CONTEXT_UNIVERSAL.search(user_message) else 1
+    enumeration_relation_count = 1
+    relation_match = _ENUMERATION_PLUS_RELATION.search(user_message)
+    if relation_match is not None:
+        count = re.search(
+            r"\b(three|four|five|six|seven|eight|[3-8])\b|"
+            r"([\u4e09\u56db\u4e94\u516d\u4e03\u516b3-8])",
+            relation_match.group(0),
+            re.I,
+        )
+        if count is not None:
+            raw = (count.group(1) or count.group(2)).casefold()
+            enumeration_relation_count = (
+                int(raw) if raw.isdecimal() else _COUNT_WORDS[raw]
+            ) + 1
+    source_additive_count = 1
+    if explicit_source_counts and len(AutomaticModeRouter(policy_version).infer_fact_types(user_message)) >= 2:
+        source_additive_count = max(explicit_source_counts) + 2
     return min(
         policy.max_facts,
         max(
@@ -114,9 +249,29 @@ def minimum_fact_count(user_message: str, policy_version: str) -> int:
             both_count,
             scalar_enumeration_count,
             open_set_count,
+            origin_pair_count,
+            http_status_count,
+            public_domain_count,
+            checklist_count,
+            checklist_matrix_count,
+            source_split_count,
+            map_rank_source_count,
+            universal_count,
+            enumeration_relation_count,
+            source_additive_count,
             *explicit_counts,
+            *explicit_source_counts,
         ),
     )
+
+
+def maximum_fact_count(user_message: str, policy_version: str) -> int:
+    """Bound explicitly scalar requests so models cannot broaden the question."""
+
+    minimum = minimum_fact_count(user_message, policy_version)
+    if _SCALAR_ONLY.search(user_message):
+        return minimum
+    return SearchPlanningPolicy(version=policy_version).max_facts
 
 
 class PlanningModelGateway(Protocol):
@@ -131,6 +286,7 @@ class IntentParser:
         allow_optional_facts: bool = False,
         allow_high_consequence: bool = False,
         minimum_facts: int = 1,
+        maximum_facts: int | None = None,
     ) -> None:
         if not 1 <= minimum_facts <= policy.max_facts:
             raise ValueError("minimum_facts must fit within the planning policy")
@@ -138,6 +294,34 @@ class IntentParser:
         self._allow_optional_facts = allow_optional_facts
         self._allow_high_consequence = allow_high_consequence
         self._minimum_facts = minimum_facts
+        self._maximum_facts = maximum_facts or policy.max_facts
+        if not minimum_facts <= self._maximum_facts <= policy.max_facts:
+            raise ValueError("maximum_facts must fit the deterministic minimum")
+
+    @staticmethod
+    def _is_source_constraint_fact(raw: dict[str, Any]) -> bool:
+        material = f"{raw.get('key', '')} {raw.get('description', '')}".casefold()
+        return bool(
+            re.search(
+                r"(?:source|citation|bibliograph|reference|url|literature|\u6765\u6e90|\u5f15\u7528|\u94fe\u63a5|\u6587\u732e)"
+                r"(?:[_ -]?(?:page|format|list|authority|literature|\u9875\u9762|\u6e05\u5355))?",
+                material,
+            )
+            and re.search(
+                r"(?:which|what|find|identify|document|cite|\u54ea|\u4ec0\u4e48|\u627e|\u5f15\u7528)",
+                str(raw.get("description", "")),
+                re.I,
+            )
+        )
+
+    @staticmethod
+    def _bounded_subject(raw: object, entity: str) -> str:
+        subject = " ".join(str(raw or entity).split())
+        if len(subject) > 48:
+            subject = " ".join(entity.split())
+        if len(subject) > 48:
+            subject = subject[:48].rstrip(" -_/,:;")
+        return subject
 
     def _consequence(self, raw: object) -> Consequence:
         consequence = Consequence(str(raw or "LOW").strip().upper())
@@ -198,10 +382,16 @@ class IntentParser:
 
     def parse(self, text: str) -> NormalizedIntent:
         payload: dict[str, Any] = json.loads(text)
-        raw_facts = payload["facts"]
+        supplied_facts = payload["facts"]
+        if not isinstance(supplied_facts, list):
+            raise ValueError("facts must be a bounded list")
+        raw_facts = [
+            raw
+            for raw in supplied_facts
+            if isinstance(raw, dict) and not self._is_source_constraint_fact(raw)
+        ]
         if (
-            not isinstance(raw_facts, list)
-            or not self._minimum_facts <= len(raw_facts) <= self._policy.max_facts
+            not self._minimum_facts <= len(raw_facts) <= self._maximum_facts
         ):
             raise ValueError(
                 "facts must satisfy the deterministic minimum and policy maximum"
@@ -211,21 +401,26 @@ class IntentParser:
             key, description, preferred = self._normalize_meta_gap_fact(raw)
             facts_list.append(
                 FactRequirement(
-                key=key,
-                fact_type=FactType(str(raw["fact_type"]).strip().lower()),
-                description=description,
-                subject=str(raw.get("subject") or payload["entity"]),
-                required=(
-                    bool(raw.get("required", True))
-                    if self._allow_optional_facts
-                    else True
-                ),
-                freshness=Freshness(
-                    str(raw.get("freshness", "STABLE")).strip().upper()
-                ),
-                consequence=self._consequence(raw.get("consequence", "LOW")),
-                preferred_source_kinds=preferred,
-            )
+                    key=key,
+                    fact_type=FactType(str(raw["fact_type"]).strip().lower()),
+                    description=description,
+                    subject=self._bounded_subject(
+                        raw.get("subject"),
+                        str(payload["entity"]),
+                    ),
+                    required=(
+                        bool(raw.get("required", True))
+                        if self._allow_optional_facts
+                        else True
+                    ),
+                    freshness=Freshness(
+                        str(raw.get("freshness", "STABLE")).strip().upper()
+                    ),
+                    consequence=self._consequence(
+                        raw.get("consequence", "LOW")
+                    ),
+                    preferred_source_kinds=preferred,
+                )
             )
         facts = tuple(facts_list)
         return NormalizedIntent(
@@ -250,6 +445,7 @@ class IntentParser:
             "CURRENT. consequence must be exactly LOW, MEDIUM, or HIGH. Do not add "
             f"markdown or commentary. Return at least {self._minimum_facts} distinct "
             f"facts. Validation error type: {type(error).__name__}."
+            f" Return no more than {self._maximum_facts} facts."
         )
 
 
@@ -277,6 +473,7 @@ class SearchPlanner:
         invocation_context: ModelInvocationContext | None = None,
     ) -> NormalizedIntent:
         minimum_facts = minimum_fact_count(user_message, self._policy.version)
+        maximum_facts = maximum_fact_count(user_message, self._policy.version)
         system = (
             "Normalize the current request into a canonical entity and atomic fact "
             "requirements. Do not turn conversational filler into search terms. "
@@ -307,6 +504,7 @@ class SearchPlanner:
             "comparison, background. Use uppercase STABLE, RECENT, or CURRENT for "
             "freshness and uppercase LOW, MEDIUM, or HIGH for consequence. "
             f"This request requires at least {minimum_facts} distinct facts."
+            f" Return no more than {maximum_facts} facts."
         )
         user = f"Current request:\n{user_message.strip()}"
         if allowed_conversation_summary.strip():
@@ -323,6 +521,7 @@ class SearchPlanner:
             allow_optional_facts=bool(self._OPTIONAL_REQUEST.search(user_message)),
             allow_high_consequence=high_consequence,
             minimum_facts=minimum_facts,
+            maximum_facts=maximum_facts,
         )
         result = await self._gateway.generate(
             ModelRole.PLANNER,

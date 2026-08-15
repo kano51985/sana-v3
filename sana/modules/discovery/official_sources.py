@@ -29,7 +29,7 @@ class DirectSourceRule:
 class DirectSourcePolicy:
     """Reviewed direct URLs; authority remains owned by SourceAuthorityPolicy."""
 
-    version: str = "direct-sources-v7"
+    version: str = "direct-sources-v8"
     sources: Mapping[str, Mapping[str, tuple[str, ...]]] = field(
         default_factory=lambda: {
             "python": {
@@ -42,10 +42,15 @@ class DirectSourcePolicy:
                 ),
             },
             "deepseek": {
-                FactType.BACKGROUND.value: ("https://api-docs.deepseek.com/",),
+                FactType.BACKGROUND.value: (
+                    "https://api-docs.deepseek.com/quick_start/pricing/",
+                ),
                 FactType.VERSION.value: ("https://api-docs.deepseek.com/news/",),
                 FactType.CURRENT_VALUE.value: (
-                    "https://api-docs.deepseek.com/",
+                    "https://api-docs.deepseek.com/quick_start/pricing/",
+                ),
+                FactType.COMPARISON.value: (
+                    "https://api-docs.deepseek.com/quick_start/pricing/",
                 ),
             },
             "apex legends": {
@@ -65,6 +70,22 @@ class DirectSourcePolicy:
                     "https://apexranked.com/meta",
                     "https://games.gg/apex-legends/guides/"
                     "apex-legends-season-29-tier-list/",
+                ),
+                FactType.CURRENT_VALUE.value: (
+                    "https://www.ea.com/games/apex-legends/apex-legends/news/"
+                    "overclocked-patch-notes",
+                ),
+                FactType.BACKGROUND.value: (
+                    "https://www.ea.com/games/apex-legends/apex-legends/news/"
+                    "overclocked-patch-notes",
+                    "https://apexranked.com/meta",
+                    "https://games.gg/apex-legends/guides/"
+                    "apex-legends-season-29-tier-list/",
+                ),
+                FactType.COMPARISON.value: (
+                    "https://www.ea.com/games/apex-legends/apex-legends/news/"
+                    "overclocked-patch-notes",
+                    "https://apexranked.com/meta",
                 ),
             },
             "http": {
@@ -164,6 +185,9 @@ class DirectSourcePolicy:
                 FactType.COMPARISON.value: (
                     "https://www.postgresql.org/docs/current/transaction-iso.html",
                 ),
+                FactType.CURRENT_VALUE.value: (
+                    "https://www.postgresql.org/docs/current/transaction-iso.html",
+                ),
             },
             "postgresql": {
                 FactType.BACKGROUND.value: (
@@ -217,7 +241,14 @@ class DirectSourcePolicy:
             "python": (
                 DirectSourceRule(
                     frozenset({FactType.BACKGROUND}),
-                    ("creator", "first_release", "首次公开", "创建者"),
+                    ("creator", "创建者"),
+                    (
+                        "https://www.python.org/download/releases/2.1/license/",
+                    ),
+                ),
+                DirectSourceRule(
+                    frozenset({FactType.BACKGROUND}),
+                    ("first_release", "首次公开", "release_year"),
                     (
                         "https://docs.python.org/3/"
                         "license.html#history-of-the-software",
@@ -284,7 +315,11 @@ class DirectSourcePolicy:
                         "port number",
                         "transport protocols",
                     ),
-                    ("https://www.rfc-editor.org/rfc/rfc1035.html",),
+                    (
+                        "https://www.iana.org/assignments/"
+                        "service-names-port-numbers/"
+                        "service-names-port-numbers.xhtml?search=53",
+                    ),
                 ),
                 DirectSourceRule(
                     frozenset({FactType.BACKGROUND, FactType.CURRENT_VALUE}),
@@ -334,6 +369,65 @@ class DirectSourcePolicy:
                     (
                         "https://www.postgresql.org/docs/current/"
                         "transaction-iso.html",
+                    ),
+                ),
+            ),
+            "deepseek": (
+                DirectSourceRule(
+                    frozenset(FactType),
+                    (
+                        "price",
+                        "pricing",
+                        "cache_hit",
+                        "cache_miss",
+                        "context_length",
+                        "max_output",
+                        "maximum_output",
+                        "json_output",
+                    ),
+                    (
+                        "https://api-docs.deepseek.com/quick_start/pricing/",
+                    ),
+                ),
+            ),
+            "apex legends": (
+                DirectSourceRule(
+                    frozenset(FactType),
+                    (
+                        "community",
+                        "team_meta",
+                        "team_composition",
+                        "composition",
+                        "阵容",
+                        "社区",
+                        "分析来源",
+                    ),
+                    (
+                        "https://apexranked.com/meta",
+                        "https://games.gg/apex-legends/guides/"
+                        "apex-legends-season-29-tier-list/",
+                    ),
+                ),
+                DirectSourceRule(
+                    frozenset(FactType),
+                    (
+                        "map_rotation",
+                        "ranked",
+                        "current_release",
+                        "current_season",
+                        "balance_changes",
+                        "patch",
+                        "地图",
+                        "排名",
+                        "排位",
+                        "赛季",
+                        "改动",
+                    ),
+                    (
+                        "https://www.ea.com/games/apex-legends/apex-legends/news/"
+                        "overclocked-patch-notes",
+                        "https://www.ea.com/games/apex-legends/apex-legends/news/"
+                        "overclocked-midseason-patch-notes",
                     ),
                 ),
             ),

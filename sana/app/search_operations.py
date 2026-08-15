@@ -360,6 +360,7 @@ def _select_ranked_hits(
         classified,
         key=lambda value: (
             0 if value[2] is SourceAuthority.OFFICIAL else 1,
+            0 if str(value[0].get("provider", "")) == "direct" else 1,
             -float(value[0]["score"]),
             int(value[0]["rank"]),
             value[0]["canonical_url"],
@@ -370,16 +371,16 @@ def _select_ranked_hits(
         for _, _, authority in ranked
     )
     if mode is SearchMode.FAST:
-        direct_official_identities = {
-            identity
-            for item, identity, authority in ranked
+        direct_official_pages = {
+            str(item["canonical_url"])
+            for item, _, authority in ranked
             if authority is SourceAuthority.OFFICIAL
             and str(item.get("provider", "")) == "direct"
         }
         if has_official:
             selection_limit = min(
                 max_selected_hits,
-                2 if len(direct_official_identities) >= 2 else 1,
+                2 if len(direct_official_pages) >= 2 else 1,
             )
         else:
             selection_limit = min(2, max_selected_hits)

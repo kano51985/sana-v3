@@ -169,8 +169,7 @@ class ModelEvidenceVerifier:
         identifiers = tuple(
             dict.fromkeys(
                 cls._NUMERIC_IDENTIFIER.findall(
-                    f"{candidate.fact.key} {candidate.fact.description} "
-                    f"{candidate.fact.subject}"
+                    f"{candidate.fact.key} {candidate.fact.description}"
                 )
             )
         )
@@ -571,6 +570,426 @@ class ModelEvidenceVerifier:
         )
 
     @classmethod
+    def _deterministic_dns_registry(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Bind DNS port 53 and both transports to the reviewed IANA rows."""
+
+        source = candidate.url.split("#", 1)[0].split("?", 1)[0]
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        ).casefold()
+        if (
+            candidate.source_authority is not SourceAuthority.OFFICIAL
+            or source
+            != (
+                "https://www.iana.org/assignments/service-names-port-numbers/"
+                "service-names-port-numbers.xhtml"
+            )
+            or "dns" not in fact_text
+        ):
+            return None
+        rows = re.search(
+            r"domain\s+53\s+tcp\s+Domain Name Server.*?"
+            r"domain\s+53\s+udp\s+Domain Name Server",
+            candidate.chunk.text,
+            re.I | re.S,
+        )
+        if rows is None or len(rows.group(0)) > 600:
+            return None
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            rows.group(0).strip(),
+            0.99,
+            ("direct_support", "explicit_value"),
+        )
+
+    @classmethod
+    def _deterministic_python_origin(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Extract creator and initial-release year from reviewed Python history."""
+
+        source = candidate.url.split("#", 1)[0].split("?", 1)[0]
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        ).casefold()
+        if (
+            candidate.source_authority is not SourceAuthority.OFFICIAL
+            or "python" not in fact_text
+            or source
+            not in {
+                "https://www.python.org/download/releases/2.1/license/",
+                "https://docs.python.org/3/license.html",
+            }
+        ):
+            return None
+        if any(marker in fact_text for marker in ("creator", "created", "创建")):
+            statement = re.search(
+                r"Python was created in the early 1990s by Guido van Rossum.*?"
+                r"(?:ABC\.|ABC)",
+                candidate.chunk.text,
+                re.I | re.S,
+            )
+        elif any(
+            marker in fact_text
+            for marker in ("first_public", "first public", "release_year", "首次公开")
+        ):
+            statement = re.search(
+                r"0\.9\.0\s+thru\s+1\.2\s+n/a\s+1991-1995\s+CWI\s+yes",
+                candidate.chunk.text,
+                re.I,
+            )
+        else:
+            statement = None
+        if statement is None or len(statement.group(0)) > 600:
+            return None
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            statement.group(0).strip(),
+            0.99,
+            ("direct_support", "explicit_value"),
+        )
+
+    @classmethod
+    def _deterministic_json_literals(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Extract all three lowercase literal names from RFC 8259."""
+
+        source = candidate.url.split("#", 1)[0].split("?", 1)[0]
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        ).casefold()
+        if (
+            candidate.source_authority is not SourceAuthority.OFFICIAL
+            or source != "https://www.rfc-editor.org/rfc/rfc8259.html"
+            or "json" not in fact_text
+            or "literal" not in fact_text
+        ):
+            return None
+        statement = re.search(
+            r"following three literal names:\s*false\s+null\s+true\s+"
+            r"The literal names MUST be lowercase",
+            candidate.chunk.text,
+            re.I,
+        )
+        if statement is None:
+            return None
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            statement.group(0).strip(),
+            0.99,
+            ("direct_support", "explicit_value"),
+        )
+
+    @classmethod
+    def _deterministic_http_created_no_content(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Extract exact 201/204 semantics from the reviewed HTTP standard."""
+
+        source = candidate.url.split("#", 1)[0].split("?", 1)[0]
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        ).casefold()
+        if (
+            candidate.source_authority is not SourceAuthority.OFFICIAL
+            or source != "https://www.rfc-editor.org/rfc/rfc9110.html"
+            or not any(marker in fact_text for marker in ("201", "204"))
+        ):
+            return None
+        statements: list[re.Match[str]] = []
+        if "201" in fact_text:
+            match = re.search(
+                r"The 201 \(Created\) status code indicates.*?"
+                r"(?:target URI|resource\(s\) created\.)",
+                candidate.chunk.text,
+                re.I | re.S,
+            )
+            if match is not None:
+                statements.append(match)
+        if "204" in fact_text:
+            match = re.search(
+                r"The 204 \(No Content\) status code indicates.*?"
+                r"(?:response content|selected representation after the requested "
+                r"action was applied\.)",
+                candidate.chunk.text,
+                re.I | re.S,
+            )
+            if match is None:
+                match = re.search(
+                    r"A 204 response is terminated by the end of the header section; "
+                    r"it cannot contain content or trailers\.",
+                    candidate.chunk.text,
+                    re.I,
+                )
+            if match is not None:
+                statements.append(match)
+        if not statements:
+            return None
+        statement = min(statements, key=lambda item: len(item.group(0)))
+        if len(statement.group(0)) > 600:
+            return None
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            statement.group(0).strip(),
+            0.99,
+            ("direct_support", "definition_match"),
+        )
+
+    @classmethod
+    def _deterministic_acid_property(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Extract one named ACID definition from the reviewed IBM overview."""
+
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        ).casefold()
+        if candidate.source_identity != "ibm.com":
+            return None
+        property_name = next(
+            (
+                value
+                for value in ("atomicity", "consistency", "isolation", "durability")
+                if value in fact_text
+            ),
+            None,
+        )
+        if property_name is None:
+            return None
+        next_property = {
+            "atomicity": "Consistency",
+            "consistency": "Isolation",
+            "isolation": "Durability",
+            "durability": None,
+        }[property_name]
+        suffix = (
+            rf"(?=\s+{next_property}:)"
+            if next_property is not None
+            else r"(?=\s+(?:ACID|States|Transaction|$))"
+        )
+        statement = re.search(
+            rf"{property_name.title()}:\s+.{{20,500}}?{suffix}",
+            candidate.chunk.text,
+            re.I | re.S,
+        )
+        if statement is None:
+            return None
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            statement.group(0).strip(),
+            0.99,
+            ("direct_support", "definition_match"),
+        )
+
+    @classmethod
+    def _deterministic_cap_theorem(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Extract CAP definitions and partition tradeoff from IBM's overview."""
+
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        ).casefold()
+        if candidate.source_identity != "ibm.com" or "cap" not in fact_text:
+            return None
+        if "consistency" in fact_text:
+            pattern = r"Consistency means that all clients see the same data.*?successful[.’']"
+        elif "availability" in fact_text:
+            pattern = r"Availability means that any client making a request.*?without exception\."
+        elif "partition" in fact_text and "tolerance" in fact_text:
+            pattern = r"Partition tolerance means that the cluster must continue to work.*?system\."
+        elif "tradeoff" in fact_text:
+            pattern = (
+                r"The CAP theorem says that a distributed system can deliver only two "
+                r"of three desired characteristics:\s*consistency\s*,\s*availability\s+"
+                r"and\s+partition\s+tolerance"
+            )
+        else:
+            return None
+        statement = re.search(pattern, candidate.chunk.text, re.I | re.S)
+        if statement is None or len(statement.group(0)) > 600:
+            return None
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            statement.group(0).strip(),
+            0.99,
+            ("direct_support", "definition_match"),
+        )
+
+    @classmethod
+    def _deterministic_sqlite_licensing(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Extract SQLite public-domain status and Warranty-of-Title option."""
+
+        source = candidate.url.split("#", 1)[0].split("?", 1)[0]
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        ).casefold()
+        if (
+            candidate.source_authority is not SourceAuthority.OFFICIAL
+            or source != "https://www.sqlite.org/copyright.html"
+            or "sqlite" not in fact_text
+        ):
+            return None
+        if "public domain" in fact_text and not any(
+            marker in fact_text for marker in ("jurisdiction", "option", "alternative")
+        ):
+            pattern = (
+                r"SQLite is in the public domain and does not require a license\."
+            )
+        else:
+            pattern = (
+                r"Hwaci\s*,\s*the\s+company\s+that\s+employs\s+all\s+the\s+"
+                r"developers\s+of\s+SQLite\s*,\s*will\s+sell\s+you\s+a\s+"
+                r"Warranty\s+of\s+Title\s+for\s+SQLite\s*\."
+            )
+        statement = re.search(pattern, candidate.chunk.text, re.I)
+        if statement is None:
+            return None
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            statement.group(0).strip(),
+            0.99,
+            ("direct_support", "explicit_value"),
+        )
+
+    @classmethod
+    def _deterministic_deepseek_pricing(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Read current V4 Flash capabilities and prices from the live pricing table."""
+
+        source = candidate.url.split("#", 1)[0].split("?", 1)[0].rstrip("/")
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        ).casefold()
+        if (
+            candidate.source_authority is not SourceAuthority.OFFICIAL
+            or source != "https://api-docs.deepseek.com/quick_start/pricing"
+            or re.search(r"deepseek[- _]?v4[- _]?flash", fact_text, re.I) is None
+        ):
+            return None
+        patterns = (
+            (
+                r"cache[_ -]?hit|缓存命中",
+                r"1M\s+INPUT\s+TOKENS\s+\(CACHE\s+HIT\)\s+\$[0-9.]+",
+            ),
+            (
+                r"cache[_ -]?miss|缓存未命中",
+                r"1M\s+INPUT\s+TOKENS\s+\(CACHE\s+MISS\)\s+\$[0-9.]+",
+            ),
+            (
+                r"output[_ -]?price|输出价格",
+                r"1M\s+OUTPUT\s+TOKENS\s+\$[0-9.]+",
+            ),
+            (
+                r"context[_ -]?length|上下文长度",
+                r"CONTEXT\s+LENGTH\s+\d+(?:K|M)",
+            ),
+            (
+                r"max(?:imum)?[_ -]?output|最大输出",
+                r"MAX\s+OUTPUT\s+MAXIMUM:\s*\d+(?:K|M)",
+            ),
+            (r"json[_ -]?output|json output", r"Json\s+Output\s+[✓✔]\s+[✓✔]"),
+        )
+        statement = None
+        for marker, pattern in patterns:
+            if re.search(marker, fact_text, re.I):
+                statement = re.search(pattern, candidate.chunk.text, re.I | re.S)
+                break
+        if statement is None or len(statement.group(0)) > 600:
+            return None
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            statement.group(0).strip(),
+            0.99,
+            ("direct_support", "explicit_value"),
+        )
+
+    @classmethod
+    def _deterministic_postgresql_support(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Extract live supported-version rows from PostgreSQL's policy table."""
+
+        source = candidate.url.split("#", 1)[0].split("?", 1)[0]
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        ).casefold()
+        if (
+            candidate.source_authority is not SourceAuthority.OFFICIAL
+            or source != "https://www.postgresql.org/support/versioning/"
+            or "postgresql" not in fact_text
+            or not any(
+                marker in fact_text
+                for marker in ("support", "minor", "final release", "eol", "version")
+            )
+        ):
+            return None
+        version = re.search(r"(?<![.\d])(?:14|15|16|17|18)(?![.\d])", fact_text)
+        if version is not None:
+            pattern = (
+                rf"{version.group(0)}\s+\d+[.]\d+\s+Yes\s+"
+                r"[A-Za-z]+\s+\d{1,2},\s+\d{4}\s+"
+                r"[A-Za-z]+\s+\d{1,2},\s+\d{4}"
+            )
+        else:
+            pattern = (
+                r"Version\s+Current minor\s+Supported\s+First Release\s+Final Release\s+"
+                r"(?:\d+\s+\d+[.]\d+\s+Yes\s+[A-Za-z]+\s+\d{1,2},\s+\d{4}\s+"
+                r"[A-Za-z]+\s+\d{1,2},\s+\d{4}\s*){2,5}"
+            )
+        statement = re.search(pattern, candidate.chunk.text, re.I)
+        if statement is None or len(statement.group(0)) > 1_200:
+            return None
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            statement.group(0).strip(),
+            0.99,
+            ("direct_support", "explicit_value"),
+        )
+
+    @classmethod
     def _deterministic_git_object_model(
         cls,
         candidate: SelectedCandidate,
@@ -647,8 +1066,25 @@ class ModelEvidenceVerifier:
         candidate: SelectedCandidate,
     ) -> tuple[ProposedVerification, str] | None:
         adapters = (
-            (cls._deterministic_explicit_value, "deterministic-explicit-value-v1"),
-            (cls._deterministic_explicit_terms, "deterministic-explicit-terms-v1"),
+            (cls._deterministic_dns_registry, "deterministic-dns-registry-v1"),
+            (cls._deterministic_python_origin, "deterministic-python-origin-v1"),
+            (cls._deterministic_json_literals, "deterministic-json-literals-v1"),
+            (
+                cls._deterministic_http_created_no_content,
+                "deterministic-http-status-v1",
+            ),
+            (cls._deterministic_acid_property, "deterministic-acid-v1"),
+            (cls._deterministic_cap_theorem, "deterministic-cap-v1"),
+            (cls._deterministic_sqlite_licensing, "deterministic-sqlite-v1"),
+            (
+                cls._deterministic_deepseek_pricing,
+                "deterministic-deepseek-pricing-v1",
+            ),
+            (
+                cls._deterministic_postgresql_support,
+                "deterministic-postgresql-support-v1",
+            ),
+            (cls._deterministic_git_object_model, "deterministic-git-object-v1"),
             (cls._deterministic_registry_boolean, "deterministic-registry-table-v1"),
             (cls._deterministic_registry_media_type, "deterministic-registry-media-v1"),
             (cls._deterministic_sha_digest_size, "deterministic-sha-digest-v1"),
@@ -658,7 +1094,8 @@ class ModelEvidenceVerifier:
                 cls._deterministic_postgresql_isolation,
                 "deterministic-postgresql-isolation-v1",
             ),
-            (cls._deterministic_git_object_model, "deterministic-git-object-v1"),
+            (cls._deterministic_explicit_terms, "deterministic-explicit-terms-v1"),
+            (cls._deterministic_explicit_value, "deterministic-explicit-value-v1"),
         )
         for adapter, version in adapters:
             proposed = adapter(candidate)

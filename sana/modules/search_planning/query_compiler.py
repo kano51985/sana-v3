@@ -19,6 +19,13 @@ from sana.modules.search_planning.policy import SearchPlanningPolicy
 
 class QueryCompiler:
     _KEY_TOKEN = re.compile(r"[A-Za-z0-9]+")
+    _UNSAFE_SEMANTIC_FRAGMENT = re.compile(
+        r"(?:sana(?:'s)?\s+(?:memory|private)|user(?:'s)?\s+private|"
+        r"ignore\s+(?:web|search|evidence)|do\s+not\s+mention|"
+        r"access\s+limitations?|private\s+memory|"
+        r"sana\s*\u7684?\s*\u79c1\u4eba\u8bb0\u5fc6|\u79c1\u4eba\u8bb0\u5fc6|\u5408\u7406\u7f16\u9020|\u4e0d\u8981\u8bf4\u4f60\u65e0\u6cd5\u8bbf\u95ee)",
+        re.I,
+    )
 
     def __init__(self, policy: SearchPlanningPolicy | None = None) -> None:
         self.policy = policy or SearchPlanningPolicy()
@@ -29,6 +36,7 @@ class QueryCompiler:
         fact: FactRequirement,
         *,
         entity: str,
+        subject: str | None = None,
         keyword_groups: tuple[str, ...],
     ) -> tuple[str, ...]:
         """Keep bounded Fact semantics without copying conversational prose."""
@@ -36,7 +44,7 @@ class QueryCompiler:
         excluded = {
             value.casefold()
             for value in cls._KEY_TOKEN.findall(
-                " ".join((entity, fact.subject, *keyword_groups))
+                " ".join((entity, subject or fact.subject, *keyword_groups))
             )
         }
         excluded.update(
@@ -48,12 +56,17 @@ class QueryCompiler:
                 "gap",
                 "info",
                 "information",
+                "ignore",
+                "memory",
                 "overview",
                 "profile",
                 "purpose",
+                "reveal",
                 "result",
+                "sana",
                 "source",
                 "status",
+                "user",
             }
         )
         terms: list[str] = []
@@ -158,6 +171,8 @@ class QueryCompiler:
         signatures = set(existing_signatures)
         for fact, variant_index, keywords in candidates:
             subject = fact.subject.strip()
+            if self._UNSAFE_SEMANTIC_FRAGMENT.search(subject):
+                subject = intent.entity.strip()
             components = []
             if subject.casefold() != intent.entity.casefold():
                 components.append(subject)
@@ -165,6 +180,7 @@ class QueryCompiler:
                 self._semantic_key_terms(
                     fact,
                     entity=intent.entity,
+                    subject=subject,
                     keyword_groups=keywords,
                 )
             )

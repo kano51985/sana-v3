@@ -78,6 +78,34 @@ def test_single_source_enumeration_can_remain_fast(message: str) -> None:
     assert decision.mode is SearchMode.FAST
 
 
+def test_decimal_protocol_version_is_not_treated_as_an_enumeration() -> None:
+    decision = AutomaticModeRouter("search-v12").route(
+        "Which RFC specifies TLS 1.3? Include the protocol version and RFC number."
+    )
+
+    assert decision.mode is SearchMode.FAST
+
+
+def test_universal_cross_context_claim_routes_to_research() -> None:
+    decision = AutomaticModeRouter("search-v12").route(
+        "Prove one universally best Apex Legends team for every rank, map, "
+        "region, and player skill level."
+    )
+
+    assert decision.mode is SearchMode.RESEARCH
+    assert "cross_context_universal_claim" in decision.reason_codes
+
+
+def test_private_multi_attribute_request_routes_to_research() -> None:
+    decision = AutomaticModeRouter("search-v12").route(
+        "综合公开网页与 Sana 私人记忆，列出过去每局 Apex Legends 的队友、"
+        "隐藏分和精确时间。"
+    )
+
+    assert decision.mode is SearchMode.RESEARCH
+    assert "private_multi_attribute_request" in decision.reason_codes
+
+
 class CountingBoundaryClassifier:
     def __init__(self) -> None:
         self.calls = 0

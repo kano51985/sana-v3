@@ -429,6 +429,282 @@ def git_object_candidate(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "fact",
+        "url",
+        "source_identity",
+        "authority",
+        "text",
+        "expected_version",
+        "expected_quote",
+    ),
+    (
+        (
+            FactRequirement(
+                "dns_port_transports",
+                FactType.BACKGROUND,
+                "DNS port and transport protocols",
+                "DNS",
+            ),
+            (
+                "https://www.iana.org/assignments/service-names-port-numbers/"
+                "service-names-port-numbers.xhtml?search=53"
+            ),
+            "iana.org",
+            SourceAuthority.OFFICIAL,
+            (
+                "domain 53 tcp Domain Name Server DOMAIN 53 udp "
+                "domain 53 udp Domain Name Server"
+            ),
+            "deterministic-dns-registry-v1",
+            "domain 53 udp",
+        ),
+        (
+            FactRequirement(
+                "python_creator",
+                FactType.BACKGROUND,
+                "Who created Python?",
+                "Python",
+            ),
+            "https://www.python.org/download/releases/2.1/license/",
+            "python.org",
+            SourceAuthority.OFFICIAL,
+            (
+                "Python was created in the early 1990s by Guido van Rossum as a "
+                "successor of a language called ABC."
+            ),
+            "deterministic-python-origin-v1",
+            "Guido van Rossum",
+        ),
+        (
+            FactRequirement(
+                "python_first_release_year",
+                FactType.BACKGROUND,
+                "Python first public release year",
+                "Python",
+            ),
+            "https://docs.python.org/3/license.html#history-of-the-software",
+            "python.org",
+            SourceAuthority.OFFICIAL,
+            "0.9.0 thru 1.2 n/a 1991-1995 CWI yes",
+            "deterministic-python-origin-v1",
+            "1991-1995",
+        ),
+        (
+            FactRequirement(
+                "json_literals",
+                FactType.BACKGROUND,
+                "the three lowercase JSON literal names",
+                "JSON",
+            ),
+            "https://www.rfc-editor.org/rfc/rfc8259.html",
+            "rfc-editor.org",
+            SourceAuthority.OFFICIAL,
+            (
+                "following three literal names: false null true "
+                "The literal names MUST be lowercase"
+            ),
+            "deterministic-json-literals-v1",
+            "false null true",
+        ),
+        (
+            FactRequirement(
+                "http_201_semantics",
+                FactType.BACKGROUND,
+                "meaning of 201 Created",
+                "HTTP 201",
+            ),
+            "https://www.rfc-editor.org/rfc/rfc9110.html#name-201-created",
+            "rfc-editor.org",
+            SourceAuthority.OFFICIAL,
+            (
+                "The 201 (Created) status code indicates that the request has been "
+                "fulfilled and has resulted in one or more new resources being "
+                "created. The primary resource created by the request is identified "
+                "by either a Location header field or the target URI"
+            ),
+            "deterministic-http-status-v1",
+            "201 (Created)",
+        ),
+        (
+            FactRequirement(
+                "http_204_content_constraint",
+                FactType.BACKGROUND,
+                "response content constraint for 204 No Content",
+                "HTTP 204",
+            ),
+            "https://www.rfc-editor.org/rfc/rfc9110.html#name-204-no-content",
+            "rfc-editor.org",
+            SourceAuthority.OFFICIAL,
+            (
+                "The 204 (No Content) status code indicates that the server has "
+                "successfully fulfilled the request and that there is no additional "
+                "content to send in the response content"
+            ),
+            "deterministic-http-status-v1",
+            "204 (No Content)",
+        ),
+        (
+            FactRequirement(
+                "acid_atomicity",
+                FactType.BACKGROUND,
+                "Explain Atomicity",
+                "ACID",
+            ),
+            "https://www.ibm.com/think/topics/acid-transactions",
+            "ibm.com",
+            SourceAuthority.INDEPENDENT,
+            (
+                "Atomicity: Each transaction is treated as a single unit that "
+                "either succeeds completely or fails completely. Consistency: "
+                "Every transaction preserves database rules."
+            ),
+            "deterministic-acid-v1",
+            "Atomicity:",
+        ),
+        (
+            FactRequirement(
+                "cap_consistency",
+                FactType.BACKGROUND,
+                "Explain Consistency in the CAP theorem",
+                "CAP theorem",
+            ),
+            "https://www.ibm.com/think/topics/cap-theorem",
+            "ibm.com",
+            SourceAuthority.INDEPENDENT,
+            (
+                "Consistency means that all clients see the same data at the same "
+                "time, no matter which node they connect to. For this to happen, "
+                "whenever data is written to one node, it must be instantly "
+                "forwarded or replicated across all the nodes in the system before "
+                "the write is deemed successful."
+            ),
+            "deterministic-cap-v1",
+            "Consistency means",
+        ),
+        (
+            FactRequirement(
+                "sqlite_public_domain",
+                FactType.BACKGROUND,
+                "Whether SQLite is in the public domain",
+                "SQLite",
+            ),
+            "https://www.sqlite.org/copyright.html",
+            "sqlite.org",
+            SourceAuthority.OFFICIAL,
+            "SQLite is in the public domain and does not require a license.",
+            "deterministic-sqlite-v1",
+            "public domain",
+        ),
+        (
+            FactRequirement(
+                "sqlite_jurisdiction_option",
+                FactType.BACKGROUND,
+                "Option for a jurisdiction that cannot use public domain",
+                "SQLite",
+            ),
+            "https://www.sqlite.org/copyright.html",
+            "sqlite.org",
+            SourceAuthority.OFFICIAL,
+            (
+                "Hwaci\n, the company that employs all the developers of SQLite, "
+                "will\nsell you a Warranty of Title for SQLite\n."
+            ),
+            "deterministic-sqlite-v1",
+            "Warranty of Title",
+        ),
+        (
+            FactRequirement(
+                "output_price",
+                FactType.CURRENT_VALUE,
+                "current output price",
+                "deepseek-v4-flash",
+            ),
+            "https://api-docs.deepseek.com/quick_start/pricing/",
+            "api-docs.deepseek.com",
+            SourceAuthority.OFFICIAL,
+            "1M OUTPUT TOKENS $0.28",
+            "deterministic-deepseek-pricing-v1",
+            "$0.28",
+        ),
+        (
+            FactRequirement(
+                "postgresql_18_support",
+                FactType.CURRENT_VALUE,
+                "PostgreSQL 18 current minor and final release support date",
+                "PostgreSQL 18",
+            ),
+            "https://www.postgresql.org/support/versioning/",
+            "postgresql.org",
+            SourceAuthority.OFFICIAL,
+            "18 18.4 Yes September 25, 2025 November 14, 2030",
+            "deterministic-postgresql-support-v1",
+            "November 14, 2030",
+        ),
+    ),
+)
+async def test_reviewed_structured_sources_skip_probabilistic_verification(
+    fact: FactRequirement,
+    url: str,
+    source_identity: str,
+    authority: SourceAuthority,
+    text: str,
+    expected_version: str,
+    expected_quote: str,
+) -> None:
+    item = reviewed_text_candidate(text, fact, url)
+    item = replace(
+        item,
+        source_identity=source_identity,
+        source_authority=authority,
+    )
+
+    result = await ModelEvidenceVerifier(ForbiddenGateway()).verify(
+        (item,),
+        invocation_context=context(item),
+        deadline=NOW + timedelta(seconds=5),
+        verified_at=NOW,
+    )
+
+    assert result.degraded is False
+    assert result.evidence[0].verdict is EvidenceVerdict.ACCEPTED
+    assert result.evidence[0].verifier_version == expected_version
+    assert expected_quote in result.evidence[0].candidate.quote
+
+
+@pytest.mark.asyncio
+async def test_product_version_number_cannot_masquerade_as_requested_price() -> None:
+    fact = FactRequirement(
+        "output_price",
+        FactType.CURRENT_VALUE,
+        "current output price",
+        "deepseek-v4-flash",
+    )
+    item = reviewed_text_candidate(
+        "MODEL deepseek-v4-flash supports JSON Output.",
+        fact,
+        "https://api-docs.deepseek.com/quick_start/pricing/",
+    )
+    item = replace(
+        item,
+        source_identity="api-docs.deepseek.com",
+        source_authority=SourceAuthority.OFFICIAL,
+    )
+
+    result = await ModelEvidenceVerifier(
+        ParsingGateway('{"verdicts":[]}')
+    ).verify(
+        (item,),
+        invocation_context=context(item),
+        deadline=NOW + timedelta(seconds=5),
+        verified_at=NOW,
+    )
+
+    assert result.evidence[0].verdict is EvidenceVerdict.REJECTED
+
+
+@pytest.mark.asyncio
 async def test_exact_official_numeric_value_skips_model_verification() -> None:
     item = explicit_http_candidate()
 

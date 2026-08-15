@@ -424,6 +424,127 @@ def test_purpose_fact_prefers_definition_over_incidental_object_mentions() -> No
     assert selected[0].chunk.ordinal == 1
 
 
+def test_http_status_semantics_prefers_normative_definition_over_mentions() -> None:
+    fact_id = uuid4()
+    fact = FactRequirement(
+        "http_204_content_constraint",
+        FactType.BACKGROUND,
+        "response content constraint for 204 No Content",
+        "HTTP 204",
+    )
+    tenant_id, document_id = uuid4(), uuid4()
+    raw_chunks = (
+        "A server can return 204 No Content after a successful operation. "
+        "This section discusses content constraints in general.",
+        "A DELETE might use 204 No Content when no further information is sent.",
+        (
+            "The 204 (No Content) status code indicates that the server has "
+            "successfully fulfilled the request and that there is no additional "
+            "content to send in the response content."
+        ),
+    )
+    chunks = tuple(
+        (
+            uuid4(),
+            DocumentChunk(
+                ordinal,
+                text,
+                hashlib.sha256(text.encode()).hexdigest(),
+                20,
+                ordinal * 200,
+                ordinal * 200 + len(text),
+            ),
+        )
+        for ordinal, text in enumerate(raw_chunks)
+    )
+    full_text = "\n".join(raw_chunks)
+    candidate_document = CandidateDocument(
+        document_id,
+        DocumentVersion(
+            uuid4(),
+            tenant_id,
+            document_id,
+            hashlib.sha256(full_text.encode()).hexdigest(),
+            full_text,
+            "text/plain",
+            "en",
+            NOW,
+        ),
+        chunks,
+        "https://www.rfc-editor.org/rfc/rfc9110.html#name-204-no-content",
+        "HTTP Semantics",
+        (fact_id,),
+    )
+
+    selected = CandidateSelector(max_per_fact=1, max_total=1).select(
+        run_id=uuid4(),
+        entity="HTTP",
+        facts={fact_id: fact},
+        documents=(candidate_document,),
+    )
+
+    assert selected[0].chunk.ordinal == 2
+
+
+def test_postgresql_support_fact_prefers_exact_version_row_over_release_banner() -> None:
+    fact_id = uuid4()
+    fact = FactRequirement(
+        "postgresql_14_support",
+        FactType.CURRENT_VALUE,
+        "PostgreSQL 14 current minor and final release support date",
+        "PostgreSQL 14",
+    )
+    tenant_id, document_id = uuid4(), uuid4()
+    raw_chunks = (
+        "PostgreSQL 18.6, 17.11, 16.15, 15.19, and 14.24 released today.",
+        (
+            "Version Current minor Supported First Release Final Release "
+            "14 14.24 Yes September 30, 2021 November 12, 2026"
+        ),
+    )
+    chunks = tuple(
+        (
+            uuid4(),
+            DocumentChunk(
+                ordinal,
+                text,
+                hashlib.sha256(text.encode()).hexdigest(),
+                20,
+                ordinal * 200,
+                ordinal * 200 + len(text),
+            ),
+        )
+        for ordinal, text in enumerate(raw_chunks)
+    )
+    full_text = "\n".join(raw_chunks)
+    candidate_document = CandidateDocument(
+        document_id,
+        DocumentVersion(
+            uuid4(),
+            tenant_id,
+            document_id,
+            hashlib.sha256(full_text.encode()).hexdigest(),
+            full_text,
+            "text/plain",
+            "en",
+            NOW,
+        ),
+        chunks,
+        "https://www.postgresql.org/support/versioning/",
+        "PostgreSQL Versioning Policy",
+        (fact_id,),
+    )
+
+    selected = CandidateSelector(max_per_fact=1, max_total=1).select(
+        run_id=uuid4(),
+        entity="PostgreSQL",
+        facts={fact_id: fact},
+        documents=(candidate_document,),
+    )
+
+    assert selected[0].chunk.ordinal == 1
+
+
 def test_current_fact_ranks_evidence_relevance_before_document_position() -> None:
     fact_id = uuid4()
     fact = FactRequirement(

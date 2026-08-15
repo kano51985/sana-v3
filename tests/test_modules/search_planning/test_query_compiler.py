@@ -174,3 +174,28 @@ def test_conversational_subject_is_rejected_before_query_compilation() -> None:
             description="version",
             subject="sana 我好久没碰apex啦",
         )
+
+
+def test_private_memory_instructions_cannot_reach_provider_query_text() -> None:
+    intent = NormalizedIntent(
+        entity="Apex Legends",
+        aliases=("Apex",),
+        locale="en",
+        facts=(
+            FactRequirement(
+                key="private_apex_mmr",
+                fact_type=FactType.CURRENT_VALUE,
+                description="private Apex Legends MMR",
+                subject="user's private MMR in Sana's memory",
+                freshness=Freshness.CURRENT,
+            ),
+        ),
+    )
+
+    queries = QueryCompiler().compile(intent, SearchMode.FAST)
+
+    assert len(queries) == 1
+    folded = queries[0].text.casefold()
+    assert "apex legends" in folded
+    assert "mmr" in folded
+    assert all(term not in folded for term in ("sana", "memory", "user"))

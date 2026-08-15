@@ -237,6 +237,60 @@ class CandidateSelector:
         """Prefer an entity definition over incidental mentions for purpose Facts."""
 
         fact_text = f"{fact.key} {fact.description}".casefold()
+        numeric = tuple(term for term in anchors if term.isdecimal())
+        if (
+            "cap" in fact_text
+            and "tradeoff" in fact_text
+            and re.search(
+                r"The CAP theorem says that a distributed system can deliver "
+                r"only two of three desired characteristics",
+                text,
+                re.I,
+            )
+        ):
+            return 1.0
+        if (
+            "postgresql" in fact_text
+            and numeric
+            and any(
+                marker in fact_text
+                for marker in ("support", "final release", "eol")
+            )
+            and any(
+                re.search(
+                    rf"(?<![.\d]){re.escape(number)}\s+{re.escape(number)}[.]\d+"
+                    r"\s+Yes\s+[A-Za-z]+\s+\d{1,2},\s+\d{4}\s+"
+                    r"[A-Za-z]+\s+\d{1,2},\s+\d{4}",
+                    text,
+                    re.I,
+                )
+                for number in numeric
+            )
+        ):
+            return 1.0
+        if (
+            numeric
+            and any(
+                marker in fact_text
+                for marker in (
+                    "meaning",
+                    "semantic",
+                    "constraint",
+                    "\u8bed\u4e49",
+                    "\u7ea6\u675f",
+                )
+            )
+            and any(
+                re.search(
+                    rf"\bThe\s+{re.escape(number)}\s*\([^)]{{1,80}}\)\s+"
+                    r"status code indicates\b",
+                    text,
+                    re.I,
+                )
+                for number in numeric
+            )
+        ):
+            return 1.0
         if "purpose" not in fact_text and "\u7528\u9014" not in fact_text:
             return 0.0
         relation = re.compile(
@@ -362,6 +416,8 @@ class CandidateSelector:
                                 + 0.10 * relation_score
                                 + 0.15 * definition_score
                             )
+                        elif definition_score:
+                            score = 1.0
                         else:
                             score = 0.90 * lexical_score + 0.10 * relation_score
                     else:

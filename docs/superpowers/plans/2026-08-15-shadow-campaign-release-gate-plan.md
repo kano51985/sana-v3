@@ -2,13 +2,15 @@
 
 日期：2026-08-15
 
-状态：任务 0–12 离线发布门禁已完成；任务 13 live smoke 待本地 DeepSeek credential
+状态：任务 0–13 已完成；任务 14 首轮 Full 已按门禁失败封账，根因修复候选正在重新执行 Smoke → Full
 
 对应设计：docs/superpowers/specs/2026-08-15-shadow-campaign-release-gate-design.md
 
 设计基线：6c15fb3 docs: complete shadow campaign architecture audit
 
 实施收口：实际迁移保持线性 `0009_shadow_campaign_gate -> 0010_shadow_collector_audit -> 0011_document_fetch_lineage -> 0012_fetch_run_binding`，当前唯一 Alembic head 为 `0012_fetch_run_binding`。任务 11/12 的可重复测试映射、Docker 故障证据与已修复反例记录在 `docs/operations/shadow-campaign-fault-matrix.md`。离线 gate 不能替代任务 13 的真实 DeepSeek smoke。
+
+2026-08-16 live 证据：候选 `cabc5c0` 的 Smoke Campaign `d4767c0d-a902-46c9-8848-ad9cd929beae` 为 6/6、`FINAL_PASS`，完整性与隐私审计全部通过；同身份 Full Campaign `2d716ad3-7064-4351-9f81-746b3d71a6d8` 为 120/120、0 failed、0 skipped、39 degraded、311 次已观测 Provider 调用、费用 0.06070904 美元，并以 `FINAL_FAIL` 不可改写封账。硬失败由 20 次 critical gold、8 次 plan completeness 和 3 次 query pollution 构成；这不是基础设施或账本失败。后续候选修复 direct page 优先级、复合问题事实下限、污染语义降噪、规范定义排序和受审工件确定性适配。任何代码变更都会改变 candidate identity，因此必须重新运行 Smoke，不能复用上述 PASS 作为新候选父门。
 
 ## 1. 执行边界
 
