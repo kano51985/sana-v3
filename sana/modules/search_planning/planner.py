@@ -23,6 +23,54 @@ from sana.modules.search_planning.domain import (
     NormalizedIntent,
 )
 from sana.modules.search_planning.policy import SearchPlanningPolicy
+from sana.modules.search_planning.router import AutomaticModeRouter
+
+
+_COUNT_WORDS = {
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+}
+_EXPLICIT_COUNT = re.compile(
+    r"(?:列出|列举|说明|解释|比较|对比).{0,16}?"
+    r"(?P<zh>[二两三四五六七八2-8])(?:种|个|项|类|条)?|"
+    r"(?:list|name|explain|compare).{0,16}?"
+    r"(?P<en>two|three|four|five|six|seven|eight|[2-8])"
+    r"(?:\s+(?:types?|items?|facts?|objects?|options?))?",
+    re.I,
+)
+_EXPLICIT_CROSS_CHECK = re.compile(
+    r"(交叉核实|交叉验证|多源核实|cross[- ]?check|verify across|multiple sources?)",
+    re.I,
+)
+
+
+def minimum_fact_count(user_message: str, policy_version: str) -> int:
+    """Return the deterministic semantic floor that planner output must retain."""
+
+    policy = SearchPlanningPolicy(version=policy_version)
+    router_count = len(AutomaticModeRouter(policy_version).infer_fact_types(user_message))
+    explicit_counts: list[int] = []
+    for match in _EXPLICIT_COUNT.finditer(user_message):
+        raw = (match.group("zh") or match.group("en") or "").casefold()
+        explicit_counts.append(int(raw) if raw.isdecimal() else _COUNT_WORDS[raw])
+    cross_check_count = 2 if _EXPLICIT_CROSS_CHECK.search(user_message) else 1
+    return min(
+        policy.max_facts,
+        max(1, router_count, cross_check_count, *explicit_counts),
+    )
 
 
 class PlanningModelGateway(Protocol):
@@ -35,15 +83,24 @@ class IntentParser:
         policy: SearchPlanningPolicy,
         *,
         allow_optional_facts: bool = False,
+        minimum_facts: int = 1,
     ) -> None:
+        if not 1 <= minimum_facts <= policy.max_facts:
+            raise ValueError("minimum_facts must fit within the planning policy")
         self._policy = policy
         self._allow_optional_facts = allow_optional_facts
+        self._minimum_facts = minimum_facts
 
     def parse(self, text: str) -> NormalizedIntent:
         payload: dict[str, Any] = json.loads(text)
         raw_facts = payload["facts"]
-        if not isinstance(raw_facts, list) or not 1 <= len(raw_facts) <= self._policy.max_facts:
-            raise ValueError("facts must be a non-empty bounded list")
+        if (
+            not isinstance(raw_facts, list)
+            or not self._minimum_facts <= len(raw_facts) <= self._policy.max_facts
+        ):
+            raise ValueError(
+                "facts must satisfy the deterministic minimum and policy maximum"
+            )
         facts = tuple(
             FactRequirement(
                 key=str(raw["key"]),
@@ -87,7 +144,8 @@ class IntentParser:
             "character_changes, version, patch_notes, team_meta, current_value, "
             "comparison, background. freshness must be exactly STABLE, RECENT, or "
             "CURRENT. consequence must be exactly LOW, MEDIUM, or HIGH. Do not add "
-            f"markdown or commentary. Validation error type: {type(error).__name__}."
+            f"markdown or commentary. Return at least {self._minimum_facts} distinct "
+            f"facts. Validation error type: {type(error).__name__}."
         )
 
 
@@ -114,6 +172,7 @@ class SearchPlanner:
         model_budget: ModelCallBudget,
         invocation_context: ModelInvocationContext | None = None,
     ) -> NormalizedIntent:
+        minimum_facts = minimum_fact_count(user_message, self._policy.version)
         system = (
             "Normalize the current request into a canonical entity and atomic fact "
             "requirements. Do not turn conversational filler into search terms. "
@@ -129,7 +188,8 @@ class SearchPlanner:
             "consequence, and preferred_source_kinds. Allowed fact_type values are "
             "character_changes, version, patch_notes, team_meta, current_value, "
             "comparison, background. Use uppercase STABLE, RECENT, or CURRENT for "
-            "freshness and uppercase LOW, MEDIUM, or HIGH for consequence."
+            "freshness and uppercase LOW, MEDIUM, or HIGH for consequence. "
+            f"This request requires at least {minimum_facts} distinct facts."
         )
         user = f"Current request:\n{user_message.strip()}"
         if allowed_conversation_summary.strip():
@@ -140,6 +200,7 @@ class SearchPlanner:
         parser = IntentParser(
             self._policy,
             allow_optional_facts=bool(self._OPTIONAL_REQUEST.search(user_message)),
+            minimum_facts=minimum_facts,
         )
         result = await self._gateway.generate(
             ModelRole.PLANNER,

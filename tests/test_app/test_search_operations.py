@@ -3,7 +3,11 @@ from uuid import uuid4
 
 import pytest
 
-from sana.app.search_operations import SearchStepOperations, _select_ranked_hits
+from sana.app.search_operations import (
+    SearchStepOperations,
+    _bounded_fetch_deadline,
+    _select_ranked_hits,
+)
 from sana.modules.evidence.source_authority import SourceAuthorityPolicy
 from sana.modules.orchestration.domain import ArtifactRef, SearchMode, StepType
 from sana.modules.orchestration.step_handlers import StepExecutionContext
@@ -59,6 +63,19 @@ def test_fast_selection_prioritizes_official_and_diverse_sources() -> None:
 
     assert len(selected) == 1
     assert selected[0]["canonical_url"] == "https://docs.python.org/3/"
+
+
+def test_fetch_deadline_is_bounded_per_source_and_by_step() -> None:
+    assert _bounded_fetch_deadline(
+        SearchMode.FAST,
+        NOW,
+        NOW + timedelta(seconds=30),
+    ) == NOW + timedelta(seconds=4)
+    assert _bounded_fetch_deadline(
+        SearchMode.RESEARCH,
+        NOW,
+        NOW + timedelta(seconds=5),
+    ) == NOW + timedelta(seconds=5)
 
 
 def test_research_selection_covers_facts_before_redundant_publishers() -> None:

@@ -8,7 +8,7 @@ from sana.modules.content.domain import DocumentChunk, DocumentVersion
 from sana.modules.evidence.candidate_selector import CandidateDocument, CandidateSelector
 from sana.modules.evidence.domain import SourceAuthority
 from sana.modules.evidence.source_authority import SourceAuthorityPolicy, registrable_domain
-from sana.modules.search_planning.domain import FactRequirement, FactType
+from sana.modules.search_planning.domain import FactRequirement, FactType, Freshness
 
 
 NOW = datetime(2026, 8, 15, tzinfo=timezone.utc)
@@ -260,3 +260,62 @@ def test_one_fetched_document_can_ground_multiple_planned_facts() -> None:
     )
 
     assert {item.fact_id for item in selected} == {first, second}
+
+
+def test_current_fact_prefers_leading_fresh_content_over_later_lexical_match() -> None:
+    fact_id = uuid4()
+    fact = FactRequirement(
+        "rust_current_version",
+        FactType.VERSION,
+        "Rust current stable version",
+        "Rust",
+        freshness=Freshness.CURRENT,
+    )
+    tenant_id, document_id = uuid4(), uuid4()
+    raw_chunks = (
+        "Rust 1.97.1 current release information",
+        "Rust old archive current stable version release details",
+    )
+    chunks = tuple(
+        (
+            uuid4(),
+            DocumentChunk(
+                ordinal,
+                text,
+                hashlib.sha256(text.encode()).hexdigest(),
+                10,
+                ordinal * 100,
+                ordinal * 100 + len(text),
+            ),
+        )
+        for ordinal, text in enumerate(raw_chunks)
+    )
+    full_text = "\n".join(raw_chunks)
+    version = DocumentVersion(
+        uuid4(),
+        tenant_id,
+        document_id,
+        hashlib.sha256(full_text.encode()).hexdigest(),
+        full_text,
+        "text/plain",
+        "en",
+        NOW,
+    )
+    candidate_document = CandidateDocument(
+        document_id,
+        version,
+        chunks,
+        "https://www.rust-lang.org/tools/install",
+        "Rust releases",
+        (fact_id,),
+    )
+
+    selected = CandidateSelector(max_per_fact=1, max_total=1).select(
+        run_id=uuid4(),
+        entity="Rust",
+        facts={fact_id: fact},
+        documents=(candidate_document,),
+    )
+
+    assert len(selected) == 1
+    assert selected[0].chunk.ordinal == 0

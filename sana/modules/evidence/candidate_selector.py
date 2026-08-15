@@ -10,7 +10,7 @@ from uuid import UUID, uuid5
 from sana.modules.content.domain import DocumentChunk, DocumentVersion
 from sana.modules.evidence.domain import SourceAuthority
 from sana.modules.evidence.source_authority import SourceAuthorityPolicy
-from sana.modules.search_planning.domain import FactRequirement
+from sana.modules.search_planning.domain import FactRequirement, Freshness
 
 
 _TERM = re.compile(r"[\w\u3400-\u9fff]+", re.UNICODE)
@@ -246,6 +246,9 @@ class CandidateSelector:
                     0
                     if item.source_authority is SourceAuthority.OFFICIAL
                     else 1,
+                    item.chunk.ordinal
+                    if item.fact.freshness is Freshness.CURRENT
+                    else 0,
                     -item.score,
                     item.source_identity,
                     item.chunk.ordinal,

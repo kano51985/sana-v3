@@ -10,7 +10,11 @@ from sana.modules.search_planning.domain import (
     Freshness,
     NormalizedIntent,
 )
-from sana.modules.search_planning.planner import IntentParser, SearchPlanner
+from sana.modules.search_planning.planner import (
+    IntentParser,
+    SearchPlanner,
+    minimum_fact_count,
+)
 from sana.modules.search_planning.policy import SearchPlanningPolicy
 
 
@@ -131,3 +135,31 @@ def test_model_cannot_silently_mark_requested_fact_optional() -> None:
 
     assert required_intent.facts[0].required is True
     assert optional_intent.facts[0].required is False
+
+
+def test_minimum_fact_count_preserves_explicit_enumeration() -> None:
+    message = "请研究 Git 对象模型：列出四种对象类型，并分别说明用途"
+
+    assert minimum_fact_count(message, "search-v6") == 4
+
+
+def test_intent_parser_rejects_semantically_incomplete_fact_list() -> None:
+    parser = IntentParser(SearchPlanningPolicy(), minimum_facts=4)
+    payload = json.dumps(
+        {
+            "entity": "Git",
+            "aliases": [],
+            "locale": "zh-CN",
+            "facts": [
+                {
+                    "key": "object_model",
+                    "fact_type": "background",
+                    "description": "Git object model",
+                    "subject": "Git",
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ValueError, match="deterministic minimum"):
+        parser.parse(payload)

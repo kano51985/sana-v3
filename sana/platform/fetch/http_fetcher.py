@@ -52,6 +52,7 @@ class HttpContentFetcher:
             "text/html",
             "application/xhtml+xml",
             "text/plain",
+            "text/csv",
             "application/json",
             "application/pdf",
         }
@@ -151,7 +152,7 @@ class HttpContentFetcher:
                                 follow_redirects=False,
                                 headers={
                                     "User-Agent": "SanaResearchBot/0.2",
-                                    "Accept": "text/html,text/plain,application/json,application/pdf;q=0.8",
+                                    "Accept": "text/html,text/plain,text/csv,application/json,application/pdf;q=0.8",
                                 },
                             ) as response:
                                 http_status = response.status_code
@@ -192,7 +193,7 @@ class HttpContentFetcher:
                                     )
                                 if response.status_code >= 400:
                                     raise TypedError(
-                                        ErrorCategory.PERMANENT,
+                                        ErrorCategory.CONTENT,
                                         f"fetch_http_{response.status_code}",
                                         f"Fetch returned HTTP {response.status_code}",
                                         retryable=False,

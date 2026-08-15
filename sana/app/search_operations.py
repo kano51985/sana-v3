@@ -61,7 +61,7 @@ from sana.modules.search_planning.domain import (
     Freshness,
     NormalizedIntent,
 )
-from sana.modules.search_planning.planner import SearchPlanner
+from sana.modules.search_planning.planner import SearchPlanner, minimum_fact_count
 from sana.modules.search_planning.query_compiler import QueryCompiler
 from sana.modules.search_planning.router import AutomaticModeRouter
 from sana.modules.shared.errors import ErrorCategory, TypedError
@@ -158,6 +158,7 @@ class HeuristicIntentPlanner:
     }
 
     def __init__(self, policy_version: str) -> None:
+        self._policy_version = policy_version
         self._router = AutomaticModeRouter(policy_version)
 
     @classmethod
@@ -209,6 +210,25 @@ class HeuristicIntentPlanner:
                     freshness=(Freshness.CURRENT if current else Freshness.STABLE),
                     consequence=(Consequence.HIGH if high else Consequence.LOW),
                     preferred_source_kinds=source_kinds,
+                )
+            )
+        minimum_facts = minimum_fact_count(message, self._policy_version)
+        while len(facts) < minimum_facts:
+            index = len(facts) + 1
+            item_subject = (
+                f"{entity} \u7b2c{index}\u9879"
+                if re.search(r"[\u3400-\u9fff]", message)
+                else f"{entity} item {index}"
+            )
+            facts.append(
+                FactRequirement(
+                    key=f"requested_fact_{index}",
+                    fact_type=FactType.BACKGROUND,
+                    description=f"{entity} requested fact {index}",
+                    subject=item_subject,
+                    freshness=(Freshness.CURRENT if current else Freshness.STABLE),
+                    consequence=(Consequence.HIGH if high else Consequence.LOW),
+                    preferred_source_kinds=("official", "independent"),
                 )
             )
         locale = "zh-CN" if re.search(r"[\u3400-\u9fff]", message) else "en"
@@ -269,6 +289,25 @@ def _fact_from_dict(payload: dict[str, Any]) -> FactRequirement:
     )
 
 
+_FETCH_WINDOW_SECONDS = {
+    SearchMode.FAST: 4.0,
+    SearchMode.RESEARCH: 8.0,
+}
+
+
+def _bounded_fetch_deadline(
+    mode: SearchMode,
+    now: datetime,
+    step_deadline: datetime,
+) -> datetime:
+    """Reserve the pipeline deadline by bounding any one remote source fetch."""
+
+    return min(
+        step_deadline,
+        now + timedelta(seconds=_FETCH_WINDOW_SECONDS[mode]),
+    )
+
+
 def _select_ranked_hits(
     candidates: tuple[dict[str, Any], ...],
     *,
@@ -319,6 +358,11 @@ def _select_ranked_hits(
     # new publisher so cross-check requests retain source diversity.
     remaining = list(ranked)
     selected: list[dict[str, Any]] = []
+    target_fact_ids = {
+        fact_id
+        for item, _, _ in ranked
+        for fact_id in map(str, item.get("fact_ids", ()))
+    }
     covered_fact_ids: set[str] = set()
     seen_identities: set[str] = set()
     while remaining and len(selected) < max_selected_hits:
@@ -370,6 +414,15 @@ def _select_ranked_hits(
         selected.append(item)
         seen_identities.add(identity)
         covered_fact_ids.update(map(str, item.get("fact_ids", ())))
+        coverage_complete = bool(target_fact_ids) and target_fact_ids <= covered_fact_ids
+        unseen_identity_remains = any(
+            remaining_identity not in seen_identities
+            for _, remaining_identity, _ in remaining
+        )
+        if coverage_complete and (
+            len(seen_identities) >= 2 or not unseen_identity_remains
+        ):
+            break
     return selected
 
 
@@ -735,8 +788,22 @@ class SearchStepOperations:
     async def fetch(self, context: StepExecutionContext) -> StepExecutionResult:
         payload = await self._json(context)
         hit = dict(payload["hit"])
+        plan = await self.artifacts.get_json(
+            context.tenant_id,
+            _reference(dict(payload["plan_ref"])),
+        )
+        if not isinstance(plan, dict):
+            raise TypeError("Fetch plan artifact must be a JSON object")
+        mode = SearchMode(str(plan["mode"]))
         fetched = await self.fetcher.fetch(
-            FetchRequest(str(hit["canonical_url"]), context.deadline_at)
+            FetchRequest(
+                str(hit["canonical_url"]),
+                _bounded_fetch_deadline(
+                    mode,
+                    context.clock.now(),
+                    context.deadline_at,
+                ),
+            )
         )
         if fetched.status is not FetchStatus.SUCCEEDED:
             assert fetched.error is not None

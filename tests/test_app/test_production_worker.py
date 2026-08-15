@@ -49,6 +49,24 @@ async def test_local_heuristic_planner_removes_conversation_filler_from_queries(
 
 
 @pytest.mark.asyncio
+async def test_local_heuristic_planner_preserves_enumerated_fact_floor() -> None:
+    planner = HeuristicIntentPlanner("search-v6")
+
+    planning = await planner.plan(
+        "\u8bf7\u7814\u7a76 Git \u5bf9\u8c61\u6a21\u578b\uff1a"
+        "\u5217\u51fa\u56db\u79cd\u5bf9\u8c61\u7c7b\u578b\uff0c"
+        "\u5e76\u5206\u522b\u8bf4\u660e\u7528\u9014",
+        mode=SearchMode.RESEARCH,
+        deadline=NOW,
+        max_llm_calls=8,
+    )
+    queries = QueryCompiler().compile(planning.intent, SearchMode.RESEARCH)
+
+    assert len(planning.intent.facts) == 4
+    assert len({query.fact_key for query in queries}) == 4
+
+
+@pytest.mark.asyncio
 async def test_model_planner_failure_uses_explicit_degraded_local_plan() -> None:
     planning = await ModelIntentPlanner(FailingSearchPlanner()).plan(
         "Python 当前稳定版本是什么？",

@@ -5,6 +5,7 @@ import pytest
 
 from sana.modules.content.domain import FetchRequest, FetchStatus
 from sana.modules.shared.clock import FrozenClock, SystemClock
+from sana.modules.shared.errors import ErrorCategory
 from sana.platform.fetch.http_fetcher import HttpContentFetcher
 from sana.platform.security.ssrf import SSRFBlocked, SSRFGuard
 
@@ -253,3 +254,58 @@ async def test_successful_http_fetch_is_bounded_and_hashed() -> None:
     assert artifact.status is FetchStatus.SUCCEEDED
     assert artifact.body == body
     assert artifact.content_hash is not None
+
+
+async def test_csv_is_an_allowed_fetch_content_type() -> None:
+    body = b"Value,Description\n404,Not Found\n"
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                headers={"content-type": "text/csv"},
+                content=body,
+                extensions={"network_stream": FakeNetworkStream(PUBLIC_IP)},
+            )
+        )
+    )
+    fetcher = HttpContentFetcher(
+        SSRFGuard(FakeResolver({"public.example": (PUBLIC_IP, PUBLIC_IP)})),
+        FrozenClock(NOW),
+        client=client,
+    )
+
+    artifact = await fetcher.fetch(
+        FetchRequest("https://public.example/status.csv", NOW + timedelta(seconds=5))
+    )
+    await client.aclose()
+
+    assert artifact.status is FetchStatus.SUCCEEDED
+    assert artifact.media_type == "text/csv"
+
+
+async def test_public_source_403_is_a_content_failure_not_configuration() -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                403,
+                headers={"content-type": "text/plain"},
+                content=b"forbidden",
+                extensions={"network_stream": FakeNetworkStream(PUBLIC_IP)},
+            )
+        )
+    )
+    fetcher = HttpContentFetcher(
+        SSRFGuard(FakeResolver({"public.example": (PUBLIC_IP, PUBLIC_IP)})),
+        FrozenClock(NOW),
+        client=client,
+    )
+
+    artifact = await fetcher.fetch(
+        FetchRequest("https://public.example/blocked", NOW + timedelta(seconds=5))
+    )
+    await client.aclose()
+
+    assert artifact.status is FetchStatus.FAILED
+    assert artifact.error is not None
+    assert artifact.error.code == "fetch_http_403"
+    assert artifact.error.category is ErrorCategory.CONTENT
