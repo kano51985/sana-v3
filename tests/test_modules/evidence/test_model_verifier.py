@@ -642,6 +642,226 @@ def git_object_candidate(
             "deterministic-postgresql-support-v1",
             "November 14, 2030",
         ),
+        (
+            FactRequirement(
+                "rust_latest_stable_version",
+                FactType.VERSION,
+                "Latest stable Rust version on the official release notes page",
+                "Rust latest stable release",
+            ),
+            "https://doc.rust-lang.org/stable/releases.html",
+            "rust-lang.org",
+            SourceAuthority.OFFICIAL,
+            "Rust 1.97.1 8bab26f4f Rust Release Notes Version 1.97.1 (2026-07-16)",
+            "deterministic-reviewed-release-v1",
+            "Rust 1.97.1",
+        ),
+        (
+            FactRequirement(
+                "python_latest_stable_version",
+                FactType.VERSION,
+                "Latest stable Python version on the official downloads page",
+                "Python latest stable download",
+            ),
+            "https://www.python.org/downloads/",
+            "python.org",
+            SourceAuthority.OFFICIAL,
+            "Download the latest source release Download Python 3.14.7",
+            "deterministic-reviewed-release-v1",
+            "Download Python 3.14.7",
+        ),
+        (
+            FactRequirement(
+                "node_active_lts_release_line",
+                FactType.VERSION,
+                "Current Node.js release line with LTS status",
+                "Node.js current LTS release line",
+            ),
+            "https://nodejs.org/en/about/previous-releases",
+            "nodejs.org",
+            SourceAuthority.OFFICIAL,
+            "v 24 Krypton May 06, 2025 Aug 03, 2026 LTS Details",
+            "deterministic-reviewed-release-v1",
+            "v 24 Krypton",
+        ),
+        (
+            FactRequirement(
+                "git_latest_stable_release",
+                FactType.VERSION,
+                "Latest stable Git source release on the official Git website",
+                "Git latest source release",
+            ),
+            "https://git-scm.com/",
+            "git-scm.com",
+            SourceAuthority.OFFICIAL,
+            "Git Latest source release 2.55.0 Release Notes (2026-06-29)",
+            "deterministic-reviewed-release-v1",
+            "Latest source release 2.55.0",
+        ),
+        (
+            FactRequirement(
+                "current_season_or_release",
+                FactType.VERSION,
+                "Current official Apex Legends season or game release",
+                "Apex Legends current official release",
+            ),
+            (
+                "https://www.ea.com/games/apex-legends/apex-legends/news/"
+                "overclocked-midseason-patch-notes"
+            ),
+            "ea.com",
+            SourceAuthority.OFFICIAL,
+            (
+                "Apex Legends™: Overclocked Midseason Patch Notes June 22, 2026 "
+                "INTRO Welcome back to Overclocked Split 2! Patch notes follow."
+            ),
+            "deterministic-reviewed-release-v1",
+            "Welcome back to Overclocked Split 2!",
+        ),
+        (
+            FactRequirement(
+                "bloodhound_tactical_changes",
+                FactType.CHARACTER_CHANGES,
+                "Latest official Bloodhound passive and tactical balance changes",
+                "Apex Bloodhound tactical changes",
+            ),
+            (
+                "https://www.ea.com/games/apex-legends/apex-legends/news/"
+                "breach-patch-notes"
+            ),
+            "ea.com",
+            SourceAuthority.OFFICIAL,
+            (
+                "Apex Legends™: Breach Patch Notes February 9, 2026 BLOODHOUND "
+                "Abilities Passive changed. Tactical Total scan duration "
+                "up to 4s (was 3s), full-body duration remains half the full scan "
+                "duration. Reduced screen coloration during scan. Fewer clues will "
+                "pop-up on screen when your tactical successfully scans an enemy "
+                "Ultimate: Cooldown reduced to 2.5 minutes."
+            ),
+            "deterministic-apex-reviewed-v1",
+            "Total scan duration up to 4s",
+        ),
+        (
+            FactRequirement(
+                "bloodhound_ultimate_changes",
+                FactType.CHARACTER_CHANGES,
+                "Latest official Bloodhound ultimate and upgrade balance changes",
+                "Apex Bloodhound ultimate changes",
+            ),
+            (
+                "https://www.ea.com/games/apex-legends/apex-legends/news/"
+                "breach-patch-notes"
+            ),
+            "ea.com",
+            SourceAuthority.OFFICIAL,
+            (
+                "Apex Legends™: Breach Patch Notes February 9, 2026 BLOODHOUND "
+                "Ultimate: Cooldown reduced to 2.5 minutes (was 4 minutes) "
+                "Activation time reduced by ~20% Knocks while your ultimate is active "
+                "increase the duration by 5s Upgrades Level 2 Taste of Blood"
+            ),
+            "deterministic-apex-reviewed-v1",
+            "Cooldown reduced to 2.5 minutes",
+        ),
+        (
+            FactRequirement(
+                "current_map_rotation",
+                FactType.CURRENT_VALUE,
+                "Current official Apex Legends map rotation",
+                "Apex Legends map rotation",
+            ),
+            (
+                "https://www.ea.com/games/apex-legends/apex-legends/news/"
+                "overclocked-midseason-patch-notes"
+            ),
+            "ea.com",
+            SourceAuthority.OFFICIAL,
+            (
+                "Apex Legends™: Overclocked Midseason Patch Notes June 22, 2026 "
+                "MAPS This split’s map rotations are as follows: Pubs Storm Point "
+                "World’s Edge Kings Canyon Ranked Storm Point World’s Edge E-District "
+                "Mixtape 6/23/26"
+            ),
+            "deterministic-apex-reviewed-v1",
+            "Ranked Storm Point World’s Edge E-District",
+        ),
+        (
+            FactRequirement(
+                "ranked_rules_changes",
+                FactType.PATCH_NOTES,
+                "Current official Apex Legends ranked rules changes",
+                "Apex Legends ranked rules",
+            ),
+            (
+                "https://www.ea.com/games/apex-legends/apex-legends/news/"
+                "overclocked-midseason-patch-notes"
+            ),
+            "ea.com",
+            SourceAuthority.OFFICIAL,
+            (
+                "Apex Legends™: Overclocked Midseason Patch Notes June 22, 2026 "
+                "RANKED Removing “Champion Squad” Screen We have removed the "
+                "“Champion Squad” screen from the Ranked match start flow. You will "
+                "still see your team on the Your Squad screen then immediately load "
+                "into the dropship."
+            ),
+            "deterministic-apex-reviewed-v1",
+            "immediately load into the dropship",
+        ),
+        (
+            FactRequirement(
+                "community_team_composition_frequency",
+                FactType.TEAM_META,
+                "Current most common Apex Legends trio composition in independent data",
+                "Apex trio composition frequency",
+            ),
+            "https://apexranked.com/meta",
+            "apexranked.com",
+            SourceAuthority.INDEPENDENT,
+            (
+                "Last updated: 2026-08-15T04:48:55Z "
+                "Most Common Trio Compositions 1 A Axle L Loba S Seer 2,045× seen "
+                "+41.9 RP 2 A Axle L Loba P Pathfinder 713× seen +29.6 RP"
+            ),
+            "deterministic-apex-reviewed-v1",
+            "A Axle L Loba S Seer",
+        ),
+        (
+            FactRequirement(
+                "community_team_composition_performance",
+                FactType.TEAM_META,
+                "Current highest earning Apex Legends trio composition",
+                "Apex trio composition performance",
+            ),
+            "https://apexranked.com/meta",
+            "apexranked.com",
+            SourceAuthority.INDEPENDENT,
+            (
+                "Last updated: 2026-08-15T04:48:55Z "
+                "Highest Earning Trio Compositions 1 A Axle L Loba V Valkyrie "
+                "+68.7 RP 43 games 2 A Alter L Loba S Sparrow +62.8 RP 41 games"
+            ),
+            "deterministic-apex-reviewed-v1",
+            "A Axle L Loba V Valkyrie",
+        ),
+        (
+            FactRequirement(
+                "community_bloodhound_meta",
+                FactType.TEAM_META,
+                "Independent current Bloodhound pick-rate and RP-performance context",
+                "Apex Bloodhound community meta",
+            ),
+            "https://apexranked.com/meta",
+            "apexranked.com",
+            SourceAuthority.INDEPENDENT,
+            (
+                "Last updated: 2026-08-15T04:48:55Z "
+                "B Bloodhound +36.3 Win 43.8% Pick 0.8% Games 314"
+            ),
+            "deterministic-apex-reviewed-v1",
+            "Bloodhound +36.3",
+        ),
     ),
 )
 async def test_reviewed_structured_sources_skip_probabilistic_verification(
@@ -1074,6 +1294,72 @@ async def test_private_future_weights_cannot_be_inferred_from_open_weight_models
 
     assert result.degraded is False
     assert result.evidence[0].verdict is EvidenceVerdict.REJECTED
+
+
+@pytest.mark.asyncio
+async def test_source_set_evidence_gap_is_rejected_without_calling_a_model() -> None:
+    item = reviewed_text_candidate(
+        "The public model catalog lists currently available models.",
+        FactRequirement(
+            "openai_unreleased_weights_official_evidence_gap",
+            FactType.CURRENT_VALUE,
+            "No official public source discloses exact private unreleased weights",
+            "OpenAI public model catalog",
+        ),
+        "https://developers.openai.com/api/docs/models/all",
+    )
+    item = replace(
+        item,
+        source_identity="openai.com",
+        source_authority=SourceAuthority.OFFICIAL,
+    )
+
+    result = await ModelEvidenceVerifier(ForbiddenGateway()).verify(
+        (item,),
+        invocation_context=context(item),
+        deadline=NOW + timedelta(seconds=5),
+        verified_at=NOW,
+    )
+
+    assert result.degraded is False
+    assert result.evidence[0].verdict is EvidenceVerdict.REJECTED
+    assert result.evidence[0].verifier_version == "deterministic-audit-v1"
+
+
+@pytest.mark.asyncio
+async def test_stale_reviewed_current_page_is_rejected_without_model_override() -> None:
+    item = reviewed_text_candidate(
+        (
+            "Apex Legends™: Old Patch Notes January 1, 2025 INTRO "
+            "Welcome back to an old season!"
+        ),
+        FactRequirement(
+            "current_season_or_release",
+            FactType.VERSION,
+            "Current official Apex Legends season or game release",
+            "Apex Legends current official release",
+        ),
+        (
+            "https://www.ea.com/games/apex-legends/apex-legends/news/"
+            "overclocked-midseason-patch-notes"
+        ),
+    )
+    item = replace(
+        item,
+        source_identity="ea.com",
+        source_authority=SourceAuthority.OFFICIAL,
+    )
+
+    result = await ModelEvidenceVerifier(ForbiddenGateway()).verify(
+        (item,),
+        invocation_context=context(item),
+        deadline=NOW + timedelta(seconds=5),
+        verified_at=NOW,
+    )
+
+    assert result.degraded is False
+    assert result.evidence[0].verdict is EvidenceVerdict.REJECTED
+    assert result.evidence[0].verifier_version == "deterministic-audit-v1"
 
 
 def test_deterministic_mode_fails_closed_for_lexical_overlap() -> None:

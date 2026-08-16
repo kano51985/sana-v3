@@ -953,6 +953,214 @@ class ModelEvidenceVerifier:
             ("direct_support", "explicit_value"),
         )
 
+    @staticmethod
+    def _reviewed_page_date_is_recent(
+        candidate: SelectedCandidate,
+        *,
+        max_age_days: int,
+    ) -> bool:
+        match = re.search(
+            r"\b(January|February|March|April|May|June|July|August|"
+            r"September|October|November|December)\s+\d{1,2},\s+\d{4}\b",
+            candidate.version.text,
+        )
+        if match is None:
+            return False
+        published = datetime.strptime(match.group(0), "%B %d, %Y").date()
+        age_days = (candidate.version.fetched_at.date() - published).days
+        return -1 <= age_days <= max_age_days
+
+    @staticmethod
+    def _reviewed_live_table_is_recent(
+        candidate: SelectedCandidate,
+        *,
+        max_age_days: int,
+    ) -> bool:
+        match = re.search(
+            r"\bLast updated:\s*(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}Z",
+            candidate.version.text,
+            re.I,
+        )
+        if match is None:
+            return False
+        updated = datetime.strptime(match.group(1), "%Y-%m-%d").date()
+        age_days = (candidate.version.fetched_at.date() - updated).days
+        return -1 <= age_days <= max_age_days
+
+    @classmethod
+    def _deterministic_reviewed_release(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Extract current release labels from reviewed first-party pages at runtime."""
+
+        if candidate.source_authority is not SourceAuthority.OFFICIAL:
+            return None
+        source = candidate.url.split("#", 1)[0].split("?", 1)[0].rstrip("/")
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        ).casefold()
+        pattern = None
+        if (
+            source == "https://doc.rust-lang.org/stable/releases.html"
+            and "rust_latest_stable_version" in fact_text
+            and candidate.chunk.ordinal == 0
+        ):
+            pattern = r"\bRust\s+\d+[.]\d+[.]\d+\b"
+        elif (
+            source == "https://www.python.org/downloads"
+            and "python_latest_stable_version" in fact_text
+        ):
+            pattern = r"\bDownload\s+Python\s+\d+[.]\d+[.]\d+\b"
+        elif (
+            source == "https://nodejs.org/en/about/previous-releases"
+            and "node_active_lts_release_line" in fact_text
+        ):
+            pattern = (
+                r"\bv\s*\d+\s+[A-Za-z][A-Za-z0-9-]*\s+"
+                r"[A-Za-z]+\s+\d{1,2},\s+\d{4}\s+"
+                r"[A-Za-z]+\s+\d{1,2},\s+\d{4}\s+LTS\b"
+            )
+        elif (
+            source == "https://git-scm.com"
+            and "git_latest_stable_release" in fact_text
+        ):
+            pattern = (
+                r"\bLatest\s+(?:stable\s+)?(?:source\s+)?release\s+"
+                r"\d+[.]\d+[.]\d+\b"
+            )
+        elif (
+            source
+            in {
+                "https://www.ea.com/games/apex-legends/apex-legends/news/"
+                "overclocked-patch-notes",
+                "https://www.ea.com/games/apex-legends/apex-legends/news/"
+                "overclocked-midseason-patch-notes",
+            }
+            and any(
+                marker in fact_text
+                for marker in ("current_season_or_release", "current_release")
+            )
+            and cls._reviewed_page_date_is_recent(candidate, max_age_days=120)
+        ):
+            pattern = r"\bWelcome back to\s+[^.!]{1,80}!"
+        if pattern is None:
+            return None
+        statement = re.search(pattern, candidate.chunk.text, re.I)
+        if statement is None or len(statement.group(0)) > 240:
+            return None
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            statement.group(0).strip(),
+            0.99,
+            ("direct_support", "runtime_current_value"),
+        )
+
+    @classmethod
+    def _deterministic_apex_reviewed_fact(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> ProposedVerification | None:
+        """Extract reviewed Apex patch and live community-table facts."""
+
+        source = candidate.url.split("#", 1)[0].split("?", 1)[0].rstrip("/")
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        ).casefold()
+        official_midseason = (
+            "https://www.ea.com/games/apex-legends/apex-legends/news/"
+            "overclocked-midseason-patch-notes"
+        )
+        official_breach = (
+            "https://www.ea.com/games/apex-legends/apex-legends/news/"
+            "breach-patch-notes"
+        )
+        if source == official_midseason and not cls._reviewed_page_date_is_recent(
+            candidate,
+            max_age_days=120,
+        ):
+            return None
+        if source == official_breach and not cls._reviewed_page_date_is_recent(
+            candidate,
+            max_age_days=365,
+        ):
+            return None
+        if source == "https://apexranked.com/meta" and not (
+            cls._reviewed_live_table_is_recent(candidate, max_age_days=14)
+        ):
+            return None
+        pattern = None
+        if (
+            candidate.source_authority is SourceAuthority.OFFICIAL
+            and source == official_breach
+            and "bloodhound_tactical_changes" in fact_text
+        ):
+            pattern = (
+                r"\bTactical\s+Total scan duration up to\s+\d+(?:[.]\d+)?s\s+"
+                r"\(was\s+\d+(?:[.]\d+)?s\).*?"
+                r"Fewer clues will pop-up on screen when your tactical successfully "
+                r"scans an enemy"
+            )
+        elif (
+            candidate.source_authority is SourceAuthority.OFFICIAL
+            and source == official_breach
+            and "bloodhound_ultimate_changes" in fact_text
+        ):
+            pattern = r"\bUltimate\s*:\s*Cooldown reduced.*?(?=\s+Upgrades\s+Level 2)"
+        elif (
+            candidate.source_authority is SourceAuthority.OFFICIAL
+            and source == official_midseason
+            and "current_map_rotation" in fact_text
+        ):
+            pattern = (
+                r"This split(?:'|\u2019)s map rotations are as follows:\s+"
+                r"Pubs\s+.*?\s+Ranked\s+.*?(?=\s+Mixtape\b)"
+            )
+        elif (
+            candidate.source_authority is SourceAuthority.OFFICIAL
+            and source == official_midseason
+            and "ranked_rules_changes" in fact_text
+        ):
+            pattern = (
+                r"Removing\s+[\"\u201c]Champion Squad[\"\u201d]\s+Screen\s+"
+                r"We have removed.*?immediately load into the dropship\."
+            )
+        elif source == "https://apexranked.com/meta" and (
+            candidate.source_authority is SourceAuthority.INDEPENDENT
+        ):
+            if "community_bloodhound_meta" in fact_text:
+                pattern = (
+                    r"\bBloodhound\s+[+]\d+(?:[.]\d+)?\s+Win\s+"
+                    r"\d+(?:[.]\d+)?%\s+Pick\s+\d+(?:[.]\d+)?%\s+Games\s+[\d,]+"
+                )
+            elif "community_team_composition_frequency" in fact_text:
+                pattern = (
+                    r"Most Common Trio Compositions\s+1\s+.*?"
+                    r"(?=\s+2\s+[A-Z]\s+)"
+                )
+            elif "community_team_composition_performance" in fact_text:
+                pattern = (
+                    r"Highest Earning Trio Compositions\s+1\s+.*?"
+                    r"(?=\s+2\s+[A-Z]\s+)"
+                )
+        if pattern is None:
+            return None
+        statement = re.search(pattern, candidate.chunk.text, re.I | re.S)
+        if statement is None or len(statement.group(0)) > 600:
+            return None
+        return ProposedVerification(
+            candidate.fact_id,
+            candidate.id,
+            SupportType.SUPPORTS,
+            statement.group(0).strip(),
+            0.99,
+            ("direct_support", "runtime_structured_fact"),
+        )
+
     @classmethod
     def _deterministic_postgresql_support(
         cls,
@@ -1151,6 +1359,14 @@ class ModelEvidenceVerifier:
                 "deterministic-deepseek-pricing-v1",
             ),
             (
+                cls._deterministic_reviewed_release,
+                "deterministic-reviewed-release-v1",
+            ),
+            (
+                cls._deterministic_apex_reviewed_fact,
+                "deterministic-apex-reviewed-v1",
+            ),
+            (
                 cls._deterministic_postgresql_support,
                 "deterministic-postgresql-support-v1",
             ),
@@ -1210,6 +1426,78 @@ class ModelEvidenceVerifier:
             )
             return target_bound and availability_bound
         return True
+
+    @staticmethod
+    def _requires_source_set_absence(candidate: SelectedCandidate) -> bool:
+        """Identify gap facts that no single excerpt is allowed to prove."""
+
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        ).casefold()
+        return "evidence_gap" in fact_text or any(
+            marker in fact_text
+            for marker in (
+                "no official source discloses",
+                "no official public source",
+                "no independent public source",
+                "no current public source",
+                "no public source can",
+            )
+        )
+
+    @classmethod
+    def _is_stale_reviewed_current_candidate(
+        cls,
+        candidate: SelectedCandidate,
+    ) -> bool:
+        source = candidate.url.split("#", 1)[0].split("?", 1)[0].rstrip("/")
+        fact_text = (
+            f"{candidate.fact.key} {candidate.fact.subject} "
+            f"{candidate.fact.description}"
+        ).casefold()
+        midseason = (
+            "https://www.ea.com/games/apex-legends/apex-legends/news/"
+            "overclocked-midseason-patch-notes"
+        )
+        breach = (
+            "https://www.ea.com/games/apex-legends/apex-legends/news/"
+            "breach-patch-notes"
+        )
+        if source == midseason and any(
+            marker in fact_text
+            for marker in (
+                "current_season_or_release",
+                "current_release",
+                "current_map_rotation",
+                "ranked_rules_changes",
+            )
+        ):
+            return not cls._reviewed_page_date_is_recent(
+                candidate,
+                max_age_days=120,
+            )
+        if source == breach and any(
+            marker in fact_text
+            for marker in ("bloodhound_tactical_changes", "bloodhound_ultimate_changes")
+        ):
+            return not cls._reviewed_page_date_is_recent(
+                candidate,
+                max_age_days=365,
+            )
+        if source == "https://apexranked.com/meta" and any(
+            marker in fact_text
+            for marker in (
+                "community_bloodhound_meta",
+                "community_team_composition_frequency",
+                "community_team_composition_performance",
+            )
+        ):
+            return not cls._reviewed_live_table_is_recent(
+                candidate,
+                max_age_days=14,
+            )
+        return False
 
     @staticmethod
     def _messages(candidates: tuple[SelectedCandidate, ...]) -> tuple[ModelMessage, ...]:
@@ -1374,6 +1662,8 @@ class ModelEvidenceVerifier:
             candidate
             for candidate in candidates
             if candidate.fact_id not in resolved_fact_ids
+            and not self._requires_source_set_absence(candidate)
+            and not self._is_stale_reviewed_current_candidate(candidate)
         )
         if not model_candidates:
             return VerifiedBatch(

@@ -66,7 +66,7 @@ async def test_local_planner_preserves_all_reviewed_git_object_relationships() -
     assert len(planning.intent.facts) == 5
     assert len({query.fact_key for query in queries}) == 5
     assert planning.strategy == "reviewed_template"
-    assert planning.strategy_version == "reviewed-intents-v1"
+    assert planning.strategy_version == "reviewed-intents-v2"
 
 
 @pytest.mark.asyncio

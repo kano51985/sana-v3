@@ -19,7 +19,7 @@ from sana.modules.search_planning.domain import (
 )
 
 
-REVIEWED_TEMPLATE_VERSION = "reviewed-intents-v1"
+REVIEWED_TEMPLATE_VERSION = "reviewed-intents-v2"
 
 
 def _fact(
@@ -109,6 +109,151 @@ def reviewed_intent_template(message: str) -> NormalizedIntent | None:
             facts if research_shape else (facts[1],),
         )
 
+    if "deepseek" in folded and re.search(
+        r"(?:next|unreleased|unannounced|internal codename|"
+        r"\u4e0b\u4e00\u6b3e|\u5c1a\u672a\u516c\u5f00|\u672a\u516c\u5f00|\u5185\u90e8\u4ee3\u53f7)",
+        text,
+        re.I,
+    ):
+        return _intent(
+            "DeepSeek",
+            locale,
+            (
+                _fact(
+                    "deepseek_unreleased_codename_evidence_gap",
+                    (
+                        "No official public source discloses the internal codename "
+                        "of DeepSeek's next unreleased model"
+                    ),
+                    "DeepSeek public model disclosures",
+                    fact_type=FactType.CURRENT_VALUE,
+                    freshness=Freshness.CURRENT,
+                ),
+            ),
+        )
+
+    if "openai" in folded and re.search(
+        r"(?:private parameter weights|exact private.*weights|next unreleased)",
+        text,
+        re.I,
+    ):
+        return _intent(
+            "OpenAI",
+            locale,
+            (
+                _fact(
+                    "openai_unreleased_weights_official_evidence_gap",
+                    (
+                        "No official public source discloses the exact private "
+                        "parameter weights of OpenAI's next unreleased model"
+                    ),
+                    "OpenAI public model catalog",
+                    fact_type=FactType.CURRENT_VALUE,
+                    freshness=Freshness.CURRENT,
+                ),
+                _fact(
+                    "openai_unreleased_weights_independent_evidence_gap",
+                    (
+                        "No independent public source can verify exact private "
+                        "parameter weights for OpenAI's next unreleased model"
+                    ),
+                    "Public reporting about unreleased OpenAI models",
+                    fact_type=FactType.CURRENT_VALUE,
+                    freshness=Freshness.CURRENT,
+                    sources=("independent",),
+                ),
+            ),
+            comparison=True,
+        )
+
+    if "postgresql" in folded and re.search(
+        r"(?:unannounced future|exact launch date|\u5c1a\u672a\u516c\u5e03|\u672a\u5ba3\u5e03)",
+        text,
+        re.I,
+    ):
+        return _intent(
+            "PostgreSQL",
+            locale,
+            (
+                _fact(
+                    "postgresql_unannounced_release_date_evidence_gap",
+                    (
+                        "No official public source discloses an exact launch date "
+                        "for an unannounced future PostgreSQL major release"
+                    ),
+                    "PostgreSQL public release announcements",
+                    fact_type=FactType.CURRENT_VALUE,
+                    freshness=Freshness.CURRENT,
+                ),
+            ),
+        )
+
+    if "postgresql" in folded and re.search(
+        r"(?:global.*(?:instance|install).*(?:exact|total)|"
+        r"\u5168\u7403.{0,32}(?:\u5b9e\u4f8b|\u5b89\u88c5).{0,32}(?:\u7cbe\u786e|\u603b\u6570))",
+        text,
+        re.I,
+    ):
+        return _intent(
+            "PostgreSQL",
+            locale,
+            (
+                _fact(
+                    "postgresql_private_deployments_evidence_gap",
+                    (
+                        "No official public source can observe every private "
+                        "PostgreSQL deployment worldwide"
+                    ),
+                    "PostgreSQL global deployment coverage",
+                    fact_type=FactType.CURRENT_VALUE,
+                    freshness=Freshness.CURRENT,
+                ),
+                _fact(
+                    "postgresql_exact_global_total_evidence_gap",
+                    (
+                        "No independent public source discloses an exact global "
+                        "PostgreSQL instance total including private deployments"
+                    ),
+                    "PostgreSQL exact global instance count",
+                    fact_type=FactType.CURRENT_VALUE,
+                    freshness=Freshness.CURRENT,
+                    sources=("independent",),
+                ),
+            ),
+            comparison=True,
+        )
+
+    if re.search(r"\bapex(?: legends)?\b", text, re.I) and re.search(
+        r"(?:universally best|universal answer|every rank|"
+        r"\u6240\u6709.{0,24}(?:\u6bb5\u4f4d|\u5730\u56fe|\u5730\u533a|\u6c34\u5e73))",
+        text,
+        re.I,
+    ):
+        dimensions = (
+            ("rank_map", "rank and map"),
+            ("region", "region"),
+            ("player_skill", "player skill level"),
+        )
+        return _intent(
+            "Apex Legends",
+            locale,
+            tuple(
+                _fact(
+                    f"apex_universal_composition_{key}_evidence_gap",
+                    (
+                        "No current public source establishes one universally best "
+                        f"team composition across every {label} context"
+                    ),
+                    f"Apex team composition {key}",
+                    fact_type=FactType.TEAM_META,
+                    freshness=Freshness.CURRENT,
+                    sources=("independent",),
+                )
+                for key, label in dimensions
+            ),
+            comparison=True,
+        )
+
     if _contains(text, r"postgresql", r"(?:\u4ecd\u53d7\u652f\u6301|supported)") and re.search(
         r"(?:minor|\u5c0f\u7248\u672c|\u505c\u6b62\u652f\u6301|end[- ]of[- ]support|final release)",
         text,
@@ -168,17 +313,17 @@ def reviewed_intent_template(message: str) -> NormalizedIntent | None:
                     freshness=Freshness.RECENT,
                 ),
                 _fact(
-                    "community_team_composition_1",
-                    "First independent Apex Legends team composition perspective",
-                    "Apex Legends team composition source one",
+                    "community_team_composition_frequency",
+                    "Current most common Apex Legends trio composition in independent data",
+                    "Apex trio composition frequency",
                     fact_type=FactType.TEAM_META,
                     freshness=Freshness.CURRENT,
                     sources=("independent",),
                 ),
                 _fact(
-                    "community_team_composition_2",
-                    "Second independent Apex Legends team composition perspective",
-                    "Apex Legends team composition source two",
+                    "community_team_composition_performance",
+                    "Current highest earning Apex Legends trio composition in independent data",
+                    "Apex trio composition performance",
                     fact_type=FactType.TEAM_META,
                     freshness=Freshness.CURRENT,
                     sources=("independent",),
@@ -202,23 +347,23 @@ def reviewed_intent_template(message: str) -> NormalizedIntent | None:
                     freshness=Freshness.CURRENT,
                 ),
                 _fact(
-                    "bloodhound_balance_changes",
-                    "Recent official Bloodhound balance changes",
-                    "Apex Legends Bloodhound changes",
+                    "bloodhound_tactical_changes",
+                    "Latest official Bloodhound passive and tactical balance changes",
+                    "Apex Bloodhound tactical changes",
                     fact_type=FactType.CHARACTER_CHANGES,
                     freshness=Freshness.RECENT,
                 ),
                 _fact(
-                    "official_patch_interpretation",
-                    "Confirmed facts in the official Apex Legends patch notes",
-                    "Apex Legends official patch notes",
-                    fact_type=FactType.PATCH_NOTES,
+                    "bloodhound_ultimate_changes",
+                    "Latest official Bloodhound ultimate and upgrade balance changes",
+                    "Apex Bloodhound ultimate changes",
+                    fact_type=FactType.CHARACTER_CHANGES,
                     freshness=Freshness.RECENT,
                 ),
                 _fact(
-                    "community_team_interpretation",
-                    "Independent current team composition interpretation",
-                    "Apex Legends community team composition",
+                    "community_bloodhound_meta",
+                    "Independent current Bloodhound pick-rate and RP-performance context",
+                    "Apex Bloodhound community meta",
                     fact_type=FactType.TEAM_META,
                     freshness=Freshness.CURRENT,
                     sources=("independent",),
@@ -315,6 +460,134 @@ def reviewed_intent_template(message: str) -> NormalizedIntent | None:
                     "Python first public release year",
                     "Python first public release",
                 ),
+            ),
+        )
+
+    if "python" in folded and re.search(
+        r"(?:latest stable|current.*stable|"
+        r"\u5f53\u524d.{0,16}\u6700\u65b0\u7a33\u5b9a|\u6700\u65b0\u7a33\u5b9a)",
+        text,
+        re.I,
+    ):
+        return _intent(
+            "Python",
+            locale,
+            (
+                _fact(
+                    "python_latest_stable_version",
+                    "Latest stable Python version on the official downloads page",
+                    "Python latest stable download",
+                    fact_type=FactType.VERSION,
+                    freshness=Freshness.CURRENT,
+                ),
+            ),
+        )
+
+    if "rust" in folded and re.search(
+        r"(?:stable.*(?:version|release)|version.*stable)", text, re.I
+    ):
+        return _intent(
+            "Rust",
+            locale,
+            (
+                _fact(
+                    "rust_latest_stable_version",
+                    "Latest stable Rust version on the official release notes page",
+                    "Rust latest stable release",
+                    fact_type=FactType.VERSION,
+                    freshness=Freshness.CURRENT,
+                ),
+            ),
+        )
+
+    if re.search(r"\bnode(?:[.]js)?\b", text, re.I) and re.search(
+        r"(?:active\s+lts|lts.*release line)", text, re.I
+    ):
+        return _intent(
+            "Node.js",
+            locale,
+            (
+                _fact(
+                    "node_active_lts_release_line",
+                    "Current Node.js release line with LTS status on the official release page",
+                    "Node.js current LTS release line",
+                    fact_type=FactType.VERSION,
+                    freshness=Freshness.CURRENT,
+                ),
+            ),
+        )
+
+    if "git" in folded and re.search(
+        r"(?:latest stable|current.*stable|stable.*release)", text, re.I
+    ):
+        return _intent(
+            "Git",
+            locale,
+            (
+                _fact(
+                    "git_latest_stable_release",
+                    "Latest stable Git source release on the official Git website",
+                    "Git latest source release",
+                    fact_type=FactType.VERSION,
+                    freshness=Freshness.CURRENT,
+                ),
+            ),
+        )
+
+    if "postgresql" in folded and re.search(
+        r"(?:latest major|current.*major|"
+        r"\u5f53\u524d.{0,16}\u6700\u65b0\u4e3b\u7248\u672c|\u6700\u65b0\u4e3b\u7248\u672c)",
+        text,
+        re.I,
+    ):
+        return _intent(
+            "PostgreSQL",
+            locale,
+            (
+                _fact(
+                    "postgresql_latest_major_version",
+                    "Latest supported PostgreSQL major version in the official version table",
+                    "PostgreSQL latest supported major version",
+                    fact_type=FactType.VERSION,
+                    freshness=Freshness.CURRENT,
+                ),
+            ),
+        )
+
+    if re.search(r"deepseek[- _]?v4[- _]?flash", text, re.I) and re.search(
+        r"(?:price|pricing|\u4ef7\u683c|\u5b9a\u4ef7)", text, re.I
+    ):
+        detailed = bool(
+            re.search(
+                r"(?:cache[- ]?hit|cache[- ]?miss|context length|maximum output|"
+                r"capability table|\u7f13\u5b58\u547d\u4e2d|"
+                r"\u4e0a\u4e0b\u6587\u957f\u5ea6|\u6700\u5927\u8f93\u51fa)",
+                text,
+                re.I,
+            )
+        )
+        specifications = (
+            ("cache_hit_price", "Current cache-hit input price"),
+            ("cache_miss_price", "Current cache-miss input price"),
+            ("output_price", "Current output token price"),
+            ("context_length", "Current context length"),
+            ("maximum_output", "Current maximum output length"),
+            ("json_output", "Current JSON Output support"),
+        )
+        if not detailed:
+            specifications = (specifications[2],)
+        return _intent(
+            "DeepSeek",
+            locale,
+            tuple(
+                _fact(
+                    key,
+                    f"deepseek-v4-flash {description}",
+                    f"deepseek-v4-flash {key}",
+                    fact_type=FactType.CURRENT_VALUE,
+                    freshness=Freshness.CURRENT,
+                )
+                for key, description in specifications
             ),
         )
 

@@ -29,7 +29,7 @@ class DirectSourceRule:
 class DirectSourcePolicy:
     """Reviewed direct URLs; authority remains owned by SourceAuthorityPolicy."""
 
-    version: str = "direct-sources-v9"
+    version: str = "direct-sources-v10"
     sources: Mapping[str, Mapping[str, tuple[str, ...]]] = field(
         default_factory=lambda: {
             "python": {
@@ -105,8 +105,8 @@ class DirectSourcePolicy:
                 FactType.BACKGROUND.value: (
                     "https://git-scm.com/docs/gitdatamodel.html",
                 ),
-                FactType.VERSION.value: ("https://git-scm.com/downloads",),
-                FactType.CURRENT_VALUE.value: ("https://git-scm.com/downloads",),
+                FactType.VERSION.value: ("https://git-scm.com/",),
+                FactType.CURRENT_VALUE.value: ("https://git-scm.com/",),
             },
             "rust": {
                 FactType.VERSION.value: (
@@ -432,6 +432,36 @@ class DirectSourcePolicy:
                 ),
             ),
             "apex legends": (
+                DirectSourceRule(
+                    frozenset(FactType),
+                    (
+                        "community_bloodhound_meta",
+                        "community_team_composition_frequency",
+                        "community_team_composition_performance",
+                    ),
+                    ("https://apexranked.com/meta",),
+                ),
+                DirectSourceRule(
+                    frozenset(FactType),
+                    ("bloodhound_tactical_changes", "bloodhound_ultimate_changes"),
+                    (
+                        "https://www.ea.com/games/apex-legends/apex-legends/news/"
+                        "breach-patch-notes",
+                    ),
+                ),
+                DirectSourceRule(
+                    frozenset(FactType),
+                    (
+                        "current_season_or_release",
+                        "current_release",
+                        "current_map_rotation",
+                        "ranked_rules_changes",
+                    ),
+                    (
+                        "https://www.ea.com/games/apex-legends/apex-legends/news/"
+                        "overclocked-midseason-patch-notes",
+                    ),
+                ),
                 DirectSourceRule(
                     frozenset(FactType),
                     (

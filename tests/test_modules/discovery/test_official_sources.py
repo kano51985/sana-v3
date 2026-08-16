@@ -214,8 +214,32 @@ def test_current_campaign_semantics_resolve_to_reviewed_pages() -> None:
         "community team composition perspective",
         "Apex Legends",
     )
+    apex_bloodhound = FactRequirement(
+        "bloodhound_tactical_changes",
+        FactType.CHARACTER_CHANGES,
+        "Latest official Bloodhound passive and tactical balance changes",
+        "Apex Bloodhound tactical changes",
+    )
+    apex_current = FactRequirement(
+        "current_release",
+        FactType.VERSION,
+        "Current official Apex Legends release",
+        "Apex Legends current release",
+    )
+    apex_frequency = FactRequirement(
+        "community_team_composition_frequency",
+        FactType.TEAM_META,
+        "Current most common trio composition",
+        "Apex trio composition frequency",
+    )
+    git_release = FactRequirement(
+        "git_latest_stable_release",
+        FactType.VERSION,
+        "Latest stable Git source release",
+        "Git latest source release",
+    )
 
-    assert policy.version == "direct-sources-v9"
+    assert policy.version == "direct-sources-v10"
     assert policy.urls_for_fact("DeepSeek V4 Flash", deepseek_price) == (
         "https://api-docs.deepseek.com/quick_start/pricing/",
     )
@@ -227,3 +251,15 @@ def test_current_campaign_semantics_resolve_to_reviewed_pages() -> None:
         "https://games.gg/apex-legends/guides/"
         "apex-legends-season-29-tier-list/",
     )
+    assert policy.urls_for_fact("Apex Legends", apex_bloodhound) == (
+        "https://www.ea.com/games/apex-legends/apex-legends/news/"
+        "breach-patch-notes",
+    )
+    assert policy.urls_for_fact("Apex Legends", apex_current) == (
+        "https://www.ea.com/games/apex-legends/apex-legends/news/"
+        "overclocked-midseason-patch-notes",
+    )
+    assert policy.urls_for_fact("Apex Legends", apex_frequency) == (
+        "https://apexranked.com/meta",
+    )
+    assert policy.urls_for_fact("Git", git_release) == ("https://git-scm.com/",)

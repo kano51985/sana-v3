@@ -660,6 +660,95 @@ def test_current_fact_ranks_evidence_relevance_before_document_position() -> Non
     assert selected[0].chunk.ordinal == 1
 
 
+def test_reviewed_rust_release_header_beats_incidental_stable_api_mentions() -> None:
+    fact_id = uuid4()
+    fact = FactRequirement(
+        "rust_latest_stable_version",
+        FactType.VERSION,
+        "Latest stable Rust version on the official release notes page",
+        "Rust latest stable release",
+        freshness=Freshness.CURRENT,
+    )
+    tenant_id, document_id = uuid4(), uuid4()
+    raw_chunks = (
+        (
+            "Rust 1.97.1 8bab26f4f Rust Release Notes "
+            "Version 1.97.1 (2026-07-16) compiler fixes"
+        ),
+        (
+            "Rust stable APIs stable release channel stable library additions "
+            "without a release heading"
+        ),
+    )
+    chunks = tuple(
+        (
+            uuid4(),
+            DocumentChunk(
+                ordinal,
+                text,
+                hashlib.sha256(text.encode()).hexdigest(),
+                16,
+                ordinal * 200,
+                ordinal * 200 + len(text),
+            ),
+        )
+        for ordinal, text in enumerate(raw_chunks)
+    )
+    full_text = "\n".join(raw_chunks)
+    candidate_document = CandidateDocument(
+        document_id,
+        DocumentVersion(
+            uuid4(),
+            tenant_id,
+            document_id,
+            hashlib.sha256(full_text.encode()).hexdigest(),
+            full_text,
+            "text/plain",
+            "en",
+            NOW,
+        ),
+        chunks,
+        "https://doc.rust-lang.org/stable/releases.html",
+        "Rust Release Notes",
+        (fact_id,),
+    )
+
+    selected = CandidateSelector(max_per_fact=1, max_total=1).select(
+        run_id=uuid4(),
+        entity="Rust",
+        facts={fact_id: fact},
+        documents=(candidate_document,),
+    )
+
+    assert selected[0].chunk.ordinal == 0
+    assert "Rust 1.97.1" in selected[0].quote
+
+
+def test_reviewed_apex_metric_relation_can_satisfy_semantic_frequency_anchor() -> None:
+    fact_id = uuid4()
+    fact = FactRequirement(
+        "community_team_composition_frequency",
+        FactType.TEAM_META,
+        "Current most common Apex Legends trio composition in independent data",
+        "Apex trio composition frequency",
+        freshness=Freshness.CURRENT,
+    )
+    text = (
+        "Most Common Trio Compositions 1 A Axle L Loba S Seer 2,045× seen "
+        "+41.9 RP 2 A Axle L Loba P Pathfinder 713× seen +29.6 RP"
+    )
+
+    selected = CandidateSelector(max_per_fact=1, max_total=1).select(
+        run_id=uuid4(),
+        entity="Apex Legends",
+        facts={fact_id: fact},
+        documents=(document("https://apexranked.com/meta", fact_id, text),),
+    )
+
+    assert len(selected) == 1
+    assert "Most Common Trio Compositions" in selected[0].quote
+
+
 def test_standard_identifier_normalization_prefers_semantic_digest_statement() -> None:
     fact_id = uuid4()
     fact = FactRequirement(

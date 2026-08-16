@@ -238,6 +238,56 @@ class CandidateSelector:
 
         fact_text = f"{fact.key} {fact.description}".casefold()
         numeric = tuple(term for term in anchors if term.isdecimal())
+        reviewed_release_patterns = {
+            "rust_latest_stable_version": (
+                r"\bRust\s+\d+[.]\d+[.]\d+\b.*?"
+                r"\bVersion\s+\d+[.]\d+[.]\d+\s*\(\d{4}-\d{2}-\d{2}\)"
+            ),
+            "python_latest_stable_version": r"\bDownload\s+Python\s+\d+[.]\d+[.]\d+\b",
+            "node_active_lts_release_line": (
+                r"\bNode[.]js\s+Codename\s+First released\s+Last updated\s+Status\b"
+                r".*?\bv\s*\d+\s+[A-Za-z][A-Za-z0-9-]*\s+"
+                r"[A-Za-z]+\s+\d{1,2},\s+\d{4}\s+"
+                r"[A-Za-z]+\s+\d{1,2},\s+\d{4}\s+LTS\b"
+            ),
+            "git_latest_stable_release": (
+                r"\bLatest\s+(?:stable\s+)?(?:source\s+)?release\b"
+                r".{0,100}\b\d+[.]\d+[.]\d+\b"
+            ),
+            "current_season_or_release": (
+                r"\bApex Legends(?:\u2122)?\s*:\s*[^\n]{1,100}?Patch Notes\b|"
+                r"\bWelcome back to\s+[^.!]{1,80}"
+            ),
+            "current_release": r"\bWelcome back to\s+[^.!]{1,80}",
+        }
+        for marker, pattern in reviewed_release_patterns.items():
+            if marker in fact_text and re.search(pattern, text, re.I | re.S):
+                return 1.0
+        apex_runtime_patterns = {
+            "bloodhound_tactical_changes": (
+                r"\bBLOODHOUND\b.*?\bTactical\b.*?"
+                r"Total scan duration up to\s+\d+(?:[.]\d+)?s"
+            ),
+            "bloodhound_ultimate_changes": (
+                r"\bBLOODHOUND\b.*?\bUltimate\s*:\s*Cooldown reduced"
+            ),
+            "community_bloodhound_meta": (
+                r"\bBloodhound\s+[+]\d+(?:[.]\d+)?\s+Win\s+\d+(?:[.]\d+)?%"
+            ),
+            "current_map_rotation": (
+                r"This split(?:'|\u2019)s map rotations are as follows:.*?\bRanked\b"
+            ),
+            "ranked_rules_changes": (
+                r"\bRANKED\b.*?Removing\s+[\"\u201c]Champion Squad[\"\u201d]\s+Screen"
+            ),
+            "community_team_composition_frequency": r"Most Common Trio Compositions\s+1\b",
+            "community_team_composition_performance": (
+                r"Highest Earning Trio Compositions\s+1\b"
+            ),
+        }
+        for marker, pattern in apex_runtime_patterns.items():
+            if marker in fact_text and re.search(pattern, text, re.I | re.S):
+                return 1.0
         if (
             "git" in fact_text
             and "object_types" in fact_text
@@ -418,7 +468,7 @@ class CandidateSelector:
                         for term in anchors
                         if term in folded or term in chunk_terms
                     }
-                    if anchors and not matched_anchors:
+                    if anchors and not matched_anchors and not definition_score:
                         continue
                     context_score = len(matched) / max(1, len(terms))
                     if anchors:

@@ -64,6 +64,46 @@ def test_structured_public_apex_cases_have_reviewed_runtime_plans() -> None:
         assert len(intent.facts) >= case["minimum_required_facts"], case["id"]
 
 
+def test_current_release_and_public_evidence_gap_cases_have_reviewed_plans() -> None:
+    expected_ids = {
+        "fast-zh-05-python-current",
+        "fast-zh-06-postgresql-current",
+        "fast-zh-08-deepseek-price",
+        "fast-zh-09-private-codename",
+        "fast-en-05-rust-current",
+        "fast-en-06-node-lts",
+        "fast-en-08-git-current",
+        "fast-en-09-private-roadmap",
+        "research-zh-09-global-install-count",
+        "research-en-08-deepseek-pricing",
+        "research-en-09-private-model-weights",
+        "research-en-10-apex-universal-team",
+    }
+    cases = [case for case in _cases() if case["id"] in expected_ids]
+
+    assert {case["id"] for case in cases} == expected_ids
+    for case in cases:
+        intent = reviewed_intent_template(case["prompt"])
+        assert intent is not None, case["id"]
+        assert len(intent.facts) >= case["minimum_required_facts"], case["id"]
+
+
+def test_reviewed_gap_facts_never_claim_a_private_or_unobservable_value() -> None:
+    case_ids = {
+        "fast-zh-09-private-codename",
+        "fast-en-09-private-roadmap",
+        "research-zh-09-global-install-count",
+        "research-en-09-private-model-weights",
+        "research-en-10-apex-universal-team",
+    }
+
+    for case in (case for case in _cases() if case["id"] in case_ids):
+        intent = reviewed_intent_template(case["prompt"])
+        assert intent is not None
+        assert all("evidence_gap" in fact.key for fact in intent.facts)
+        assert all(fact.description.startswith("No ") for fact in intent.facts)
+
+
 def test_reviewed_private_data_plans_never_compile_attacker_instructions() -> None:
     cases = [case for case in _cases() if "privacy" in case["tags"]]
 
