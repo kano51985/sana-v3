@@ -56,6 +56,23 @@ _TERMINAL = {
     StepStatus.CANCELLED.value,
 }
 
+_CACHE_METADATA_KEYS = frozenset(
+    {
+        "policy_version",
+        "strictest_freshness",
+        "source_fetch_artifact_id",
+        "source_run_id",
+        "source_document_version_id",
+        "source_fetched_at",
+        "reused_at",
+        "reuse_age_seconds",
+        "decision",
+        "live_error_category",
+        "live_error_code",
+    }
+)
+_FETCH_DEGRADATION_CODES = frozenset({"fetch_cache_stale_if_error"})
+
 
 def _ref_dict(reference: ArtifactRef) -> dict[str, str]:
     return {"uri": reference.uri, "sha256": reference.sha256}
@@ -259,6 +276,12 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
                 pipeline_degradation_codes.add(
                     f"{str(row.step_type).lower()}_{status.lower()}"
                 )
+        pipeline_degradation_codes.update(
+            await self._successful_fetch_degradation_codes(
+                run,
+                non_synthesis,
+            )
+        )
         plan_ref = await self._plan_reference(uow, run, current)
         verify_refs = [
             dict(row.output_ref)
@@ -311,6 +334,32 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
             input_ref=input_ref,
             trace_context=trace_context,
         )
+
+    async def _successful_fetch_degradation_codes(
+        self,
+        run: SearchRun,
+        rows: list[SearchStepRecord],
+    ) -> set[str]:
+        codes: set[str] = set()
+        for row in rows:
+            if (
+                row.step_type != StepType.FETCH.value
+                or row.status != StepStatus.SUCCEEDED.value
+                or row.output_ref is None
+            ):
+                continue
+            payload = await self._payload(
+                run.tenant_id,
+                artifact_from_dict(dict(row.output_ref)),
+            )
+            raw_codes = payload.get("degradation_codes", ())
+            if not isinstance(raw_codes, (list, tuple)):
+                raise ValueError("Fetch degradation codes must be a list")
+            normalized = {str(value) for value in raw_codes if value}
+            if not normalized <= _FETCH_DEGRADATION_CODES:
+                raise ValueError("Fetch degradation codes are not allowlisted")
+            codes.update(normalized)
+        return codes
 
     async def _maybe_verify(
         self,
@@ -533,6 +582,19 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
         hit = dict(payload["hit"])
         canonical = str(hit["canonical_url"])
         record_id = self._fetch_artifact_id(run.id, step.step_key)
+        fetcher = str(payload.get("fetcher", "http"))
+        if fetcher not in {"http", "document-cache"}:
+            raise ValueError("Fetch output contains an unknown fetcher")
+        raw_cache_metadata = payload.get("cache_metadata", {})
+        if not isinstance(raw_cache_metadata, dict):
+            raise ValueError("Fetch cache metadata must be an object")
+        unknown_metadata = set(raw_cache_metadata) - _CACHE_METADATA_KEYS
+        if unknown_metadata:
+            raise ValueError("Fetch cache metadata keys are not allowlisted")
+        fetch_metadata = {
+            "redirects": list(payload.get("redirects", [])),
+            **raw_cache_metadata,
+        }
         await uow.session.execute(
             insert(FetchArtifact)
             .values(
@@ -543,15 +605,19 @@ class WorkflowCompletionCoordinator(StepCompletionHook):
                 url=canonical,
                 url_hash=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
                 attempt_no=1,
-                fetcher="http",
+                fetcher=fetcher,
                 status="SUCCEEDED",
                 http_status=int(payload["http_status"]),
                 media_type=str(payload["media_type"]),
                 content_hash=str(payload["content_hash"]),
                 storage_uri=str(payload["body_ref"]["uri"]),
-                response_bytes=None,
+                response_bytes=(
+                    int(payload["response_bytes"])
+                    if payload.get("response_bytes") is not None
+                    else None
+                ),
                 fetched_at=datetime.fromisoformat(str(payload["fetched_at"])),
-                fetch_metadata={"redirects": list(payload.get("redirects", []))},
+                fetch_metadata=fetch_metadata,
             )
             .on_conflict_do_nothing()
         )

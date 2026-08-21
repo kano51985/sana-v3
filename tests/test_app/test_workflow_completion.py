@@ -32,7 +32,7 @@ class RecordingArtifacts:
 
     async def get_json(self, tenant_id, reference):
         del tenant_id
-        return self.stored[reference.uri]
+        return self.stored.get(reference.uri, {})
 
     async def put_json(self, tenant_id, run_id, payload):
         del tenant_id, run_id
@@ -370,6 +370,124 @@ async def test_failed_verify_is_reported_as_pipeline_degradation() -> None:
         "phase_deadline_exceeded",
         "verify_failed",
     ]
+
+
+@pytest.mark.asyncio
+async def test_successful_stale_cache_fetch_is_propagated_as_degradation() -> None:
+    run = _run()
+    plan_ref = ArtifactRef("artifact://plan", "1" * 64)
+    fetch_ref = ArtifactRef("artifact://fetch-stale", "2" * 64)
+    verify_ref = ArtifactRef("artifact://verify", "3" * 64)
+    artifacts = RecordingArtifacts(
+        {
+            fetch_ref.uri: {
+                "schema": "sana.fetch.v2",
+                "decision": "CACHE_STALE_IF_ERROR",
+                "degradation_codes": ["fetch_cache_stale_if_error"],
+            }
+        }
+    )
+    coordinator = RecordingCoordinator(artifacts, plan_ref)
+    verify = _successful_step(run, "verify", StepType.VERIFY, verify_ref)
+    coordinator.rows = [
+        SimpleNamespace(
+            id=uuid4(),
+            step_type=StepType.FETCH.value,
+            status="SUCCEEDED",
+            output_ref={"uri": fetch_ref.uri, "sha256": fetch_ref.sha256},
+        ),
+        SimpleNamespace(
+            id=verify.id,
+            step_type=StepType.VERIFY.value,
+            status="RUNNING",
+            output_ref=None,
+        ),
+    ]
+
+    await coordinator._maybe_synthesize(
+        object(),
+        run,
+        verify,
+        TraceContext.create(),
+    )
+
+    assert artifacts.payloads[-1]["pipeline_degradation_codes"] == [
+        "fetch_cache_stale_if_error"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_persistence_records_cache_lineage_metadata_allowlist() -> None:
+    run = _run()
+    coordinator = RecordingCoordinator(
+        RecordingArtifacts(),
+        ArtifactRef("artifact://plan", "1" * 64),
+    )
+    session = RecordingSession()
+    step = _successful_step(
+        run,
+        "fetch:1:hit-id",
+        StepType.FETCH,
+        ArtifactRef("artifact://fetch", "2" * 64),
+    )
+    source_fetch_id, source_run_id, source_version_id = (
+        uuid4(),
+        uuid4(),
+        uuid4(),
+    )
+    payload = {
+        "hit": {"id": str(uuid4()), "canonical_url": "https://example.test/source"},
+        "fetcher": "document-cache",
+        "decision": "CACHE_STALE_IF_ERROR",
+        "http_status": 200,
+        "media_type": "text/html",
+        "content_hash": "a" * 64,
+        "response_bytes": 123,
+        "body_ref": {
+            "uri": f"artifact://{run.tenant_id}/{run.id}/{'a' * 64}",
+            "sha256": "a" * 64,
+        },
+        "fetched_at": NOW.isoformat(),
+        "redirects": ["https://www.example.test/final"],
+        "cache_metadata": {
+            "policy_version": "document-reuse-v1",
+            "strictest_freshness": "STABLE",
+            "source_fetch_artifact_id": str(source_fetch_id),
+            "source_run_id": str(source_run_id),
+            "source_document_version_id": str(source_version_id),
+            "source_fetched_at": NOW.isoformat(),
+            "reused_at": NOW.isoformat(),
+            "reuse_age_seconds": 172800,
+            "decision": "CACHE_STALE_IF_ERROR",
+            "live_error_category": "TRANSIENT",
+            "live_error_code": "fetch_network_failure",
+        },
+    }
+
+    await coordinator._persist_fetch(
+        SimpleNamespace(session=session),
+        run,
+        step,
+        payload,
+    )
+
+    compiled = session.statements[0].compile(dialect=postgresql.dialect())
+    assert compiled.params["fetcher"] == "document-cache"
+    assert compiled.params["response_bytes"] == 123
+    assert compiled.params["fetched_at"] == NOW
+    assert compiled.params["fetch_metadata"] == {
+        "redirects": ["https://www.example.test/final"],
+        **payload["cache_metadata"],
+    }
+
+    payload["cache_metadata"]["prompt"] = "must not persist"
+    with pytest.raises(ValueError, match="metadata keys"):
+        await coordinator._persist_fetch(
+            SimpleNamespace(session=RecordingSession()),
+            run,
+            step,
+            payload,
+        )
 
 
 @pytest.mark.asyncio
