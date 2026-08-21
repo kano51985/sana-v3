@@ -114,6 +114,28 @@ def test_worker_concurrency_and_image_revision_are_frozen() -> None:
     assert "celery" not in worker_health["test"][3]
     assert "CMD-SHELL" not in worker_health["test"]
     assert "SANA_WORKER_LIVE_EVAL_MAX_RUNS" not in worker["environment"]
+    assert {
+        key: worker["environment"][key]
+        for key in (
+            "SANA_WORKER_DOCUMENT_REUSE_ENABLED",
+            "SANA_WORKER_DOCUMENT_REUSE_POLICY_VERSION",
+            "SANA_WORKER_REUSE_STABLE_FRESH_SECONDS",
+            "SANA_WORKER_REUSE_STABLE_FALLBACK_SECONDS",
+            "SANA_WORKER_REUSE_RECENT_FRESH_SECONDS",
+            "SANA_WORKER_REUSE_RECENT_FALLBACK_SECONDS",
+            "SANA_WORKER_REUSE_CURRENT_FRESH_SECONDS",
+            "SANA_WORKER_REUSE_CURRENT_FALLBACK_SECONDS",
+        )
+    } == {
+        "SANA_WORKER_DOCUMENT_REUSE_ENABLED": "true",
+        "SANA_WORKER_DOCUMENT_REUSE_POLICY_VERSION": "document-reuse-v1",
+        "SANA_WORKER_REUSE_STABLE_FRESH_SECONDS": "86400",
+        "SANA_WORKER_REUSE_STABLE_FALLBACK_SECONDS": "2592000",
+        "SANA_WORKER_REUSE_RECENT_FRESH_SECONDS": "21600",
+        "SANA_WORKER_REUSE_RECENT_FALLBACK_SECONDS": "604800",
+        "SANA_WORKER_REUSE_CURRENT_FRESH_SECONDS": "900",
+        "SANA_WORKER_REUSE_CURRENT_FALLBACK_SECONDS": "7200",
+    }
     assert services["campaign-runner"]["depends_on"]["worker"] == {
         "condition": "service_healthy"
     }

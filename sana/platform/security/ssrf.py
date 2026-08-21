@@ -138,5 +138,10 @@ class SSRFGuard:
         addresses = tuple(self._public_address(value) for value in values)
         return ResolvedTarget(url, host, port, addresses)
 
+    async def validate(self, url: str) -> None:
+        """Expose the same DNS-aware check through the content safety port."""
+
+        await self.resolve_and_validate(url)
+
     def validate_peer(self, peer_address: str) -> None:
         self._public_address(peer_address)

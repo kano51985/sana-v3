@@ -10,6 +10,7 @@ from sana.app.production_worker import (
 )
 from sana.app.search_operations import HeuristicIntentPlanner, ModelIntentPlanner
 from sana.modules.orchestration.domain import SearchMode
+from sana.modules.content.domain import ReuseFreshness
 from sana.modules.search_planning.query_compiler import QueryCompiler
 from sana.modules.shared.errors import ErrorCategory, TypedError
 
@@ -146,6 +147,38 @@ def test_model_pipeline_defaults_are_safe_and_disabled() -> None:
     assert settings.worker_model_output_format == "json_object"
     assert settings.worker_live_eval_max_runs == 20
     assert settings.discovery_provider_names == ("direct", "bing_rss")
+    assert settings.worker_document_reuse_enabled is True
+    assert settings.worker_document_reuse_policy_version == "document-reuse-v1"
+    assert settings.document_reuse_policy.version == "document-reuse-v1"
+    assert int(
+        settings.document_reuse_policy.window_for(
+            ReuseFreshness.STABLE
+        ).fresh_for.total_seconds()
+    ) == 86_400
+    assert int(
+        settings.document_reuse_policy.window_for(
+            ReuseFreshness.CURRENT
+        ).fallback_for.total_seconds()
+    ) == 7_200
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"worker_reuse_stable_fresh_seconds": 0},
+        {
+            "worker_reuse_recent_fresh_seconds": 60,
+            "worker_reuse_recent_fallback_seconds": 59,
+        },
+        {
+            "worker_reuse_current_fresh_seconds": 7_201,
+            "worker_reuse_current_fallback_seconds": 7_200,
+        },
+    ],
+)
+def test_document_reuse_settings_reject_invalid_windows(values: dict) -> None:
+    with pytest.raises(ValueError, match="document reuse"):
+        ProductionWorkerSettings(**values)
 
 
 def test_offline_fixture_is_strictly_test_only_and_exclusive() -> None:

@@ -12,6 +12,7 @@ import atexit
 import asyncio
 from concurrent.futures import Future
 from dataclasses import dataclass
+from datetime import timedelta
 import os
 import socket
 from threading import Lock, Thread
@@ -30,6 +31,11 @@ from sana.app.settings import SanaSettings
 from sana.app.sql_step_execution import RedisEventMirror, SqlStepExecutionStore
 from sana.app.workflow_completion import WorkflowCompletionCoordinator
 from sana.modules.answer.model_synthesizer import ConstrainedModelSynthesizer
+from sana.modules.content.domain import (
+    DocumentReusePolicy,
+    ReuseFreshness,
+    ReuseWindow,
+)
 from sana.modules.discovery.service import DiscoveryService
 from sana.modules.evidence.model_verifier import ModelEvidenceVerifier
 from sana.modules.model_gateway.domain import ModelRole, OutputFormat, ThinkingMode
@@ -42,6 +48,7 @@ from sana.modules.shared.clock import SystemClock
 from sana.modules.shared.ids import RandomIdFactory, TraceContext
 from sana.platform.db.session import create_database_engine, create_session_factory
 from sana.platform.db.model_audit import SqlModelInvocationAuditSink
+from sana.platform.db.content_snapshots import SqlContentSnapshotReader
 from sana.platform.db.uow import TenantUnitOfWorkFactory
 from sana.platform.events.redis_stream import RedisEventStream
 from sana.platform.fetch.http_fetcher import HttpContentFetcher
@@ -75,6 +82,16 @@ class ProductionWorkerSettings(SanaSettings):
     worker_discovery_providers: str = "direct,bing_rss"
     worker_searxng_url: str = ""
     worker_max_selected_hits: int = 4
+    worker_document_reuse_enabled: bool = True
+    worker_document_reuse_policy_version: Literal[
+        "document-reuse-v1"
+    ] = "document-reuse-v1"
+    worker_reuse_stable_fresh_seconds: int = 86_400
+    worker_reuse_stable_fallback_seconds: int = 2_592_000
+    worker_reuse_recent_fresh_seconds: int = 21_600
+    worker_reuse_recent_fallback_seconds: int = 604_800
+    worker_reuse_current_fresh_seconds: int = 900
+    worker_reuse_current_fallback_seconds: int = 7_200
     worker_heartbeat_seconds: float = 2.0
     worker_lease_seconds: float = 6.0
 
@@ -127,6 +144,25 @@ class ProductionWorkerSettings(SanaSettings):
             raise ValueError("SearXNG provider requires SANA_WORKER_SEARXNG_URL")
         if self.worker_max_selected_hits < 1:
             raise ValueError("Worker selected-hit limit must be positive")
+        reuse_windows = (
+            (
+                self.worker_reuse_stable_fresh_seconds,
+                self.worker_reuse_stable_fallback_seconds,
+            ),
+            (
+                self.worker_reuse_recent_fresh_seconds,
+                self.worker_reuse_recent_fallback_seconds,
+            ),
+            (
+                self.worker_reuse_current_fresh_seconds,
+                self.worker_reuse_current_fallback_seconds,
+            ),
+        )
+        if any(
+            fresh <= 0 or fallback <= 0 or fresh > fallback
+            for fresh, fallback in reuse_windows
+        ):
+            raise ValueError("Worker document reuse windows are invalid")
         if self.worker_heartbeat_seconds <= 0 or self.worker_lease_seconds <= 0:
             raise ValueError("Worker heartbeat and lease must be positive")
         if self.worker_heartbeat_seconds >= self.worker_lease_seconds:
@@ -145,6 +181,38 @@ class ProductionWorkerSettings(SanaSettings):
         if not values:
             raise ValueError("Worker must configure at least one discovery provider")
         return values
+
+    @property
+    def document_reuse_policy(self) -> DocumentReusePolicy:
+        return DocumentReusePolicy(
+            self.worker_document_reuse_policy_version,
+            {
+                ReuseFreshness.STABLE: ReuseWindow(
+                    timedelta(
+                        seconds=self.worker_reuse_stable_fresh_seconds
+                    ),
+                    timedelta(
+                        seconds=self.worker_reuse_stable_fallback_seconds
+                    ),
+                ),
+                ReuseFreshness.RECENT: ReuseWindow(
+                    timedelta(
+                        seconds=self.worker_reuse_recent_fresh_seconds
+                    ),
+                    timedelta(
+                        seconds=self.worker_reuse_recent_fallback_seconds
+                    ),
+                ),
+                ReuseFreshness.CURRENT: ReuseWindow(
+                    timedelta(
+                        seconds=self.worker_reuse_current_fresh_seconds
+                    ),
+                    timedelta(
+                        seconds=self.worker_reuse_current_fallback_seconds
+                    ),
+                ),
+            },
+        )
 
 
 @dataclass(slots=True)
@@ -304,18 +372,29 @@ async def build_worker_runtime(
         from sana.app.shadow_fixture_worker import ShadowFixtureContentFetcher
 
         fetcher = ShadowFixtureContentFetcher(clock)
+        snapshot_reader = None
+        url_safety_validator = None
+        document_reuse_enabled = False
     else:
-        fetcher = HttpContentFetcher(SSRFGuard(), clock)
+        guard = SSRFGuard()
+        fetcher = HttpContentFetcher(guard, clock)
+        snapshot_reader = SqlContentSnapshotReader(uow_factory)
+        url_safety_validator = guard
+        document_reuse_enabled = settings.worker_document_reuse_enabled
     operations = SearchStepOperations(
-        uow_factory,
-        artifacts,
-        planner,
-        discovery,
-        fetcher,
-        settings.discovery_provider_names,
-        settings.worker_max_selected_hits,
-        model_verifier,
-        model_synthesizer,
+        uow_factory=uow_factory,
+        artifacts=artifacts,
+        planner=planner,
+        discovery=discovery,
+        fetcher=fetcher,
+        provider_names=settings.discovery_provider_names,
+        snapshot_reader=snapshot_reader,
+        url_safety_validator=url_safety_validator,
+        document_reuse_policy=settings.document_reuse_policy,
+        document_reuse_enabled=document_reuse_enabled,
+        max_selected_hits=settings.worker_max_selected_hits,
+        model_verifier=model_verifier,
+        model_synthesizer=model_synthesizer,
     )
     completion = WorkflowCompletionCoordinator(artifacts, clock, ids)
     store = SqlStepExecutionStore(
