@@ -63,7 +63,7 @@ def _attestation() -> dict[str, object]:
             "commit_sha": "b" * 40,
             "source_clean": True,
             "fileset_hash": "e" * 64,
-            "collector_schema_version": "shadow-collector-v2",
+            "collector_schema_version": "shadow-collector-v3",
         },
         "environment": {
             "compose_project": "sana-shadow-eval",

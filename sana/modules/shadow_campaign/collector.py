@@ -26,7 +26,7 @@ from sana.modules.shadow_campaign.policy import CostRate
 from sana.modules.shared.errors import InvariantViolation
 
 
-COLLECTOR_SCHEMA_VERSION = "shadow-collector-v2"
+COLLECTOR_SCHEMA_VERSION = "shadow-collector-v3"
 
 _TERMINAL_RUN_STATUSES = frozenset(
     {RunStatus.SUCCEEDED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}
@@ -59,6 +59,8 @@ _ERROR_CATEGORY = frozenset(
         "INFRASTRUCTURE",
     }
 )
+_FETCH_DECISIONS = frozenset({"LIVE", "CACHE_FRESH", "CACHE_STALE_IF_ERROR"})
+_REUSE_FRESHNESS = frozenset({"STABLE", "RECENT", "CURRENT"})
 
 
 class GoldAssertionStatus(StrEnum):
@@ -199,6 +201,27 @@ class SourceInvocation:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceFetch:
+    """Content-free projection of one successful run-local fetch artifact."""
+
+    id: UUID
+    fetcher: str
+    status: str
+    fetched_at: datetime
+    decision: str
+    policy_version: str | None = None
+    strictest_freshness: str | None = None
+    source_fetch_artifact_id: UUID | None = None
+    source_run_id: UUID | None = None
+    source_document_version_id: UUID | None = None
+    source_fetched_at: datetime | None = None
+    reused_at: datetime | None = None
+    reuse_age_seconds: int | None = None
+    live_error_category: str | None = None
+    live_error_code: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class SourceEvidence:
     id: UUID
     candidate_id: UUID
@@ -279,6 +302,7 @@ class RunSourceSnapshot:
     steps: tuple[SourceStep, ...] = ()
     attempts: tuple[SourceAttempt, ...] = ()
     invocations: tuple[SourceInvocation, ...] = ()
+    fetches: tuple[SourceFetch, ...] = ()
     evidence: tuple[SourceEvidence, ...] = ()
     claims: tuple[SourceClaim, ...] = ()
     citations: tuple[SourceCitation, ...] = ()
@@ -431,6 +455,87 @@ def _validate_snapshot(snapshot: RunSourceSnapshot) -> None:
             raise _not_ready("ModelInvocation token usage is invalid", "source_topology_invalid")
         _validate_time(invocation.started_at, "invocation.started_at")
         _validate_time(invocation.completed_at, "invocation.completed_at")
+
+    fetch_ids: set[UUID] = set()
+    for fetch in snapshot.fetches:
+        if fetch.id in fetch_ids:
+            raise _not_ready(
+                "SearchRun contains duplicate FetchArtifact IDs",
+                "source_topology_invalid",
+            )
+        fetch_ids.add(fetch.id)
+        if fetch.status != "SUCCEEDED" or fetch.decision not in _FETCH_DECISIONS:
+            raise _not_ready(
+                "FetchArtifact projection is invalid",
+                "source_fetch_metadata_invalid",
+            )
+        _validate_time(fetch.fetched_at, "fetch.fetched_at")
+        cache_fields = (
+            fetch.policy_version,
+            fetch.strictest_freshness,
+            fetch.source_fetch_artifact_id,
+            fetch.source_run_id,
+            fetch.source_document_version_id,
+            fetch.source_fetched_at,
+            fetch.reused_at,
+            fetch.reuse_age_seconds,
+        )
+        if fetch.decision == "LIVE":
+            if (
+                fetch.fetcher == "document-cache"
+                or any(value is not None for value in cache_fields)
+                or fetch.live_error_category is not None
+                or fetch.live_error_code is not None
+            ):
+                raise _not_ready(
+                    "Live FetchArtifact contains cache lineage",
+                    "source_fetch_metadata_invalid",
+            )
+            continue
+        source_fetched_at = fetch.source_fetched_at
+        reused_at = fetch.reused_at
+        reuse_age_seconds = fetch.reuse_age_seconds
+        if (
+            fetch.fetcher != "document-cache"
+            or any(value is None for value in cache_fields)
+            or fetch.strictest_freshness not in _REUSE_FRESHNESS
+            or not fetch.policy_version
+            or reuse_age_seconds is None
+            or reuse_age_seconds < 0
+            or source_fetched_at is None
+            or reused_at is None
+            or source_fetched_at != fetch.fetched_at
+        ):
+            raise _not_ready(
+                "Cached FetchArtifact lineage is incomplete",
+                "source_fetch_metadata_invalid",
+            )
+        _validate_time(source_fetched_at, "fetch.source_fetched_at")
+        _validate_time(reused_at, "fetch.reused_at")
+        if reused_at < source_fetched_at:
+            raise _not_ready(
+                "Cached FetchArtifact timestamps are invalid",
+                "source_fetch_metadata_invalid",
+            )
+        expected_age = int(
+            (reused_at - source_fetched_at).total_seconds()
+        )
+        if abs(expected_age - reuse_age_seconds) > 1:
+            raise _not_ready(
+                "Cached FetchArtifact age is inconsistent",
+                "source_fetch_metadata_invalid",
+            )
+        has_live_error = (
+            fetch.live_error_category is not None
+            and fetch.live_error_code is not None
+        )
+        if (
+            fetch.decision == "CACHE_STALE_IF_ERROR"
+        ) != has_live_error:
+            raise _not_ready(
+                "Cached FetchArtifact fallback metadata is inconsistent",
+                "source_fetch_metadata_invalid",
+            )
 
     fact_ids = {item.id for item in snapshot.facts}
     query_ids = {item.id for item in snapshot.queries}
@@ -595,6 +700,8 @@ def _failed_phase(snapshot: RunSourceSnapshot) -> str | None:
     )
     if any(item.status == "FAILED" for item in snapshot.provider_attempts):
         phases.add("DISCOVERY")
+    if any(item.decision == "CACHE_STALE_IF_ERROR" for item in snapshot.fetches):
+        phases.add("FETCH")
     return sorted(phases)[0] if phases else ("RUN" if snapshot.status != "SUCCEEDED" else None)
 
 
@@ -642,6 +749,7 @@ def _classification(
             "content_gap",
             "unclassified_terminal_failure",
             "source_terminal_timestamp_invalid",
+            "fetch_cache_stale_if_error",
         }
     )
     ordered = tuple(sorted(signals))
@@ -707,6 +815,16 @@ def _digest_payload(snapshot: RunSourceSnapshot, outcome: CollectionOutcome) -> 
                 "id", "step_id", "attempt_id", "role", "provider", "model", "call_no",
                 "status", "billing_disposition", "provider_called", "prompt_tokens",
                 "completion_tokens", "started_at", "completed_at", "error_category",
+            ),
+        ),
+        "fetches": rows(
+            snapshot.fetches,
+            (
+                "id", "fetcher", "status", "fetched_at", "decision",
+                "policy_version", "strictest_freshness",
+                "source_fetch_artifact_id", "source_run_id",
+                "source_document_version_id", "source_fetched_at", "reused_at",
+                "reuse_age_seconds", "live_error_category", "live_error_code",
             ),
         ),
         "evidence": rows(
@@ -867,6 +985,12 @@ def collect_run_snapshot(
     )
 
     candidate_signals: set[str] = set()
+    if any(
+        item.decision == "CACHE_STALE_IF_ERROR" for item in snapshot.fetches
+    ):
+        candidate_signals.update(
+            {"provider_transient", "fetch_cache_stale_if_error"}
+        )
     if plan_failure:
         candidate_signals.add("plan_completeness_failure")
     if traceability_violations:
@@ -994,6 +1118,7 @@ __all__ = [
     "SourceClaim",
     "SourceEvidence",
     "SourceFact",
+    "SourceFetch",
     "SourceInvocation",
     "SourceOutbox",
     "SourceProviderAttempt",

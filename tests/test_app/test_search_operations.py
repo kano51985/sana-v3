@@ -83,6 +83,21 @@ class StubSnapshotReader:
         return self.snapshot
 
 
+class AdvancingSnapshotReader(StubSnapshotReader):
+    def __init__(self, snapshot, clock, delta):
+        super().__init__(snapshot)
+        self.clock = clock
+        self.delta = delta
+
+    async def latest_for_url(self, tenant_id, canonical_url_hash):
+        snapshot = await super().latest_for_url(
+            tenant_id,
+            canonical_url_hash,
+        )
+        self.clock.advance(self.delta)
+        return snapshot
+
+
 class RecordingURLValidator:
     def __init__(self, error: TypedError | None = None) -> None:
         self.error = error
@@ -711,6 +726,68 @@ async def test_stale_if_error_rejects_noneligible_error_or_expired_current() -> 
         with pytest.raises(TypedError) as raised:
             await operations.fetch(context)
         assert raised.value.code == error.code
+
+
+@pytest.mark.asyncio
+async def test_cache_window_is_rechecked_at_the_reuse_decision_time() -> None:
+    artifacts, snapshot, context, url, _, _ = _fetch_case(
+        source_age=timedelta(hours=24) - timedelta(seconds=1)
+    )
+    reader = AdvancingSnapshotReader(
+        snapshot,
+        context.clock,
+        timedelta(seconds=2),
+    )
+    fetcher = StubFetcher(_successful_fetch(url, b"live after fresh expiry"))
+    operations = SearchStepOperations(
+        uow_factory=None,  # type: ignore[arg-type]
+        artifacts=artifacts,  # type: ignore[arg-type]
+        planner=None,  # type: ignore[arg-type]
+        discovery=None,  # type: ignore[arg-type]
+        fetcher=fetcher,
+        provider_names=("direct",),
+        snapshot_reader=reader,
+        url_safety_validator=RecordingURLValidator(),
+        document_reuse_enabled=True,
+    )
+
+    await operations.fetch(context)
+
+    assert fetcher.calls == 1
+    assert artifacts.last_payload["decision"] == "LIVE"  # type: ignore[index]
+
+
+@pytest.mark.asyncio
+async def test_expired_fallback_is_not_used_after_live_failure() -> None:
+    artifacts, snapshot, context, url, _, _ = _fetch_case(
+        source_age=timedelta(days=30) - timedelta(seconds=1)
+    )
+    reader = AdvancingSnapshotReader(
+        snapshot,
+        context.clock,
+        timedelta(seconds=2),
+    )
+    error = TypedError(
+        ErrorCategory.TRANSIENT,
+        "fetch_network_failure",
+        "network",
+    )
+    operations = SearchStepOperations(
+        uow_factory=None,  # type: ignore[arg-type]
+        artifacts=artifacts,  # type: ignore[arg-type]
+        planner=None,  # type: ignore[arg-type]
+        discovery=None,  # type: ignore[arg-type]
+        fetcher=StubFetcher(_failed_fetch(url, error)),
+        provider_names=("direct",),
+        snapshot_reader=reader,
+        url_safety_validator=RecordingURLValidator(),
+        document_reuse_enabled=True,
+    )
+
+    with pytest.raises(TypedError) as raised:
+        await operations.fetch(context)
+
+    assert raised.value.code == "fetch_network_failure"
 
 
 @pytest.mark.asyncio

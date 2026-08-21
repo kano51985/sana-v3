@@ -952,16 +952,17 @@ class SearchStepOperations:
                     now,
                 )
                 if assessment.decision is ReuseDecision.CACHE_FRESH:
-                    return await self._reuse_fetch_result(
+                    reused = await self._reuse_fetch_result(
                         context,
                         payload,
                         hit,
                         request,
                         snapshot,
                         freshness,
-                        assessment.age,
                         ReuseDecision.CACHE_FRESH,
                     )
+                    if reused is not None:
+                        return reused
         fetched = await self.fetcher.fetch(request)
         if fetched.status is not FetchStatus.SUCCEEDED:
             assert fetched.error is not None
@@ -973,17 +974,18 @@ class SearchStepOperations:
                     fetched.error
                 )
             ):
-                return await self._reuse_fetch_result(
+                reused = await self._reuse_fetch_result(
                     context,
                     payload,
                     hit,
                     request,
                     snapshot,
                     freshness,
-                    assessment.age,
                     ReuseDecision.CACHE_STALE_IF_ERROR,
                     live_error=fetched.error,
                 )
+                if reused is not None:
+                    return reused
             raise fetched.error
         body_ref = await self.artifacts.put_bytes(
             context.tenant_id,
@@ -1042,11 +1044,10 @@ class SearchStepOperations:
         request: FetchRequest,
         snapshot: ReusableContentSnapshot,
         freshness: ReuseFreshness | None,
-        age: timedelta,
         decision: ReuseDecision,
         *,
         live_error: TypedError | None = None,
-    ) -> StepExecutionResult:
+    ) -> StepExecutionResult | None:
         if freshness is None:
             raise ValueError("Reusable fetch requires mapped freshness")
         body = await self.artifacts.get_bytes(
@@ -1081,12 +1082,25 @@ class SearchStepOperations:
                 "Reusable fetch artifact failed its content hash check",
                 retryable=False,
             )
+        reused_at = context.clock.now()
+        current_assessment = self.document_reuse_policy.assess(
+            freshness,
+            snapshot.fetched_at,
+            reused_at,
+        )
+        if (
+            decision is ReuseDecision.CACHE_FRESH
+            and current_assessment.decision is not ReuseDecision.CACHE_FRESH
+        ) or (
+            decision is ReuseDecision.CACHE_STALE_IF_ERROR
+            and not current_assessment.fallback_eligible
+        ):
+            return None
         body_ref = await self.artifacts.put_bytes(
             context.tenant_id,
             context.run_id,
             body,
         )
-        reused_at = context.clock.now()
         cache_metadata: dict[str, Any] = {
             "policy_version": self.document_reuse_policy.version,
             "strictest_freshness": freshness.value,
@@ -1099,7 +1113,7 @@ class SearchStepOperations:
             ),
             "source_fetched_at": snapshot.fetched_at.isoformat(),
             "reused_at": reused_at.isoformat(),
-            "reuse_age_seconds": int(age.total_seconds()),
+            "reuse_age_seconds": int(current_assessment.age.total_seconds()),
             "decision": decision.value,
         }
         degradation_codes: list[str] = []

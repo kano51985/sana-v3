@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import Mapping
 from uuid import UUID, uuid5
 
 from sqlalchemy import func, or_, select, text
@@ -20,6 +21,7 @@ from sana.modules.shadow_campaign.collector import (
     SourceClaim,
     SourceEvidence,
     SourceFact,
+    SourceFetch,
     SourceInvocation,
     SourceOutbox,
     SourceProviderAttempt,
@@ -97,6 +99,122 @@ def _ledger_int(payload: object, key: str, *, default: int | None = None) -> int
             code="source_usage_ledger_invalid",
         )
     return parsed
+
+
+_CACHE_FETCH_METADATA_KEYS = frozenset(
+    {
+        "redirects",
+        "policy_version",
+        "strictest_freshness",
+        "source_fetch_artifact_id",
+        "source_run_id",
+        "source_document_version_id",
+        "source_fetched_at",
+        "reused_at",
+        "reuse_age_seconds",
+        "decision",
+        "live_error_category",
+        "live_error_code",
+    }
+)
+_CACHE_FETCH_REQUIRED_KEYS = frozenset(
+    {
+        "policy_version",
+        "strictest_freshness",
+        "source_fetch_artifact_id",
+        "source_run_id",
+        "source_document_version_id",
+        "source_fetched_at",
+        "reused_at",
+        "reuse_age_seconds",
+        "decision",
+    }
+)
+
+
+def _source_fetch(item: FetchArtifact) -> SourceFetch:
+    metadata = item.fetch_metadata
+    if not isinstance(metadata, Mapping):
+        raise InvariantViolation(
+            "FetchArtifact metadata is not an object",
+            code="source_fetch_metadata_invalid",
+        )
+    if item.fetcher != "document-cache":
+        return SourceFetch(
+            id=item.id,
+            fetcher=item.fetcher,
+            status=item.status,
+            fetched_at=item.fetched_at,
+            decision="LIVE",
+        )
+    if (
+        set(metadata) - _CACHE_FETCH_METADATA_KEYS
+        or not _CACHE_FETCH_REQUIRED_KEYS.issubset(metadata)
+    ):
+        raise InvariantViolation(
+            "Cached FetchArtifact metadata is not allowlisted or complete",
+            code="source_fetch_metadata_invalid",
+        )
+    policy_version = metadata["policy_version"]
+    strictest_freshness = metadata["strictest_freshness"]
+    decision = metadata["decision"]
+    raw_reuse_age_seconds = metadata["reuse_age_seconds"]
+    if (
+        not isinstance(policy_version, str)
+        or not policy_version
+        or strictest_freshness not in {"STABLE", "RECENT", "CURRENT"}
+        or decision not in {"CACHE_FRESH", "CACHE_STALE_IF_ERROR"}
+        or isinstance(raw_reuse_age_seconds, bool)
+    ):
+        raise InvariantViolation(
+            "Cached FetchArtifact policy metadata is invalid",
+            code="source_fetch_metadata_invalid",
+        )
+    try:
+        source_fetched_at = datetime.fromisoformat(
+            str(metadata["source_fetched_at"])
+        )
+        reused_at = datetime.fromisoformat(str(metadata["reused_at"]))
+        reuse_age_seconds = int(raw_reuse_age_seconds)
+        source_fetch_artifact_id = UUID(
+            str(metadata["source_fetch_artifact_id"])
+        )
+        source_run_id = UUID(str(metadata["source_run_id"]))
+        source_document_version_id = UUID(
+            str(metadata["source_document_version_id"])
+        )
+    except (TypeError, ValueError, ArithmeticError) as error:
+        raise InvariantViolation(
+            "Cached FetchArtifact metadata cannot be parsed",
+            code="source_fetch_metadata_invalid",
+        ) from error
+    live_error_category = metadata.get("live_error_category")
+    live_error_code = metadata.get("live_error_code")
+    if any(
+        value is not None and (not isinstance(value, str) or not value)
+        for value in (live_error_category, live_error_code)
+    ):
+        raise InvariantViolation(
+            "Cached FetchArtifact error metadata is invalid",
+            code="source_fetch_metadata_invalid",
+        )
+    return SourceFetch(
+        id=item.id,
+        fetcher=item.fetcher,
+        status=item.status,
+        fetched_at=item.fetched_at,
+        decision=decision,
+        policy_version=policy_version,
+        strictest_freshness=strictest_freshness,
+        source_fetch_artifact_id=source_fetch_artifact_id,
+        source_run_id=source_run_id,
+        source_document_version_id=source_document_version_id,
+        source_fetched_at=source_fetched_at,
+        reused_at=reused_at,
+        reuse_age_seconds=reuse_age_seconds,
+        live_error_category=live_error_category,
+        live_error_code=live_error_code,
+    )
 
 
 class SqlShadowSnapshotReader:
@@ -296,6 +414,80 @@ class SqlShadowSnapshotReader:
                     )
                 ).all()
             )
+            fetches = tuple(
+                _source_fetch(item)
+                for item in (
+                    await session.scalars(
+                        select(FetchArtifact).where(
+                            FetchArtifact.tenant_id == lease.tenant_id,
+                            FetchArtifact.run_id == lease.search_run_id,
+                            FetchArtifact.status == "SUCCEEDED",
+                        )
+                    )
+                ).all()
+            )
+            cached_fetches = tuple(
+                item for item in fetches if item.fetcher == "document-cache"
+            )
+            if cached_fetches:
+                source_fetch_ids = tuple(
+                    item.source_fetch_artifact_id for item in cached_fetches
+                )
+                source_lineage_rows = (
+                    await session.execute(
+                        select(
+                            FetchArtifact.id,
+                            FetchArtifact.run_id,
+                            FetchArtifact.fetched_at,
+                            DocumentVersionFetch.document_version_id,
+                        )
+                        .join(
+                            DocumentVersionFetch,
+                            (
+                                DocumentVersionFetch.tenant_id
+                                == FetchArtifact.tenant_id
+                            )
+                            & (
+                                DocumentVersionFetch.run_id
+                                == FetchArtifact.run_id
+                            )
+                            & (
+                                DocumentVersionFetch.fetch_artifact_id
+                                == FetchArtifact.id
+                            ),
+                        )
+                        .where(
+                            FetchArtifact.tenant_id == lease.tenant_id,
+                            DocumentVersionFetch.tenant_id == lease.tenant_id,
+                            FetchArtifact.id.in_(source_fetch_ids),
+                            FetchArtifact.status == "SUCCEEDED",
+                            FetchArtifact.fetcher == "http",
+                        )
+                    )
+                ).all()
+                valid_source_lineage = {
+                    (
+                        row.id,
+                        row.run_id,
+                        row.fetched_at,
+                        row.document_version_id,
+                    )
+                    for row in source_lineage_rows
+                }
+                if any(
+                    (
+                        item.source_fetch_artifact_id,
+                        item.source_run_id,
+                        item.source_fetched_at,
+                        item.source_document_version_id,
+                    )
+                    not in valid_source_lineage
+                    for item in cached_fetches
+                ):
+                    raise InvariantViolation(
+                        "Cached FetchArtifact source lineage is invalid",
+                        code="source_fetch_lineage_invalid",
+                    )
 
             evidence_rows = (
                 await session.execute(
@@ -510,6 +702,7 @@ class SqlShadowSnapshotReader:
                 steps=steps,
                 attempts=attempts,
                 invocations=invocations,
+                fetches=fetches,
                 evidence=tuple(evidence_items),
                 claims=claims,
                 citations=citations,

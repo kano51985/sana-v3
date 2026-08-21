@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import os
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -67,13 +68,51 @@ from sana.platform.db.models.shadow_campaign import (
     ShadowRunResultRecord,
 )
 from sana.platform.db.session import create_database_engine, create_session_factory
-from sana.platform.db.shadow_collector import SqlShadowSnapshotReader
+from sana.platform.db.shadow_collector import SqlShadowSnapshotReader, _source_fetch
 from sana.platform.db.shadow_report import SqlShadowReportGateway
 from sana.platform.db.uow import TenantUnitOfWorkFactory
 
 
 DATABASE_URL = os.environ.get("SANA_TEST_DATABASE_URL")
 NOW = datetime(2026, 8, 15, 8, 0, tzinfo=UTC)
+
+
+def _cached_fetch_artifact(**metadata_overrides):
+    metadata = {
+        "redirects": [],
+        "policy_version": "document-reuse-v1",
+        "strictest_freshness": "STABLE",
+        "source_fetch_artifact_id": str(uuid4()),
+        "source_run_id": str(uuid4()),
+        "source_document_version_id": str(uuid4()),
+        "source_fetched_at": NOW.isoformat(),
+        "reused_at": (NOW + timedelta(hours=1)).isoformat(),
+        "reuse_age_seconds": 3600,
+        "decision": "CACHE_FRESH",
+    }
+    metadata.update(metadata_overrides)
+    return SimpleNamespace(
+        id=uuid4(),
+        fetcher="document-cache",
+        status="SUCCEEDED",
+        fetched_at=NOW,
+        fetch_metadata=metadata,
+    )
+
+
+def test_source_fetch_projection_parses_only_allowlisted_cache_lineage() -> None:
+    projected = _source_fetch(_cached_fetch_artifact())
+
+    assert projected.decision == "CACHE_FRESH"
+    assert projected.source_fetched_at == NOW
+    assert projected.live_error_code is None
+
+
+def test_source_fetch_projection_rejects_unallowlisted_metadata() -> None:
+    with pytest.raises(InvariantViolation) as captured:
+        _source_fetch(_cached_fetch_artifact(prompt="must never be attested"))
+
+    assert captured.value.code == "source_fetch_metadata_invalid"
 
 
 def _manifest() -> ShadowManifest:
@@ -523,7 +562,7 @@ async def test_collector_is_fenced_atomic_idempotent_and_rls_scoped() -> None:
         harness_commit_sha="b" * 40,
         harness_source_clean=True,
         harness_fileset_hash="b" * 64,
-        collector_schema_version="shadow-collector-v2",
+        collector_schema_version="shadow-collector-v3",
         environment_identity_hash=snapshot_hash(environment),
         environment_snapshot=environment,
     )
@@ -634,6 +673,8 @@ async def test_collector_is_fenced_atomic_idempotent_and_rls_scoped() -> None:
         lease = reclaimed
 
         snapshot = await reader.read(lease)
+        assert len(snapshot.fetches) == 1
+        assert snapshot.fetches[0].decision == "LIVE"
         case = next(item for item in manifest.cases if item.id == lease.case_id)
         outcome = collect_run_snapshot(
             snapshot,

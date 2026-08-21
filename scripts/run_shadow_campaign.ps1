@@ -269,7 +269,7 @@ function Prepare-ShadowEnvironment {
             commit_sha = $commit
             source_clean = $true
             fileset_hash = Get-TrackedFilesetHash
-            collector_schema_version = 'shadow-collector-v2'
+            collector_schema_version = 'shadow-collector-v3'
         }
         environment = [ordered]@{
             compose_project = $ProjectName

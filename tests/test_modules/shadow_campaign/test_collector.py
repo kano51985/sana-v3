@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
@@ -15,6 +15,7 @@ from sana.modules.shadow_campaign.collector import (
     SourceClaim,
     SourceEvidence,
     SourceFact,
+    SourceFetch,
     SourceInvocation,
     SourceOutbox,
     SourceProviderAttempt,
@@ -56,6 +57,9 @@ CHUNK = UUID("b3000000-0000-0000-0000-000000000001")
 CLAIM = UUID("c0000000-0000-0000-0000-000000000001")
 CITATION = UUID("d0000000-0000-0000-0000-000000000001")
 OUTBOX = UUID("e0000000-0000-0000-0000-000000000001")
+FETCH = UUID("f0000000-0000-0000-0000-000000000001")
+SOURCE_FETCH = UUID("f1000000-0000-0000-0000-000000000001")
+SOURCE_RUN = UUID("f2000000-0000-0000-0000-000000000001")
 
 
 def _case(*, deterministic: bool = True) -> ShadowCase:
@@ -188,6 +192,27 @@ def _snapshot() -> RunSourceSnapshot:
     )
 
 
+def _cache_fetch(decision: str) -> SourceFetch:
+    stale = decision == "CACHE_STALE_IF_ERROR"
+    return SourceFetch(
+        id=FETCH,
+        fetcher="document-cache",
+        status="SUCCEEDED",
+        fetched_at=NOW - timedelta(hours=1),
+        decision=decision,
+        policy_version="document-reuse-v1",
+        strictest_freshness="STABLE",
+        source_fetch_artifact_id=SOURCE_FETCH,
+        source_run_id=SOURCE_RUN,
+        source_document_version_id=VERSION,
+        source_fetched_at=NOW - timedelta(hours=1),
+        reused_at=NOW,
+        reuse_age_seconds=3600,
+        live_error_category="TRANSIENT" if stale else None,
+        live_error_code="fetch_network_failure" if stale else None,
+    )
+
+
 def test_collector_builds_traceable_metrics_and_conservative_cost() -> None:
     outcome = collect_run_snapshot(
         _snapshot(),
@@ -211,6 +236,53 @@ def test_collector_builds_traceable_metrics_and_conservative_cost() -> None:
     assert outcome.usage.observed_estimated_cost == Decimal("0.0002")
     assert outcome.error_class is None
     assert outcome.error_signal_flags == ()
+
+
+def test_fresh_cache_reuse_is_measured_without_marking_run_degraded() -> None:
+    outcome = collect_run_snapshot(
+        replace(_snapshot(), fetches=(_cache_fetch("CACHE_FRESH"),)),
+        _case(),
+        _rate(),
+        oracle_version="shadow-cases-v1",
+    )
+
+    assert outcome.degraded is False
+    assert outcome.error_class is None
+    assert outcome.error_signal_flags == ()
+
+
+def test_stale_if_error_reuse_is_provider_transient_and_degraded() -> None:
+    outcome = collect_run_snapshot(
+        replace(
+            _snapshot(),
+            fetches=(_cache_fetch("CACHE_STALE_IF_ERROR"),),
+        ),
+        _case(),
+        _rate(),
+        oracle_version="shadow-cases-v1",
+    )
+
+    assert outcome.degraded is True
+    assert outcome.error_class is ErrorClass.PROVIDER_TRANSIENT
+    assert outcome.error_code == "provider_transient_error"
+    assert outcome.failed_phase == "FETCH"
+    assert "provider_transient" in outcome.error_signal_flags
+    assert "fetch_cache_stale_if_error" in outcome.error_signal_flags
+
+
+def test_fetch_projection_cannot_carry_content_or_network_identifiers() -> None:
+    projected_fields = {item.name for item in fields(SourceFetch)}
+
+    assert projected_fields.isdisjoint(
+        {
+            "url",
+            "url_hash",
+            "storage_uri",
+            "content_hash",
+            "response_headers",
+            "body",
+        }
+    )
 
 
 def test_source_digest_is_independent_of_gold_row_read_order() -> None:
