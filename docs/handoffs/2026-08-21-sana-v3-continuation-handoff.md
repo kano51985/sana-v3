@@ -2,7 +2,7 @@
 
 > 更新时间：2026-08-21（Asia/Shanghai）
 > 交接目的：让新的 Codex 任务或另一台电脑仅凭本文件即可恢复上下文并继续开发。
-> 当前结论：私有 `sana-v3` 开发仓库已创建；架构迁移主体已完成，Smoke 已通过，最新 Full 被质量门禁正确拒绝；当前正在设计跨运行内容复用能力，尚未获用户对该具体设计的最终批准，尚未开始实现。
+> 当前结论：私有 `sana-v3` 开发仓库、策略化跨运行内容复用及其审计链均已完成。候选 `626b558` 的全新 Live Smoke 和 7/7 审计通过；Full 完整执行 120/120 且 7/7 审计通过，但 DeepSeek 的 18 次真实调用全部返回 HTTP 401，导致 6 个 critical gold 失败并被门禁正确拒绝。当前唯一阻塞是替换为服务端认可的 DeepSeek API key 后重跑新 attestation、Smoke 和 Full；详见第 22 节。
 
 ## 0. 给接续任务的强制执行摘要
 
@@ -14,14 +14,14 @@
 2. 不得降低门禁阈值、删除失败 Campaign、修改历史报告或伪造 20 条人工复核。
 3. 不得把 API key、数据库密码、本地访问 token、完整 prompt、answer 或 evidence quote 输出到终端日志、Git、Campaign 报告或聊天。
 4. 当前继续使用同一个 DeepSeek API 执行 planner、verifier、synthesizer；用户电脑暂时不能运行本地小模型。生产模型切换测试延后。
-5. 用户已授权架构负责人在需要选择时直接采用前沿 AI 系统架构思路做决定，但本轮使用的 brainstorming 技能对“跨运行缓存行为变更”设置了显式设计批准门。因此实施前仍要得到用户一句明确批准。
+5. 用户已授权架构负责人在方案完成世界级架构/TL 自审后直接执行；只有必须由用户本人提供的外部权限、有效凭据或人工评分才应暂停。
 6. 用户允许大幅改造架构和界面；当前阶段先完成后端质量与发布门禁，不要被 Streamlit/UI 重做分散注意力。
 7. 远程仓库 `sana-v3` 是私有开发迁移仓库，不代表生产发布。只有 Full 自动门禁通过、20 条人工复核真实完成、最终报告审计通过后，才可宣称 release-ready。
 
 建议接续任务的第一条回复：
 
 ```text
-我已完整读取 2026-08-21 Sana v3 交接文档。当前阶段是“Live Full 失败后的跨运行抓取韧性设计审批”，不是重新规划整体架构。最新 Smoke 通过，Full 因 12 个关键金标、72.91% 覆盖和 42/120 降级失败。下一步先确认策略化 Read-through Cache 设计，再写设计文档、实施、重建镜像并重跑 Smoke/Full。
+我已完整读取 2026-08-21 Sana v3 交接文档。策略化跨运行内容复用已经实现并通过真实 120-run Full 的完整血缘审计；当前 Full 自动门禁失败的唯一直接原因是 DeepSeek HTTP 401。下一步加载用户更新后的有效 key，提交最新交接文档，重新 prepare，并用全新 key 运行 Smoke→audit→Full→audit。只有 Full 自动门禁通过后才邀请用户完成 20 项人工复核。
 ```
 
 ## 1. 当前仓库与分支拓扑
@@ -105,8 +105,8 @@ git switch --track -c codex/shadow-campaign-release-gate origin/codex/shadow-cam
 | 2 | 搜索、证据、DeepSeek 质量流水线 | 已完成基础架构 | 真实来源质量由后续 Shadow Gate 持续验收 |
 | 3 | Shadow Campaign 发布门禁系统 | 已完成 | 离线故障矩阵、不可变报告、审计链通过 |
 | 4 | Live 证据质量强化 | 已完成多轮 | Smoke 通过；Full 仍暴露抓取韧性缺口 |
-| 5 | Live Smoke / Full Release Gate | 进行中 | Full 自动门禁通过 |
-| 6 | 策略化跨运行内容复用 | 等待设计批准 | 设计、计划、实现、测试和新镜像完成 |
+| 5 | Live Smoke / Full Release Gate | 等待有效 DeepSeek 凭据重跑 | Full 自动门禁通过 |
+| 6 | 策略化跨运行内容复用 | 已完成 | 设计、计划、实现、测试、真实缓存命中与审计完成 |
 | 7 | 20 条真实人工复核 | 未开始 | 用户真实提交 20 条 rubric 评分 |
 | 8 | v3 候选发布与远程稳定化 | WIP 仓库可先创建 | Final PASS、审计通过、稳定分支/标签 |
 | 9 | 生产模型切换与放量 | 延后 | 独立生产模型评测与分阶段 rollout |
@@ -266,7 +266,9 @@ de47a00 harden reviewed evidence synthesis
 - 8 个 skip 是需要显式宿主 PostgreSQL 测试 URL 的标记测试；相同核心 repository/collector/report 路径已在 Docker PostgreSQL 中覆盖。
 - 环境未安装 ruff/black，因此没有声称执行过它们。
 
-## 9. 当前 Docker 与镜像身份
+## 9. 历史 Docker 与镜像身份
+
+> 本节保留旧批次背景；当前候选身份见第 22 节。
 
 ### Docker project
 
@@ -308,7 +310,9 @@ Invoke-WebRequest -UseBasicParsing http://127.0.0.1:18000/health/ready
 {"status":"ok","checks":{"postgresql":"ok","redis":"ok"}}
 ```
 
-## 10. 当前门禁证据
+## 10. 历史门禁证据
+
+> 本节保留实施策略化复用之前的基线；最新权威证据见第 22 节。
 
 ### 10.1 最新 Smoke：通过
 
@@ -819,11 +823,11 @@ scripts/audit_shadow_campaign.ps1
 
 ### 门禁任务
 
-- [ ] 构建新镜像并生成新 attestation；当前机器 Docker daemon 未配置 HTTPS proxy，无法拉取固定 digest 基础镜像。
-- [ ] 新 Smoke FINAL_PASS。
-- [ ] Smoke audit 7/7。
+- [x] 固定 digest 基础镜像拉取、候选镜像构建和新 attestation。
+- [x] 候选 `626b558` 的新 Smoke `FINAL_PASS`。
+- [x] Smoke audit 7/7。
 - [ ] 新 Full 自动指标全部达标。
-- [ ] Full audit 7/7。
+- [x] Full 完整执行 120/120 且 Full audit 7/7；自动质量门禁仍因 DeepSeek HTTP 401 失败。
 - [ ] 用户真实完成 20 条人工复核。
 - [ ] Final report `FINAL_PASS`。
 
@@ -850,12 +854,12 @@ scripts/audit_shadow_campaign.ps1
 
 如果新的任务只有十分钟，执行以下顺序：
 
-1. clone/pull `sana-v3` 的 `codex/shadow-campaign-release-gate`，确认 HEAD 至少为 `139e458`。
+1. clone/pull `sana-v3` 的 `codex/shadow-campaign-release-gate`，确认 HEAD 至少为 `626b558`，并继续拉取本文的后续交接提交。
 2. 阅读本文件第 17、18、21 节以及新的 cache design/plan。
 3. `git status --short --branch`，确认没有未知改动。
-4. 先恢复 Docker daemon 对 Docker Hub 的 HTTPS 访问，再执行固定 digest 的正式 `prepare`；不能用本机不同版本镜像冒充。
+4. 在本机用户环境中更新为 DeepSeek 服务端认可的 API key；不得把 key 粘贴到聊天或提交到 Git。
 5. 不重跑旧 Full，不进行人工复核，不创建 release tag。
-6. 从新镜像、新 attestation、新 Smoke 开始整个门禁链。
+6. 从新 HEAD、新镜像、新 attestation、新 Smoke 开始整个门禁链；不要复用第 22 节的失败 Full 作为 parent 或发布证据。
 
 ## 21. 2026-08-21 接续执行结果
 
@@ -879,6 +883,109 @@ scripts/audit_shadow_campaign.ps1
 - worktree clean，HEAD 与远程分支一致。
 
 尚未完成的唯一当前链路是发布容器门禁。`prepare -OfflineFixture` 和对固定 Python digest 的直接 pull 均确认失败于 Docker daemon：`Docker Desktop has no HTTPS proxy`，无法连接 `registry-1.docker.io:443`。不要改变 Dockerfile digest、不要给 Postgres 17 重打 16 标签、不要生成伪 attestation。恢复 daemon 网络后按第 14 节创建全新的 Smoke key，完成 7/7 审计后再创建 Full。
+
+## 22. 2026-08-21 最新门禁执行与当前唯一阻塞
+
+> 本节是当前权威状态；它取代第 9、10、12、13、18、20、21 节中与“尚未实施/尚未构建/代理阻塞”有关的旧叙述。
+
+### 22.1 固定镜像、离线演练与测试
+
+- 本地代理恢复后，固定基础镜像 `python:3.12-slim@sha256:dd2937...8e65` 成功拉取。
+- 离线 campaign `e57165ac-c31f-4120-9811-948a3dc4cd35` 按 fixture 语义 `FINAL_FAIL`，但离线专属 8 项审计全部 PASS；它不是质量发布证据。
+- 策略化复用实现的完整基线仍为 `605 passed, 8 skipped`，`compileall` 和 `git diff --check` 通过。
+
+### 22.2 首次 Live 链暴露并关闭 Collector 类型混淆
+
+候选 `d634bfd`：
+
+- Smoke `ed995a10-8971-4c49-a9aa-61d8803ac02d`：`FINAL_PASS`，7/7 审计 PASS。
+- Full `45e88dcf-1d52-4ef6-b6cc-c18efe7be322`：首次 2 个 run 已产生 3 个 `CACHE_FRESH` 命中，但 Collector 以 `source_fetch_lineage_invalid` FATAL 中止，118 个剩余项按 `campaign_fatal` 跳过。
+
+根因是 Collector 错误要求 `DocumentVersion.content_hash == FetchArtifact.content_hash`。前者是提取/规范化文本 artifact 的摘要，后者是原始 HTTP body 的摘要；二者在真实页面上本就可能不同。
+
+提交 `626b558677d40fa4a54e6d58ae1821cb4be93f14` 进行了最小修复：
+
+- 继续 fail-closed 校验 tenant、source fetch、source run、source timestamp、source DocumentVersionFetch、canonical URL hash、原始 body hash、media type 与成功的原始 `fetcher=http`；
+- 只移除错误的 raw/extracted digest 等值要求；
+- PostgreSQL 回归 fixture 显式使用不同 raw/extracted digest；
+- 原有 source fetch content hash 篡改测试继续返回 `source_fetch_lineage_invalid`；
+- 定向测试 `43 passed, 1 skipped`，一次性 PostgreSQL 16 集成 `1 passed`，全套 `605 passed, 8 skipped`。
+
+### 22.3 修复候选身份与新 Smoke
+
+```text
+Code commit:       626b558677d40fa4a54e6d58ae1821cb4be93f14
+Candidate image:   sha256:5fc8a027284710894fee92dec6219d959b26d09f99b1c0f8be76912b8e25d0dc
+OCI revision:      626b558677d40fa4a54e6d58ae1821cb4be93f14
+Execution class:   LIVE_DEEPSEEK
+Smoke campaign:    09155515-1d78-4c4e-9d37-dbd5b150a40b
+Smoke decision:    FINAL_PASS
+Smoke hash:        ab25c97ad1cd653838ef3328e7a264a2180061ce8719dd35e46c322ab247f7fa
+Smoke audit:       7/7 PASS
+```
+
+### 22.4 修复后的 120-run Full
+
+```text
+Full campaign:       e7973029-f830-4294-ac8e-28af9ccdf263
+Parent Smoke:        09155515-1d78-4c4e-9d37-dbd5b150a40b
+Submitted/collected: 120/120
+Failed/skipped:      0/0
+Degraded:            12
+Stop intent:         NONE
+Decision state:      FINAL_FAIL
+Decision input hash: 34a52f3c0d6e2ac8fced6dcb09e2406d5b99eef845970bde0f7baf1bc4818015
+Decision hash:       5e2d0a24228042ffdd6e4cfd00a78c33ed34f5827778ae739f2572d216592aef
+Full audit:          7/7 PASS
+```
+
+真实复用证据：
+
+```text
+HTTP fetch observations:        24
+CACHE_FRESH observations:      135
+完整三重 source lineage:       135/135
+确认跨 run:                    135/135
+CACHE_STALE_IF_ERROR:             0
+result/search-run uniqueness: 120/120 PASS
+```
+
+因此策略化复用、run-local observation、跨 run source lineage、报告完整性、隐私、RLS、worker/image identity 均已在真实 Full 中闭环。
+
+### 22.5 Full 失败的外部直接原因
+
+Full 中 18 次 DeepSeek 调用全部得到：
+
+```text
+error_category:       PERMANENT
+error_code:           model_http_401
+billing_disposition:  POSSIBLY_BILLED
+observed calls:       0
+possibly billed:     18 calls / 12 runs / USD 0.012 reserve
+```
+
+失败覆盖 6 次 critical verifier 调用及 12 次 planner/verifier 调用。直接造成：
+
+- `fast-en-01-http-get` 的 `http-get-properties` 三次重复 FAIL；
+- `fast-en-02-dns-port` 的 `dns-port-transports` 三次重复 FAIL；
+- `hard_critical_gold_assertion = 6`，从而 `hard_safety = 6`，门禁正确 `FINAL_FAIL`。
+
+凭据安全检查只比较结构、不输出内容，已确认：进程、Windows 用户环境和 worker 容器中的 key 一致，均非离线 sentinel、无首尾空白、长度正常。因此不是代理、注入或容器覆盖错误；当前 key 被 DeepSeek 服务端拒绝。
+
+### 22.6 精确恢复动作
+
+这是当前唯一需要用户本人完成的动作：在 Windows 用户环境中把 `DEEPSEEK_API_KEY` 更新为 DeepSeek 服务端认可的有效 key，不要把值粘贴到聊天、终端回显或 Git。更新后只需告诉接续任务“继续”。
+
+接续任务随后必须直接执行：
+
+1. 拉取包含本节的最新远程提交，确认 worktree clean。
+2. 从用户环境无回显加载 key，并先做只输出 HTTP status 的最小认证探针；必须不再是 401。
+3. 重新 `prepare`，因为本文提交会使 HEAD 晚于 `626b558`；OCI revision 和 attestation 必须等于新 HEAD。
+4. 使用全新 Smoke key 创建 Live Smoke，并要求 `FINAL_PASS` + 7/7 audit。
+5. 使用全新 Full key 且绑定新 Smoke，要求 120/120 + 自动门禁通过 + 7/7 audit。
+6. 只有 Full 自动门禁通过，才让用户亲自完成 20 项人工复核；不得由 AI 代填。
+
+不要删除任何上述失败 campaign；它们是证明门禁正确暴露代码缺陷和外部认证失败的审计证据。
 
 ---
 
