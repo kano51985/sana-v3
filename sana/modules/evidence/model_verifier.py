@@ -264,14 +264,18 @@ class ModelEvidenceVerifier:
     ) -> ProposedVerification | None:
         """Read a method/property cell from the reviewed IANA table at runtime."""
 
+        source = candidate.url.split("#", 1)[0].split("?", 1)[0]
+        reviewed_sources = {
+            "https://www.iana.org/assignments/http-methods",
+            (
+                "https://www.iana.org/assignments/http-methods/"
+                "http-methods.xhtml"
+            ),
+        }
         if (
             candidate.source_authority is not SourceAuthority.OFFICIAL
             or candidate.score < 0.8
-            or candidate.url.split("#", 1)[0].split("?", 1)[0]
-            != (
-                "https://www.iana.org/assignments/http-methods/"
-                "http-methods.xhtml"
-            )
+            or source not in reviewed_sources
         ):
             return None
         fact_text = (
@@ -579,7 +583,7 @@ class ModelEvidenceVerifier:
         cls,
         candidate: SelectedCandidate,
     ) -> ProposedVerification | None:
-        """Bind DNS port 53 and both transports to the reviewed IANA rows."""
+        """Bind each DNS port/transport fact to its reviewed IANA row."""
 
         source = candidate.url.split("#", 1)[0].split("?", 1)[0]
         fact_text = (
@@ -602,19 +606,50 @@ class ModelEvidenceVerifier:
             or "dns" not in fact_text
         ):
             return None
-        rows = re.search(
-            r"domain\s*,?\s*53\s*,?\s*tcp\s*,?\s*Domain Name Server.*?"
-            r"domain\s*,?\s*53\s*,?\s*udp\s*,?\s*Domain Name Server",
-            candidate.chunk.text,
-            re.I | re.S,
-        )
-        if rows is None or len(rows.group(0)) > 600:
+
+        row_patterns = {
+            "tcp": (
+                r"domain\s*,?\s*53\s*,?\s*tcp\s*,?\s*Domain Name Server"
+            ),
+            "udp": (
+                r"domain\s*,?\s*53\s*,?\s*udp\s*,?\s*Domain Name Server"
+            ),
+        }
+        rows = {
+            transport: re.search(pattern, candidate.chunk.text, re.I)
+            for transport, pattern in row_patterns.items()
+        }
+        fact_key = candidate.fact.key.casefold()
+        if fact_key in {"dns_port_transports", "dns_transport_protocols"}:
+            required = ("tcp", "udp")
+        elif fact_key == "dns_tcp":
+            required = ("tcp",)
+        elif fact_key == "dns_udp":
+            required = ("udp",)
+        elif fact_key == "dns_port":
+            required = (
+                ("tcp",)
+                if rows["tcp"] is not None
+                else ("udp",)
+                if rows["udp"] is not None
+                else ()
+            )
+        else:
+            return None
+        if not required or any(rows[transport] is None for transport in required):
+            return None
+
+        matched_rows = [rows[transport] for transport in required]
+        start = min(row.start() for row in matched_rows if row is not None)
+        end = max(row.end() for row in matched_rows if row is not None)
+        quote = candidate.chunk.text[start:end].strip()
+        if len(quote) > 600:
             return None
         return ProposedVerification(
             candidate.fact_id,
             candidate.id,
             SupportType.SUPPORTS,
-            rows.group(0).strip(),
+            quote,
             0.99,
             ("direct_support", "explicit_value"),
         )

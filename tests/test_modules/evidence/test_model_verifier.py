@@ -962,8 +962,18 @@ async def test_exact_official_term_list_skips_model_verification() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reviewed_registry_table_skips_model_verification() -> None:
+@pytest.mark.parametrize(
+    "url",
+    (
+        "https://www.iana.org/assignments/http-methods/http-methods.xhtml",
+        "https://www.iana.org/assignments/http-methods",
+    ),
+)
+async def test_reviewed_registry_table_skips_model_verification(
+    url: str,
+) -> None:
     item = http_method_registry_candidate()
+    item = replace(item, url=url)
 
     result = await ModelEvidenceVerifier(ForbiddenGateway()).verify(
         (item,),
@@ -1037,6 +1047,98 @@ async def test_dns_csv_rows_are_a_reviewed_deterministic_source() -> None:
 
     assert result.degraded is False
     assert result.evidence[0].verifier_version == "deterministic-dns-registry-v1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fact", "text", "expected_transport"),
+    (
+        (
+            FactRequirement(
+                "dns_port",
+                FactType.BACKGROUND,
+                "DNS conventional port number",
+                "DNS port",
+            ),
+            "domain,53,tcp,Domain Name Server,,,,,,,,",
+            "tcp",
+        ),
+        (
+            FactRequirement(
+                "dns_tcp",
+                FactType.BACKGROUND,
+                "DNS use of TCP transport",
+                "DNS TCP",
+            ),
+            "domain,53,tcp,Domain Name Server,,,,,,,,",
+            "tcp",
+        ),
+        (
+            FactRequirement(
+                "dns_udp",
+                FactType.BACKGROUND,
+                "DNS use of UDP transport",
+                "DNS UDP",
+            ),
+            "domain,53,udp,Domain Name Server,,,,,,,,",
+            "udp",
+        ),
+    ),
+)
+async def test_dns_registry_validates_one_reviewed_row_per_fact(
+    fact: FactRequirement,
+    text: str,
+    expected_transport: str,
+) -> None:
+    item = reviewed_text_candidate(
+        text,
+        fact,
+        (
+            "https://www.iana.org/assignments/service-names-port-numbers/"
+            "service-names-port-numbers.csv"
+        ),
+    )
+    item = replace(
+        item,
+        source_identity="iana.org",
+        source_authority=SourceAuthority.OFFICIAL,
+    )
+
+    result = await ModelEvidenceVerifier(ForbiddenGateway()).verify(
+        (item,),
+        invocation_context=context(item),
+        deadline=NOW + timedelta(seconds=5),
+        verified_at=NOW,
+    )
+
+    assert result.degraded is False
+    assert result.evidence[0].verdict is EvidenceVerdict.ACCEPTED
+    assert result.evidence[0].verifier_version == "deterministic-dns-registry-v1"
+    assert expected_transport in result.evidence[0].candidate.quote.casefold()
+
+
+def test_dns_combined_transport_fact_requires_both_reviewed_rows() -> None:
+    fact = FactRequirement(
+        "dns_transport_protocols",
+        FactType.BACKGROUND,
+        "DNS use of both TCP and UDP transport protocols",
+        "DNS transports",
+    )
+    item = reviewed_text_candidate(
+        "domain,53,tcp,Domain Name Server,,,,,,,,",
+        fact,
+        (
+            "https://www.iana.org/assignments/service-names-port-numbers/"
+            "service-names-port-numbers.csv"
+        ),
+    )
+    item = replace(
+        item,
+        source_identity="iana.org",
+        source_authority=SourceAuthority.OFFICIAL,
+    )
+
+    assert ModelEvidenceVerifier._deterministic_dns_registry(item) is None
 
 
 @pytest.mark.asyncio
