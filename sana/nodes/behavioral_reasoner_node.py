@@ -17,7 +17,14 @@ class BehavioralReasonerNode(PipelineNode):
         )
         if ctx.behavioral_insight["patterns"]:
             for p in ctx.behavioral_insight["patterns"]:
-                print(f"[行为推理] 模式={p["type"]}, 置信度={p["confidence"]}, {p["detail"]}")
+                print(
+                    f"[行为推理] 模式={p['type']}, "
+                    f"置信度={p['confidence']}, {p['detail']}"
+                )
             if ctx.behavioral_insight["emotion_additions"]:
-                print(f"[行为推理] 情绪加成: {ctx.behavioral_insight["emotion_additions"]}, 强度: {ctx.behavioral_insight["suggested_intensity"]}")
+                print(
+                    "[行为推理] 情绪加成: "
+                    f"{ctx.behavioral_insight['emotion_additions']}, 强度: "
+                    f"{ctx.behavioral_insight['suggested_intensity']}"
+                )
         return NodeResult(next="alma", context=ctx)
