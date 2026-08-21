@@ -10,7 +10,12 @@ from urllib.parse import urljoin
 
 import httpx
 
-from sana.modules.content.domain import FetchArtifact, FetchRequest, FetchStatus
+from sana.modules.content.domain import (
+    ALLOWED_CONTENT_MEDIA_TYPES,
+    FetchArtifact,
+    FetchRequest,
+    FetchStatus,
+)
 from sana.modules.shared.clock import Clock
 from sana.modules.shared.errors import ErrorCategory, TypedError
 from sana.platform.security.ssrf import SSRFBlocked, SSRFGuard
@@ -47,16 +52,7 @@ class HostConcurrencyLimiter:
 
 
 class HttpContentFetcher:
-    _ALLOWED_MEDIA_TYPES = frozenset(
-        {
-            "text/html",
-            "application/xhtml+xml",
-            "text/plain",
-            "text/csv",
-            "application/json",
-            "application/pdf",
-        }
-    )
+    _ALLOWED_MEDIA_TYPES = ALLOWED_CONTENT_MEDIA_TYPES
     _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
     def __init__(
