@@ -213,8 +213,9 @@ class ReviewProjection:
     case_id: str
     repetition: int
     rubric_version: str
-    claims: tuple[ReviewClaimProjection, ...]
+    question_text: str
     answer_text: str
+    claims: tuple[ReviewClaimProjection, ...]
 
 
 __all__ = [

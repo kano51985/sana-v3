@@ -103,6 +103,28 @@ class SqlShadowReviewProjectionReader:
                     code="review_result_not_eligible",
                 )
 
+            question_text = await session.scalar(
+                select(Message.content)
+                .join(
+                    ResponseRun,
+                    (ResponseRun.tenant_id == Message.tenant_id)
+                    & (ResponseRun.message_id == Message.id),
+                )
+                .join(
+                    SearchRunRecord,
+                    (SearchRunRecord.tenant_id == ResponseRun.tenant_id)
+                    & (SearchRunRecord.response_run_id == ResponseRun.id),
+                )
+                .where(
+                    SearchRunRecord.tenant_id == tenant_id,
+                    SearchRunRecord.id == binding.search_run_id,
+                    SearchRunRecord.conversation_id == binding.conversation_id,
+                    SearchRunRecord.message_id == Message.id,
+                    ResponseRun.conversation_id == binding.conversation_id,
+                    Message.conversation_id == binding.conversation_id,
+                    Message.role == "USER",
+                )
+            )
             answer_text = await session.scalar(
                 select(Message.content)
                 .join(
@@ -124,9 +146,9 @@ class SqlShadowReviewProjectionReader:
                     Message.role == "ASSISTANT",
                 )
             )
-            if answer_text is None:
+            if question_text is None or answer_text is None:
                 raise InvariantViolation(
-                    "Review answer material is unavailable",
+                    "Review question or answer material is unavailable",
                     code="review_projection_invalid",
                 )
 
@@ -286,8 +308,9 @@ class SqlShadowReviewProjectionReader:
                 binding.case_id,
                 binding.repetition,
                 binding.review_rubric_version,
-                tuple(projection_claims),
+                question_text,
                 answer_text,
+                tuple(projection_claims),
             )
         finally:
             await session.rollback()

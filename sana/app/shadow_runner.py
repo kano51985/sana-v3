@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
@@ -35,6 +36,21 @@ from sana.modules.shared.errors import InvariantViolation
 
 _TRANSIENT_COLLECTOR_CODES = frozenset(
     {"source_not_sealed", "source_outbox_unpublished"}
+)
+_REVIEW_FOCUS_STOP_WORDS = frozenset(
+    {
+        "and",
+        "are",
+        "for",
+        "from",
+        "into",
+        "that",
+        "the",
+        "this",
+        "was",
+        "were",
+        "with",
+    }
 )
 
 if TYPE_CHECKING:
@@ -89,8 +105,9 @@ class InteractiveShadowReview:
         campaign_id: UUID,
     ) -> ReviewBatchReceipt:
         candidates = await self._runner.review_candidates(principal, campaign_id)
+        self._show_guidance(len(candidates))
         existing = human = system = 0
-        for candidate in candidates:
+        for position, candidate in enumerate(candidates, start=1):
             if candidate.reviewed:
                 existing += 1
                 continue
@@ -130,11 +147,17 @@ class InteractiveShadowReview:
                     "Review projection lost owner authorization",
                     code="campaign_owner_binding_lost",
                 )
-            self._show_projection(projection)
-            await self._reviews.submit_human(
+            self._show_projection(projection, position=position, total=len(candidates))
+            submission = self._read_submission(
                 principal,
-                self._read_submission(principal, campaign_id, candidate),
+                campaign_id,
+                candidate,
+                projection,
             )
+            if submission is None:
+                self._writer("Review paused before the current item was submitted.")
+                break
+            await self._reviews.submit_human(principal, submission)
             human += 1
         return ReviewBatchReceipt(
             campaign_id,
@@ -144,21 +167,90 @@ class InteractiveShadowReview:
             system,
         )
 
-    def _show_projection(self, projection) -> None:
+    def _show_guidance(self, total: int) -> None:
         self._writer(
-            f"Result {projection.result_id} | case={projection.case_id} "
-            f"repetition={projection.repetition}"
+            "\nManual review / 人工复核\n"
+            f"Selected items: {total}\n"
+            "correctness: 核心事实是否正确；citation: 引文是否直接支持对应事实；\n"
+            "source: 来源是否适合该事实；freshness: 时效是否满足问题；\n"
+            "completeness: 是否回答了问题要求的全部要点。\n"
+            "At any score prompt: details=查看完整证据；invalid input will be retried."
         )
+
+    def _show_projection(self, projection, *, position: int, total: int) -> None:
+        self._writer("\n" + "=" * 72)
+        self._writer(
+            f"Review [{position}/{total}] | case={projection.case_id} "
+            f"| repetition={projection.repetition}\n"
+            f"Result: {projection.result_id}"
+        )
+        self._writer(f"Question / 原问题:\n{projection.question_text}")
         self._writer(f"Answer:\n{projection.answer_text}")
+        self._writer("Claims and focused evidence / 待核对事实与聚焦证据:")
         for index, claim in enumerate(projection.claims, start=1):
             self._writer(
-                f"Claim {index} [{claim.claim_kind}/{claim.support_status}]: "
-                f"{claim.claim_text}"
+                f"  Claim {index} [{claim.claim_kind}/{claim.support_status}]\n"
+                f"  Fact: {claim.claim_text}"
             )
             for citation in claim.citations:
                 self._writer(
-                    f"  {citation.label} {citation.rendered_url}\n"
-                    f"  quote: {citation.quote}"
+                    f"    {citation.label} {citation.rendered_url}\n"
+                    f"    authority={citation.source_authority} "
+                    f"fetched={citation.document_fetched_at.date().isoformat()}\n"
+                    "    Evidence (focused): "
+                    f"{self._focused_evidence(claim.claim_text, citation.quote)}"
+                )
+
+    @staticmethod
+    def _focused_evidence(claim_text: str, quote: str) -> str:
+        compact = " ".join(quote.split())
+        if len(compact) <= 320:
+            return compact
+        tokens = {
+            item.casefold()
+            for item in re.findall(r"[A-Za-z0-9][A-Za-z0-9._-]*|[\u4e00-\u9fff]", claim_text)
+            if (len(item) >= 3 or "\u4e00" <= item <= "\u9fff")
+            and item.casefold() not in _REVIEW_FOCUS_STOP_WORDS
+        }
+        anchors: list[tuple[int, int]] = []
+        for token in sorted(tokens, key=lambda item: (-len(item), item)):
+            match = re.search(
+                rf"(?<![A-Za-z0-9_]){re.escape(token)}(?![A-Za-z0-9_])",
+                compact,
+                re.I,
+            )
+            if match is None or any(abs(match.start() - start) < 80 for start, _ in anchors):
+                continue
+            anchors.append(match.span())
+            if len(anchors) == 3:
+                break
+        if not anchors:
+            return compact[:317].rstrip() + "..."
+        windows = sorted(
+            (max(0, start - 55), min(len(compact), end + 55))
+            for start, end in anchors
+        )
+        merged: list[list[int]] = []
+        for start, end in windows:
+            if merged and start <= merged[-1][1] + 10:
+                merged[-1][1] = max(merged[-1][1], end)
+            else:
+                merged.append([start, end])
+        excerpts = []
+        for start, end in merged:
+            prefix = "..." if start else ""
+            suffix = "..." if end < len(compact) else ""
+            excerpts.append(f"{prefix}{compact[start:end].strip()}{suffix}")
+        return "\n      ".join(excerpts)
+
+    def _show_full_evidence(self, projection) -> None:
+        self._writer("\nFull exact evidence / 完整原始证据:")
+        for index, claim in enumerate(projection.claims, start=1):
+            self._writer(f"  Claim {index}: {claim.claim_text}")
+            for citation in claim.citations:
+                self._writer(
+                    f"    {citation.label} {citation.rendered_url}\n"
+                    f"    quote: {citation.quote}"
                 )
 
     def _read_submission(
@@ -166,56 +258,123 @@ class InteractiveShadowReview:
         principal: Principal,
         campaign_id: UUID,
         candidate: CampaignReviewCandidate,
-    ) -> ReviewSubmission:
-        verdict = self._choice(
-            "Correctness [correct/minor/major/unreviewable]: ",
-            {
-                "correct": ReviewVerdict.CORRECT,
-                "minor": ReviewVerdict.MINOR_ERROR,
-                "major": ReviewVerdict.MAJOR_ERROR,
-                "unreviewable": ReviewVerdict.UNREVIEWABLE,
-            },
-        )
-        if verdict is ReviewVerdict.UNREVIEWABLE:
-            citation = source = freshness = completeness = ReviewScore.NOT_APPLICABLE
-        else:
-            scores = {
-                "pass": ReviewScore.PASS,
-                "fail": ReviewScore.FAIL,
-                "na": ReviewScore.NOT_APPLICABLE,
-            }
-            citation = self._choice("Citation relevance [pass/fail/na]: ", scores)
-            source = self._choice("Source appropriateness [pass/fail/na]: ", scores)
-            freshness = self._choice("Freshness [pass/fail/na]: ", scores)
-            completeness = self._choice("Completeness [pass/fail/na]: ", scores)
-        raw_reasons = self._reader(
-            "Reason codes (comma-separated allowlist, blank if correct): "
-        )
-        reasons = tuple(
-            item.strip() for item in raw_reasons.split(",") if item.strip()
-        )
-        if any(item not in HUMAN_REVIEW_REASON_CODES for item in reasons):
-            raise ValueError("Review reason code is not allowlisted")
-        return ReviewSubmission(
-            principal.tenant_id,
-            campaign_id,
-            candidate.result_id,
-            candidate.rubric_version,
-            verdict,
-            citation,
-            source,
-            freshness,
-            completeness,
-            reasons,
-            ReviewActor.HUMAN,
-            principal.user_id,
-        )
+        projection,
+    ) -> ReviewSubmission | None:
+        details = lambda: self._show_full_evidence(projection)
+        while True:
+            verdict = self._choice(
+                "Correctness / 正确性 [correct/minor/major/unreviewable/details]: ",
+                {
+                    "correct": ReviewVerdict.CORRECT,
+                    "minor": ReviewVerdict.MINOR_ERROR,
+                    "major": ReviewVerdict.MAJOR_ERROR,
+                    "unreviewable": ReviewVerdict.UNREVIEWABLE,
+                },
+                details=details,
+            )
+            if verdict is ReviewVerdict.UNREVIEWABLE:
+                citation = source = freshness = completeness = ReviewScore.NOT_APPLICABLE
+            else:
+                scores = {
+                    "pass": ReviewScore.PASS,
+                    "fail": ReviewScore.FAIL,
+                    "na": ReviewScore.NOT_APPLICABLE,
+                }
+                citation = self._choice(
+                    "Citation relevance / 引文相关性 [pass/fail/na/details]: ",
+                    scores,
+                    details=details,
+                )
+                source = self._choice(
+                    "Source appropriateness / 来源适当性 [pass/fail/na/details]: ",
+                    scores,
+                    details=details,
+                )
+                freshness = self._choice(
+                    "Freshness / 时效性 [pass/fail/na/details]: ",
+                    scores,
+                    details=details,
+                )
+                completeness = self._choice(
+                    "Completeness / 完整性 [pass/fail/na/details]: ",
+                    scores,
+                    details=details,
+                )
+            reasons = self._read_reasons(verdict)
+            submission = ReviewSubmission(
+                principal.tenant_id,
+                campaign_id,
+                candidate.result_id,
+                candidate.rubric_version,
+                verdict,
+                citation,
+                source,
+                freshness,
+                completeness,
+                reasons,
+                ReviewActor.HUMAN,
+                principal.user_id,
+            )
+            self._writer(
+                "Review summary / 评分汇总: "
+                f"correctness={verdict.value}, citation={citation.value}, "
+                f"source={source.value}, freshness={freshness.value}, "
+                f"completeness={completeness.value}, reasons={reasons or 'none'}"
+            )
+            confirmation = self._choice(
+                "Confirm immutable review / 确认不可变提交 "
+                "[submit/edit/quit/details]: ",
+                {"submit": "submit", "edit": "edit", "quit": "quit"},
+                details=details,
+            )
+            if confirmation == "submit":
+                return submission
+            if confirmation == "quit":
+                return None
+            self._writer("Re-entering the current review / 重新填写当前评分.")
 
-    def _choice(self, prompt: str, values: dict[str, object]):
-        selected = self._reader(prompt).strip().lower()
-        if selected not in values:
-            raise ValueError("Review choice is invalid")
-        return values[selected]
+    def _read_reasons(self, verdict: ReviewVerdict) -> tuple[str, ...]:
+        allowed = ", ".join(sorted(HUMAN_REVIEW_REASON_CODES))
+        self._writer(f"Reason-code allowlist / 原因代码: {allowed}")
+        while True:
+            raw_reasons = self._reader(
+                "Reason codes / 原因代码 (comma-separated; blank if fully correct): "
+            )
+            reasons = tuple(
+                dict.fromkeys(
+                    item.strip() for item in raw_reasons.split(",") if item.strip()
+                )
+            )
+            invalid = tuple(
+                item for item in reasons if item not in HUMAN_REVIEW_REASON_CODES
+            )
+            if invalid:
+                self._writer(f"Invalid reason code(s): {', '.join(invalid)}")
+                continue
+            if verdict is not ReviewVerdict.CORRECT and not reasons:
+                self._writer("A non-correct verdict requires at least one reason code.")
+                continue
+            return reasons
+
+    def _choice(
+        self,
+        prompt: str,
+        values: dict[str, object],
+        *,
+        details: Callable[[], None] | None = None,
+    ):
+        while True:
+            selected = self._reader(prompt).strip().lower()
+            if selected in {"details", "d"} and details is not None:
+                details()
+                continue
+            if selected in values:
+                return values[selected]
+            self._writer(
+                "Invalid choice / 输入无效. Expected one of: "
+                + ", ".join(values)
+                + (", details" if details is not None else "")
+            )
 
 
 class ShadowCampaignRunner:

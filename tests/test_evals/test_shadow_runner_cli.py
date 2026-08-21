@@ -388,6 +388,12 @@ async def test_review_shows_ephemeral_material_but_persists_only_structure() -> 
             return (human_candidate, missing_candidate)
 
     claim_id, fact_id = uuid4(), uuid4()
+    long_quote = (
+        "unrelated registry preface " * 30
+        + "private stable claim is directly supported by the reviewed row "
+        + "neutral padding " * 20
+        + "HIDDEN_TAIL_MARKER " * 30
+    )
     projection = ReviewProjection(
         tenant_id,
         campaign_id,
@@ -397,6 +403,8 @@ async def test_review_shows_ephemeral_material_but_persists_only_structure() -> 
         human_candidate.case_id,
         1,
         "rubric-v1",
+        "private review question",
+        "private answer",
         (
             ReviewClaimProjection(
                 claim_id,
@@ -417,16 +425,15 @@ async def test_review_shows_ephemeral_material_but_persists_only_structure() -> 
                         "OFFICIAL",
                         datetime(2026, 8, 15, tzinfo=UTC),
                         0,
-                        6,
+                        len(long_quote),
                         "[1]",
                         "https://example.test/private?query=ephemeral",
-                        "quoted evidence",
+                        long_quote,
                     ),
                 ),
                 "private claim",
             ),
         ),
-        "private answer",
     )
 
     class Reviews:
@@ -446,13 +453,30 @@ async def test_review_shows_ephemeral_material_but_persists_only_structure() -> 
         async def record_system(self, submission):
             self.system.append(submission)
 
-    answers = iter(("correct", "pass", "pass", "pass", "pass", ""))
+    answers = iter(
+        (
+            "invalid",
+            "correct",
+            "pass",
+            "pass",
+            "pass",
+            "pass",
+            "",
+            "submit",
+        )
+    )
     rendered: list[str] = []
+    prompts: list[str] = []
     reviews = Reviews()
+
+    def read_review(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(answers)
+
     coordinator = InteractiveShadowReview(
         CampaignRunner(),  # type: ignore[arg-type]
         reviews,  # type: ignore[arg-type]
-        reader=lambda prompt: next(answers),
+        reader=read_review,
         writer=rendered.append,
     )
     receipt = await coordinator.review(
@@ -461,8 +485,102 @@ async def test_review_shows_ephemeral_material_but_persists_only_structure() -> 
     )
 
     assert receipt.human_reviewed == 1 and receipt.system_reviewed == 1
-    assert "private answer" in "\n".join(rendered)
-    assert "private claim" in "\n".join(rendered)
+    output = "\n".join(rendered)
+    assert "[1/2]" in output
+    assert "private review question" in output
+    assert "private answer" in output
+    assert "private claim" in output
+    assert "directly supported" in output
+    assert "HIDDEN_TAIL_MARKER" not in output
+    assert "Invalid choice" in output
+    assert "Confirm immutable review" in "\n".join(prompts)
     assert len(reviews.human) == 1 and len(reviews.system) == 1
     assert not hasattr(reviews.human[0], "answer_text")
     assert reviews.system[0].reason_codes == ("expected_answer_missing",)
+
+
+def test_review_can_show_full_evidence_and_quit_before_submission() -> None:
+    tenant_id, user_id, campaign_id = uuid4(), uuid4(), uuid4()
+    result_id, claim_id, fact_id = uuid4(), uuid4(), uuid4()
+    candidate = CampaignReviewCandidate(
+        result_id,
+        uuid4(),
+        uuid4(),
+        "case-human",
+        1,
+        "answerable",
+        "COMPLETE",
+        "rubric-v1",
+        False,
+    )
+    full_marker = "FULL_EVIDENCE_ONLY_MARKER"
+    projection = ReviewProjection(
+        tenant_id,
+        campaign_id,
+        result_id,
+        candidate.conversation_id,
+        candidate.search_run_id,
+        candidate.case_id,
+        1,
+        "rubric-v1",
+        "question",
+        "answer",
+        (
+            ReviewClaimProjection(
+                claim_id,
+                "FACTUAL",
+                fact_id,
+                "VERIFIED",
+                (
+                    ReviewCitationProjection(
+                        uuid4(),
+                        claim_id,
+                        uuid4(),
+                        fact_id,
+                        uuid4(),
+                        uuid4(),
+                        1,
+                        "ACCEPTED",
+                        1.0,
+                        "OFFICIAL",
+                        datetime(2026, 8, 15, tzinfo=UTC),
+                        0,
+                        len(full_marker),
+                        "[1]",
+                        "https://example.test/evidence",
+                        full_marker,
+                    ),
+                ),
+                "claim",
+            ),
+        ),
+    )
+    answers = iter(
+        (
+            "details",
+            "correct",
+            "pass",
+            "pass",
+            "pass",
+            "pass",
+            "",
+            "quit",
+        )
+    )
+    rendered: list[str] = []
+    coordinator = InteractiveShadowReview(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        SimpleNamespace(),  # type: ignore[arg-type]
+        reader=lambda prompt: next(answers),
+        writer=rendered.append,
+    )
+
+    submission = coordinator._read_submission(
+        Principal(tenant_id, user_id, "test", "owner"),
+        campaign_id,
+        candidate,
+        projection,
+    )
+
+    assert submission is None
+    assert full_marker in "\n".join(rendered)

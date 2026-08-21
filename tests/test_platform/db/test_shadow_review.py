@@ -420,6 +420,7 @@ async def test_review_projection_and_submission_are_exact_owner_only_and_immutab
         projection = await review_service.projection(owner, campaign.id, result_id)
         assert projection is not None
         assert projection.result_id == result_id
+        assert projection.question_text == "private review prompt"
         assert projection.answer_text == "private stable answer"
         assert projection.claims[0].claim_text == "private stable claim"
         assert projection.claims[0].citations[0].source_authority == "OFFICIAL"
