@@ -809,17 +809,17 @@ scripts/audit_shadow_campaign.ps1
 
 ### 立即任务
 
-- [ ] 用户批准策略化 Read-through Cache 设计。
-- [ ] 写正式设计文档并提交。
-- [ ] 写详细实现计划。
-- [ ] 实现 tenant-scoped reusable content adapter 与 policy。
-- [ ] 实现 Fetch output/persistence/telemetry/lineage。
-- [ ] 完成单元、集成、安全和 collector 测试。
-- [ ] 完整 pytest、compileall、diff-check。
+- [x] 用户以“方案完成自审后直接执行”的常设授权批准策略化 Read-through Cache。
+- [x] 写正式设计文档并提交。
+- [x] 写详细实现计划。
+- [x] 实现 tenant-scoped reusable content adapter 与 policy。
+- [x] 实现 Fetch output/persistence/telemetry/lineage。
+- [x] 完成单元、集成、安全和 Collector v3 测试。
+- [x] 完整 pytest、compileall、diff-check。
 
 ### 门禁任务
 
-- [ ] 构建新镜像并生成新 attestation。
+- [ ] 构建新镜像并生成新 attestation；当前机器 Docker daemon 未配置 HTTPS proxy，无法拉取固定 digest 基础镜像。
 - [ ] 新 Smoke FINAL_PASS。
 - [ ] Smoke audit 7/7。
 - [ ] 新 Full 自动指标全部达标。
@@ -830,7 +830,7 @@ scripts/audit_shadow_campaign.ps1
 ### 远程/发布任务
 
 - [x] 私有 `sana-v3` 创建并推送 WIP 基线。
-- [ ] 回宿舍新机器 clone 验证。
+- [x] 回宿舍新机器 clone、实现、测试并推送验证。
 - [ ] 门禁通过后整理 `main`、候选 tag 和 release note。
 - [ ] 后续独立进行生产模型切换测试。
 - [ ] 最后再进入 UI/配置体验重做与生产 rollout。
@@ -850,12 +850,35 @@ scripts/audit_shadow_campaign.ps1
 
 如果新的任务只有十分钟，执行以下顺序：
 
-1. clone `sana-v3` 并切到 `codex/shadow-campaign-release-gate`。
-2. 阅读本文件第 0、3、10、12、13、17、18 节。
+1. clone/pull `sana-v3` 的 `codex/shadow-campaign-release-gate`，确认 HEAD 至少为 `139e458`。
+2. 阅读本文件第 17、18、21 节以及新的 cache design/plan。
 3. `git status --short --branch`，确认没有未知改动。
-4. 询问用户是否批准第 12 节方案 C；若已明确批准，立即写正式设计文档。
+4. 先恢复 Docker daemon 对 Docker Hub 的 HTTPS 访问，再执行固定 digest 的正式 `prepare`；不能用本机不同版本镜像冒充。
 5. 不重跑旧 Full，不进行人工复核，不创建 release tag。
-6. 完成 cache 设计/实现后从新镜像、新 Smoke 开始整个门禁链。
+6. 从新镜像、新 attestation、新 Smoke 开始整个门禁链。
+
+## 21. 2026-08-21 接续执行结果
+
+远程分支 `codex/shadow-campaign-release-gate` 已推送至 `139e458`，包含：
+
+- `document-reuse-v1`：STABLE 24h/30d、RECENT 6h/7d、CURRENT 15m/2h；
+- 同租户、精确 canonical URL hash、只读原始 `fetcher=http` 且已有 DocumentVersionFetch 的内容读取器；
+- fresh 直接复用，stale 必须先实时抓取且只允许 network/deadline/429/5xx 兜底；
+- 每次复用都创建本 Run artifact/fetch/document observation 并重新 extract/verify；
+- SSRF/DNS、artifact tenant/run/digest、SHA-256、media type、size 与复用窗口二次判定；
+- Collector `shadow-collector-v3` 的内容安全 Fetch 投影、provider-transient 分类和原始 live lineage/content identity 反查；
+- Worker/Shadow Compose 的显式策略参数与无迁移回滚开关；
+- Windows 冻结评测资产的 LF 契约，以及一个阻断全仓 compileall 的遗留 f-string 最小修复。
+
+最终自动验证：
+
+- `605 passed, 8 skipped`；8 个 skip 仅为未设置外部 PostgreSQL URL 的环境标记；
+- 隔离 PostgreSQL 17 从空库迁移到 `0012_fetch_run_binding`，应用角色为 `NOSUPERUSER/NOBYPASSRLS`，PostgreSQL/RLS marker `8 passed`；
+- 实际 SQL 篡改 source content hash 会被 Collector 以 `source_fetch_lineage_invalid` 拒绝；
+- `python -m compileall -q sana tests scripts`、Compose config 和 `git diff --check` 通过；
+- worktree clean，HEAD 与远程分支一致。
+
+尚未完成的唯一当前链路是发布容器门禁。`prepare -OfflineFixture` 和对固定 Python digest 的直接 pull 均确认失败于 Docker daemon：`Docker Desktop has no HTTPS proxy`，无法连接 `registry-1.docker.io:443`。不要改变 Dockerfile digest、不要给 Postgres 17 重打 16 标签、不要生成伪 attestation。恢复 daemon 网络后按第 14 节创建全新的 Smoke key，完成 7/7 审计后再创建 Full。
 
 ---
 
