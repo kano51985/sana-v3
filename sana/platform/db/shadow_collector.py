@@ -444,12 +444,6 @@ class SqlShadowSnapshotReader:
                             FetchArtifact.content_hash,
                             FetchArtifact.media_type,
                             DocumentVersionFetch.document_version_id,
-                            DocumentVersion.content_hash.label(
-                                "document_content_hash"
-                            ),
-                            DocumentVersion.media_type.label(
-                                "document_media_type"
-                            ),
                         )
                         .join(
                             DocumentVersionFetch,
@@ -495,8 +489,6 @@ class SqlShadowSnapshotReader:
                         row.url_hash,
                         row.content_hash,
                         row.media_type,
-                        row.document_content_hash,
-                        row.document_media_type,
                     )
                     for row in source_lineage_rows
                 }
@@ -507,8 +499,6 @@ class SqlShadowSnapshotReader:
                         item.source_fetched_at,
                         item.source_document_version_id,
                         fetch_record_by_id[item.id].url_hash,
-                        fetch_record_by_id[item.id].content_hash,
-                        fetch_record_by_id[item.id].media_type,
                         fetch_record_by_id[item.id].content_hash,
                         fetch_record_by_id[item.id].media_type,
                     )

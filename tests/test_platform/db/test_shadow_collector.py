@@ -387,7 +387,7 @@ async def _seed_terminal_source(
                 status="SUCCEEDED",
                 http_status=200,
                 media_type="text/plain",
-                content_hash="4" * 64,
+                content_hash="7" * 64,
                 storage_uri="artifact://fetch",
                 response_bytes=6,
                 fetched_at=NOW,
@@ -400,6 +400,8 @@ async def _seed_terminal_source(
                 tenant_id=tenant_id,
                 document_id=document_id,
                 fetch_artifact_id=fetch_artifact_id,
+                # Extracted text and the raw response are distinct artifacts;
+                # their digests are not required to match.
                 content_hash="4" * 64,
                 storage_uri="artifact://document",
                 media_type="text/plain",
