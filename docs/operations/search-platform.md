@@ -33,6 +33,11 @@ PostgreSQL 是 Run、Step、Attempt、证据与记忆的唯一事实源。Redis 
 | `SANA_WORKER_DISCOVERY_PROVIDERS` | 逗号分隔的 `direct`/`bing_rss`/`searxng` | `direct,bing_rss` |
 | `SANA_WORKER_SEARXNG_URL` | 启用 `searxng` 时的服务地址 | 空 |
 | `SANA_WORKER_MAX_SELECTED_HITS` | 每个 Run 最多抓取的候选数 | `4` |
+| `SANA_WORKER_DOCUMENT_REUSE_ENABLED` | 启用租户隔离的跨 Run 文档复用；紧急回滚开关 | `true` |
+| `SANA_WORKER_DOCUMENT_REUSE_POLICY_VERSION` | 写入抓取血缘和证明摘要的新鲜度策略身份 | `document-reuse-v1` |
+| `SANA_WORKER_REUSE_STABLE_FRESH_SECONDS` / `FALLBACK_SECONDS` | STABLE Fact 的直接复用/瞬态故障兜底上限 | `86400` / `2592000` |
+| `SANA_WORKER_REUSE_RECENT_FRESH_SECONDS` / `FALLBACK_SECONDS` | RECENT Fact 的直接复用/瞬态故障兜底上限 | `21600` / `604800` |
+| `SANA_WORKER_REUSE_CURRENT_FRESH_SECONDS` / `FALLBACK_SECONDS` | CURRENT Fact 的直接复用/瞬态故障兜底上限 | `900` / `7200` |
 
 生产环境必须使用 OIDC，并设置 issuer、audience 与 JWKS URL。`SanaSettings` 会拒绝在 `SANA_ENVIRONMENT=production` 时启用开发认证。模型密钥只能通过 Worker 进程环境或外部秘密管理器注入，不能放进 API、Streamlit、数据库配置面板、镜像或仓库。功能开关关闭时，Worker 保持 deterministic/heuristic 管线用于回滚、连通性和恢复验证；开启时，三个角色任一配置缺失、Provider 不一致或密钥缺失都会 fail closed，不会静默降级启动。
 
@@ -41,6 +46,10 @@ PostgreSQL 是 Run、Step、Attempt、证据与记忆的唯一事实源。Redis 
 `direct` 不是任意 URL 访问能力。它只读取版本化、代码审查可见的稳定入口注册表；模型不能生成 direct URL 或提升其权威等级。`direct-sources-v10` 覆盖 Python、DeepSeek、Apex Legends、HTTP/IANA、Git、Rust、OpenAI Developers，以及 JSON、SHA-256、DNS、TLS 1.3、RFC 3339、SQL/PostgreSQL、SQLite、Node.js、ACID 等受审入口；除既有 JSON media type、SHA-256、TLS/RFC、RFC 3339、PostgreSQL 隔离级别和 Git 对象模型外，DNS registry、Python 起源、JSON literals、HTTP 201/204、ACID、CAP、SQLite 许可、DeepSeek 定价能力表、PostgreSQL 支持表、运行时发布版本和 Apex 官方补丁/独立统计表也从绑定工件解析精确原文跨度。Git 当前版本读取官方首页，避免把 `/downloads` 的客户端跳转占位页误当证据。确定性适配器必须先于通用数值规则执行，且超长规范页面优先选择定义段落。`source-authority-v6` 仍单独决定 OFFICIAL/INDEPENDENT：默认按实体限定 registrable domain；当官方工件发布在共享域时，只允许审核过的 URL 前缀，不会把整个共享域提升为官方。生产扩展必须通过配置变更、真实 Worker 网络探测和 SSRF 测试加入。
 
 `search-v12` 在 RESEARCH 模式做有界集合选择：只要仍有能覆盖未覆盖 Fact 的 curated direct + official URL，就先完成这层覆盖；之后按未覆盖增益和 Fact 映射特异性处理其余来源，再考虑 authority 与发布方多样性。所有 Fact 已覆盖且已有两个发布方后立即停止选源，单个 FAST/RESEARCH 来源的抓取窗口分别限制为 6/8 秒；Fetch 最多执行 2 次 Attempt，其他 Step 最多 3 次，坏来源不能只靠 deadline 终止。FAST 默认仍只选择一个官方源，仅当 reviewed direct 目录提供两个不同官方发布方时才并行保留双源故障转移。当 FAST 的成功 direct extract 已覆盖全部 required Fact 时，协调器可先执行 Verify，与尚未结束的备源抓取重叠；Synthesize 仍等待全部抓取分支终态，从而保留完整账本与血缘。文本相同但 Fact 不同的 Query 使用 Fact-scoped signature，防止去重静默切断第二个 Fact 的发现与证据血缘。
+
+`document-reuse-v1` 在 Fetch 边界实现策略感知的 read-through 复用。一个 URL 同时服务多个 Fact 时采用最严格的新鲜度；无法完整映射 Fact 时禁用复用并执行实时抓取。读取器只在同一 tenant 内按精确 canonical URL SHA-256 选择最近一次成功、已提取、原始 `fetcher=http` 的工件，复用链本身不能刷新内容年龄。STABLE/RECENT/CURRENT 的 fresh 窗口分别为 24 小时、6 小时、15 分钟；stale-if-error 上限分别为 30 天、7 天、2 小时。fresh 命中可跳过公网请求；超过 fresh 窗口时必须先实时抓取，且只在 network/deadline/HTTP 429/5xx 时允许使用仍在 fallback 窗口内的旧工件。SSRF、DNS 安全校验、HTTP 4xx、内容类型/大小、空正文、哈希或 artifact identity 异常一律 fail closed，不能借缓存绕过。
+
+所有复用都重新把字节写入本 Run 的 content-addressed artifact，生成新的 `FetchArtifact` 和 `DocumentVersionFetch`，再重新 extract、verify、synthesize；原始 `fetched_at` 不得改写，`reused_at` 与 source run/fetch/document-version ID 单独进入白名单 metadata。新鲜命中不标降级；stale-if-error 必须传播 `fetch_cache_stale_if_error`，最终答案和 Shadow Collector 都标记 degraded/provider transient。不得把 URL、正文、header 或错误文本加入该 metadata 或证明摘要。
 
 证据候选按 Fact 轮询分配 8 个全局槽位，先比较页面相关性，再用文档位置稳定打破同分；标准标识、精确数字、定义关系和与语义词的邻近关系参与评分，提问脚手架不参与。Query 从受限 Fact key 保留最多四个语义锚点，不再把“private weights”等关键约束降级为通用 background/current 搜索。Verifier 输入按 Fact 分组，模型每个 Fact 最多返回一个 180 字符精确 quote；经审阅的注册表、RFC、PostgreSQL 表格与 Git 数据模型适配器可直接产生精确证据。模型验证失败时非适配候选全部以 REJECTED 封账；词法相似度只能排序，不能成为事实蕴含证明。规划器必须输出中性 lookup target，引用要求只作为 evidence constraint，不能生成 citation-only Fact；缺口报告指令会被规范为独立来源的公开披露检查，不作为可由单段引文验证的元 Fact；HIGH consequence 仅在确定性高风险路由命中时保留。Synthesizer 只能读取嵌套在所属 Fact 下的 accepted evidence，标准标识可由精确 quote 或经审阅 RFC URL 共同绑定；请求的大小写和数值标识会被确定性补齐，RFC 3339 与 Git 对象用途等关系型 Claim 还需通过结构校验，避免“关键词齐全但关系错误”。公开来源的 HTTP 4xx 被归类为内容/访问失败而非系统配置错误，`text/csv` 可直接进入确定性抽取链路。
 
@@ -138,6 +147,15 @@ API/Worker 回滚必须先停止新流量，再停止 Dispatcher，等待运行�
 $env:SANA_WORKER_MODEL_PIPELINE_ENABLED = "false"
 docker compose -f deployment/docker-compose.yml --profile workers up -d --force-recreate worker
 ```
+
+文档复用也可独立回滚，不需要数据库降级或删除历史工件：
+
+```powershell
+$env:SANA_WORKER_DOCUMENT_REUSE_ENABLED = "false"
+docker compose -f deployment/docker-compose.yml --profile workers up -d --force-recreate worker
+```
+
+回滚后新 Fetch 全部走实时网络；既有 `document-cache` 血缘保留用于审计。不要删除来源 artifact 或改写 `fetched_at` 来制造命中。重新启用前必须恢复经审查的 `document-reuse-v1` 窗口，执行全量测试、live Smoke、Collector 7/7 审计和 Full 门禁。
 
 ## 尚未解除的生产阻断项
 

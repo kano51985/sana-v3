@@ -36,6 +36,7 @@
 - build OCI revision 与 candidate commit 完全一致；
 - 所有候选服务 image ID 相同；
 - Alembic head 为 `0012_fetch_run_binding`；
+- Collector schema 为 `shadow-collector-v3`，并将内容安全的 Fetch 决策与来源血缘纳入 source snapshot digest；
 - API 只绑定 loopback，DB/Redis 无宿主端口；
 - worker concurrency 固定为 2，队列固定为 fast/research/crawl/maintenance；
 - 无非 Campaign active SearchRun、未发布 outbox 或初始队列消息；
@@ -82,9 +83,11 @@
 
 ## 评审意图快车道
 
-`reviewed-intents-v2` 只为语义明确的标准问题、公开披露缺口、版本支持表和受审当前版本/补丁请求生成原子 Fact，不保存或预填答案。每个可回答 Fact 仍必须经过实时抓取、实体范围内的来源权威判定、候选绑定和确定性验证；网页结构或官方数据变化导致提取失败时必须保留 evidence gap，禁止回退到模板答案。要求跨整个公开来源集合才能成立的“未披露/不可观测”Fact 会在验证模型调用前 fail-closed：单个网页片段不能证明全集缺失，也不会因模型重试而伪造覆盖。
+`reviewed-intents-v2` 只为语义明确的标准问题、公开披露缺口、版本支持表和受审当前版本/补丁请求生成原子 Fact，不保存或预填答案。每个可回答 Fact 仍必须经过实时抓取或 `document-reuse-v1` 策略允许的同租户原始工件复用、实体范围内的来源权威判定、当前 Run 候选绑定和重新验证；复用绝不等于复用 Evidence/Claim。网页结构、缓存完整性或官方数据变化导致提取失败时必须保留 evidence gap，禁止回退到模板答案。要求跨整个公开来源集合才能成立的“未披露/不可观测”Fact 会在验证模型调用前 fail-closed：单个网页片段不能证明全集缺失，也不会因模型重试而伪造覆盖。
 
 计划 artifact 的 `planning.strategy` 与 `planning.strategy_version` 会区分 `reviewed_template`、模型规划和启发式降级。PostgreSQL 支持版本使用官方支持表的实时行位次，而不是在模板中固化版本号；模板、直达来源或确定性提取语义变化时必须递增各自版本并重新执行 Smoke/Full 门禁。
+
+live Shadow 显式启用 `document-reuse-v1`：STABLE/RECENT/CURRENT fresh 为 24h/6h/15m，fallback 为 30d/7d/2h。fresh cache 命中不计为降级；仅当实时抓取因允许的瞬态错误失败后使用 stale 工件时，Collector 才加入 `fetch_cache_stale_if_error`、归类 `PROVIDER_TRANSIENT` 并把 failed phase 记为 `FETCH`。Collector v3 只投影决策、策略、新鲜度、时间、age、稳定错误 code 和 UUID 血缘，不投影 URL、正文、hash、storage URI 或 header；未知 metadata、年龄矛盾、跨租户/缺失的原始 live lineage 均永久失败并触发 fail-closed drain。
 
 ## 七个 Runner 命令
 
@@ -139,6 +142,7 @@ Review 终端会临时显示 answer、claim、citation URL 与 quote；数据库
 - 首次不确定 POST 会保留 ACTIVE reservation；一次恢复重放仍失败后，才按 frozen reserve 记 possibly-billed 并封账。
 - 如新 Run 只因其他在途 Run 的 ACTIVE reservation 暂时无法准入，Runner 保留并续租当前 lease，等待 Collector 结算后重试；只有 observed/possibly-billed 不可逆总账本身已无法容纳一个完整 Run 时，才进入 BUDGET/CALL_CEILING stop。
 - Collector provenance/lineage 永久失败会从 ModelInvocation audit 结算账本，标记 FAILED，并触发 FATAL drain。
+- 缓存 source artifact 缺失、hash 不匹配或 Collector v3 无法验证原始 live fetch/document-version lineage：禁止改写 metadata 或降低 schema；关闭文档复用后用新 Campaign key 重新执行 Smoke。
 - 报告 artifact 写入后绑定失败：再次执行 `report`，content-addressed artifact 与 decision hash 会收敛。
 
 完整故障覆盖、测试映射和 Docker 证据见 `docs/operations/shadow-campaign-fault-matrix.md`。

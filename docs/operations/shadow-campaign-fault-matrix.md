@@ -30,6 +30,8 @@
 | token/key/password/prompt/answer/query/quote 泄漏 | CLI serializer/redaction/provenance/privacy guard tests；post-Campaign auditor | API/dispatcher/worker logs 与 JSON/Markdown artifacts 扫描当前口令、token/key 和 40 个 manifest prompt，未命中；CLI bytes 只输出 byte length/hash | PASS：只输出稳定 code、计数、hash 和 PASS 断言 |
 | worker health probe 超时/进程泄漏 | Compose structural test；post-Campaign auditor | Celery inspect 探针已替换为有界 direct-exec Redis PING；常驻进程严格为 main+2 prefork，采样时只允许至多一个命令行完全匹配的短生命周期探针 | PASS：无未知或累积 probe；Campaign/queue 审计另证实际消费能力 |
 | 镜像/迁移/网络/volume 混用 | provenance/Compose tests；post-Campaign auditor | API/dispatcher/worker 与 attestation image ID 一致；唯一 head `0012_fetch_run_binding`；DB/Redis 无宿主端口；独立 network/四个 volume | PASS：identity 或 topology 任一不一致均在 Provider 调用前失败 |
+| fresh cache、stale-if-error 与窗口边界竞争 | `tests/test_app/test_search_operations.py` 的 document reuse 用例；`tests/test_modules/shadow_campaign/test_collector.py` 的 cache classification 用例 | Collector schema `shadow-collector-v3`；fresh 不降级，stale fallback 同时记录 provider transient、专用 code 与 FETCH phase | PASS：复用时重新判定年龄；窗口过期后恢复实时失败，不把旧内容伪装为 fresh |
+| 缓存跨租户、SSRF、artifact/hash、metadata 或来源血缘篡改 | `tests/test_platform/db/test_content_snapshots.py`、`tests/test_platform/db/test_shadow_collector.py`、`tests/test_platform/security/test_ssrf.py` | 精确 tenant + URL hash 查询；原始 `fetcher=http` + DocumentVersionFetch 反向验证；证明投影无 URL/正文/storage/hash/header | PASS：异常 fail closed；4xx/SSRF/内容错误不允许 stale fallback |
 
 ## 已发现并关闭的问题
 
@@ -39,6 +41,7 @@
 4. Celery inspect healthcheck 会产生超时子进程或假阴性；现使用不派生子进程的 direct-exec Redis PING，并由 Campaign 审计证明消费能力。
 5. PAUSED partial Campaign 遇到 hard source failure 时曾被提前绑定为 final FAIL；现 report 先执行 PAUSE guard，数据库 final binder 再做独立防御。
 6. create request hash 曾包含客户端生成的 retention timestamp，破坏相同 key 的进程级重放；现 retention 为首写拥有的固定运维元数据，不参与 Campaign 身份。
+7. 2026-08-21 Full 暴露官方 URL 在重复 Run 间偶发 network/deadline 失败；现引入 `document-reuse-v1` 的同租户原始工件 read-through，并由 Collector v3 区分 fresh 与 stale-if-error。门禁阈值、Gold、样本与人工复核要求均未降低。
 
 ## 重跑命令
 
