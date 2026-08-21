@@ -22,13 +22,19 @@ from sana.modules.content.chunker import DocumentChunker
 from sana.modules.answer.domain import ClaimKind
 from sana.modules.answer.model_synthesizer import ConstrainedModelSynthesizer
 from sana.modules.content.domain import (
+    ALLOWED_CONTENT_MEDIA_TYPES,
+    DocumentReusePolicy,
     DocumentChunk as DomainDocumentChunk,
     DocumentVersion as DomainDocumentVersion,
     FetchArtifact,
     FetchRequest,
     FetchStatus,
+    ReusableContentSnapshot,
+    ReuseDecision,
+    ReuseFreshness,
 )
 from sana.modules.content.extractor import ContentExtractor
+from sana.modules.content.ports import ContentSnapshotReader, URLSafetyValidator
 from sana.modules.discovery.domain import DiscoveryQuery
 from sana.modules.discovery.official_sources import DirectSourcePolicy
 from sana.modules.discovery.service import DiscoveryService
@@ -540,6 +546,12 @@ class SearchStepOperations:
     discovery: DiscoveryService
     fetcher: ContentFetcher
     provider_names: tuple[str, ...]
+    snapshot_reader: ContentSnapshotReader | None = None
+    url_safety_validator: URLSafetyValidator | None = None
+    document_reuse_policy: DocumentReusePolicy = field(
+        default_factory=DocumentReusePolicy.default
+    )
+    document_reuse_enabled: bool = False
     max_selected_hits: int = 4
     model_verifier: ModelEvidenceVerifier | None = None
     model_synthesizer: ConstrainedModelSynthesizer | None = None
@@ -555,6 +567,12 @@ class SearchStepOperations:
             raise ValueError("At least one discovery provider is required")
         if self.max_selected_hits < 1:
             raise ValueError("max_selected_hits must be positive")
+        if self.document_reuse_enabled and (
+            self.snapshot_reader is None or self.url_safety_validator is None
+        ):
+            raise ValueError(
+                "Enabled document reuse requires snapshot and URL safety adapters"
+            )
         self._compiler = QueryCompiler()
         self._extractor = ContentExtractor()
         self._chunker = DocumentChunker()
@@ -894,18 +912,78 @@ class SearchStepOperations:
         if not isinstance(plan, dict):
             raise TypeError("Fetch plan artifact must be a JSON object")
         mode = SearchMode(str(plan["mode"]))
-        fetched = await self.fetcher.fetch(
-            FetchRequest(
-                str(hit["canonical_url"]),
-                _bounded_fetch_deadline(
-                    mode,
-                    context.clock.now(),
-                    context.deadline_at,
-                ),
-            )
+        now = context.clock.now()
+        request = FetchRequest(
+            str(hit["canonical_url"]),
+            _bounded_fetch_deadline(
+                mode,
+                now,
+                context.deadline_at,
+            ),
         )
+        freshness = self._reuse_freshness(plan, hit)
+        snapshot: ReusableContentSnapshot | None = None
+        assessment = None
+        if self.document_reuse_enabled and freshness is not None:
+            assert self.snapshot_reader is not None
+            assert self.url_safety_validator is not None
+            await self.url_safety_validator.validate(request.url)
+            canonical_hash = hashlib.sha256(request.url.encode("utf-8")).hexdigest()
+            snapshot = await self.snapshot_reader.latest_for_url(
+                context.tenant_id,
+                canonical_hash,
+            )
+            if snapshot is not None:
+                if (
+                    hashlib.sha256(snapshot.request_url.encode("utf-8")).hexdigest()
+                    != canonical_hash
+                ):
+                    raise TypedError(
+                        ErrorCategory.CONTENT,
+                        "cache_url_mismatch",
+                        "Reusable fetch URL does not match the requested URL",
+                        retryable=False,
+                    )
+                for redirect in snapshot.redirects:
+                    await self.url_safety_validator.validate(redirect)
+                assessment = self.document_reuse_policy.assess(
+                    freshness,
+                    snapshot.fetched_at,
+                    now,
+                )
+                if assessment.decision is ReuseDecision.CACHE_FRESH:
+                    return await self._reuse_fetch_result(
+                        context,
+                        payload,
+                        hit,
+                        request,
+                        snapshot,
+                        freshness,
+                        assessment.age,
+                        ReuseDecision.CACHE_FRESH,
+                    )
+        fetched = await self.fetcher.fetch(request)
         if fetched.status is not FetchStatus.SUCCEEDED:
             assert fetched.error is not None
+            if (
+                snapshot is not None
+                and assessment is not None
+                and assessment.fallback_eligible
+                and self.document_reuse_policy.allows_stale_if_error(
+                    fetched.error
+                )
+            ):
+                return await self._reuse_fetch_result(
+                    context,
+                    payload,
+                    hit,
+                    request,
+                    snapshot,
+                    freshness,
+                    assessment.age,
+                    ReuseDecision.CACHE_STALE_IF_ERROR,
+                    live_error=fetched.error,
+                )
             raise fetched.error
         body_ref = await self.artifacts.put_bytes(
             context.tenant_id,
@@ -915,20 +993,146 @@ class SearchStepOperations:
         return await self._result(
             context,
             {
-                "schema": "sana.fetch.v1",
+                "schema": "sana.fetch.v2",
                 "plan_ref": payload["plan_ref"],
                 "hit": hit,
+                "fetcher": "http",
+                "decision": ReuseDecision.LIVE.value,
+                "degradation_codes": [],
+                "cache_metadata": {},
                 "request_url": fetched.request_url,
                 "final_url": fetched.final_url,
                 "http_status": fetched.http_status,
                 "media_type": fetched.media_type,
                 "content_hash": fetched.content_hash,
+                "response_bytes": len(fetched.body),
                 "fetched_at": fetched.fetched_at.isoformat(),
                 "redirects": list(fetched.redirects),
                 "response_headers": dict(fetched.response_headers),
                 "body_ref": _reference_dict(body_ref),
             },
             StepBudgetCost(BudgetPhase.FETCH_EXTRACT, fetches=1),
+        )
+
+    def _reuse_freshness(
+        self,
+        plan: dict[str, Any],
+        hit: dict[str, Any],
+    ) -> ReuseFreshness | None:
+        raw_fact_ids = hit.get("fact_ids") or (
+            (hit["fact_id"],) if hit.get("fact_id") is not None else ()
+        )
+        if not raw_fact_ids:
+            return None
+        facts: dict[str, ReuseFreshness] = {}
+        try:
+            for fact in plan.get("facts", ()):
+                fact_id = str(fact["id"])
+                facts[fact_id] = ReuseFreshness(str(fact["freshness"]))
+            mapped = tuple(facts[str(value)] for value in raw_fact_ids)
+        except (KeyError, TypeError, ValueError):
+            return None
+        return self.document_reuse_policy.strictest(mapped) if mapped else None
+
+    async def _reuse_fetch_result(
+        self,
+        context: StepExecutionContext,
+        input_payload: dict[str, Any],
+        hit: dict[str, Any],
+        request: FetchRequest,
+        snapshot: ReusableContentSnapshot,
+        freshness: ReuseFreshness | None,
+        age: timedelta,
+        decision: ReuseDecision,
+        *,
+        live_error: TypedError | None = None,
+    ) -> StepExecutionResult:
+        if freshness is None:
+            raise ValueError("Reusable fetch requires mapped freshness")
+        body = await self.artifacts.get_bytes(
+            context.tenant_id,
+            ArtifactRef(snapshot.storage_uri, snapshot.content_hash),
+        )
+        if not body:
+            raise TypedError(
+                ErrorCategory.CONTENT,
+                "cache_artifact_empty",
+                "Reusable fetch artifact is empty",
+                retryable=False,
+            )
+        if len(body) > request.max_response_bytes:
+            raise TypedError(
+                ErrorCategory.CONTENT,
+                "cache_artifact_too_large",
+                "Reusable fetch artifact exceeds the current size limit",
+                retryable=False,
+            )
+        if snapshot.media_type not in ALLOWED_CONTENT_MEDIA_TYPES:
+            raise TypedError(
+                ErrorCategory.CONTENT,
+                "cache_media_type_invalid",
+                "Reusable fetch media type is not allowed",
+                retryable=False,
+            )
+        if hashlib.sha256(body).hexdigest() != snapshot.content_hash:
+            raise TypedError(
+                ErrorCategory.CONTENT,
+                "cache_artifact_corrupted",
+                "Reusable fetch artifact failed its content hash check",
+                retryable=False,
+            )
+        body_ref = await self.artifacts.put_bytes(
+            context.tenant_id,
+            context.run_id,
+            body,
+        )
+        reused_at = context.clock.now()
+        cache_metadata: dict[str, Any] = {
+            "policy_version": self.document_reuse_policy.version,
+            "strictest_freshness": freshness.value,
+            "source_fetch_artifact_id": str(
+                snapshot.source_fetch_artifact_id
+            ),
+            "source_run_id": str(snapshot.source_run_id),
+            "source_document_version_id": str(
+                snapshot.source_document_version_id
+            ),
+            "source_fetched_at": snapshot.fetched_at.isoformat(),
+            "reused_at": reused_at.isoformat(),
+            "reuse_age_seconds": int(age.total_seconds()),
+            "decision": decision.value,
+        }
+        degradation_codes: list[str] = []
+        if live_error is not None:
+            cache_metadata.update(
+                {
+                    "live_error_category": live_error.category.value,
+                    "live_error_code": live_error.code,
+                }
+            )
+            degradation_codes.append("fetch_cache_stale_if_error")
+        return await self._result(
+            context,
+            {
+                "schema": "sana.fetch.v2",
+                "plan_ref": input_payload["plan_ref"],
+                "hit": hit,
+                "fetcher": "document-cache",
+                "decision": decision.value,
+                "degradation_codes": degradation_codes,
+                "cache_metadata": cache_metadata,
+                "request_url": request.url,
+                "final_url": snapshot.final_url,
+                "http_status": snapshot.http_status,
+                "media_type": snapshot.media_type,
+                "content_hash": snapshot.content_hash,
+                "response_bytes": len(body),
+                "fetched_at": snapshot.fetched_at.isoformat(),
+                "redirects": list(snapshot.redirects),
+                "response_headers": {},
+                "body_ref": _reference_dict(body_ref),
+            },
+            StepBudgetCost(BudgetPhase.FETCH_EXTRACT, fetches=0),
         )
 
     async def extract(self, context: StepExecutionContext) -> StepExecutionResult:
