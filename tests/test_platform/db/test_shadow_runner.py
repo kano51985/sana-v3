@@ -152,7 +152,7 @@ async def test_stopping_recovery_and_unknown_failure_close_the_ledger() -> None:
             "b" * 40,
             True,
             "b" * 64,
-            "shadow-collector-v2",
+            "shadow-collector-v3",
             snapshot_hash(environment),
             environment,
         ),

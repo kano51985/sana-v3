@@ -68,7 +68,7 @@ async def test_report_gateway_fences_stale_input_and_binds_one_final_report(tmp_
         harness_commit_sha="b" * 40,
         harness_source_clean=True,
         harness_fileset_hash="b" * 64,
-        collector_schema_version="shadow-collector-v2",
+        collector_schema_version="shadow-collector-v3",
         environment_identity_hash=snapshot_hash(environment),
         environment_snapshot=environment,
     )
@@ -267,7 +267,7 @@ def test_report_gateway_defensively_rejects_paused_final_binding() -> None:
 def test_report_revalidation_excludes_post_collection_budget_signal() -> None:
     result = SimpleNamespace(
         source_snapshot_digest="a" * 64,
-        collector_schema_version="shadow-collector-v2",
+        collector_schema_version="shadow-collector-v3",
         source_terminal_at=NOW,
         actual_mode="RESEARCH",
         run_status="SUCCEEDED",

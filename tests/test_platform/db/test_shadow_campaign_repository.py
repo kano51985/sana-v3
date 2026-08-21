@@ -167,7 +167,7 @@ async def test_campaign_create_retry_and_lifecycle_are_atomic() -> None:
         harness_commit_sha="b" * 40,
         harness_source_clean=True,
         harness_fileset_hash="b" * 64,
-        collector_schema_version="shadow-collector-v2",
+        collector_schema_version="shadow-collector-v3",
         environment_identity_hash=snapshot_hash(environment),
         environment_snapshot=environment,
     )

@@ -62,7 +62,7 @@ def _provenance(*, suffix: str = "a", clean: bool = True) -> CampaignProvenance:
         harness_commit_sha=suffix * 40,
         harness_source_clean=clean,
         harness_fileset_hash=digest,
-        collector_schema_version="shadow-collector-v2",
+        collector_schema_version="shadow-collector-v3",
         environment_identity_hash=snapshot_hash(environment),
         environment_snapshot=environment,
     )

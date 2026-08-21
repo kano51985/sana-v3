@@ -414,9 +414,8 @@ class SqlShadowSnapshotReader:
                     )
                 ).all()
             )
-            fetches = tuple(
-                _source_fetch(item)
-                for item in (
+            fetch_records = tuple(
+                (
                     await session.scalars(
                         select(FetchArtifact).where(
                             FetchArtifact.tenant_id == lease.tenant_id,
@@ -426,6 +425,8 @@ class SqlShadowSnapshotReader:
                     )
                 ).all()
             )
+            fetches = tuple(_source_fetch(item) for item in fetch_records)
+            fetch_record_by_id = {item.id: item for item in fetch_records}
             cached_fetches = tuple(
                 item for item in fetches if item.fetcher == "document-cache"
             )
@@ -439,7 +440,16 @@ class SqlShadowSnapshotReader:
                             FetchArtifact.id,
                             FetchArtifact.run_id,
                             FetchArtifact.fetched_at,
+                            FetchArtifact.url_hash,
+                            FetchArtifact.content_hash,
+                            FetchArtifact.media_type,
                             DocumentVersionFetch.document_version_id,
+                            DocumentVersion.content_hash.label(
+                                "document_content_hash"
+                            ),
+                            DocumentVersion.media_type.label(
+                                "document_media_type"
+                            ),
                         )
                         .join(
                             DocumentVersionFetch,
@@ -454,6 +464,17 @@ class SqlShadowSnapshotReader:
                             & (
                                 DocumentVersionFetch.fetch_artifact_id
                                 == FetchArtifact.id
+                            ),
+                        )
+                        .join(
+                            DocumentVersion,
+                            (
+                                DocumentVersion.tenant_id
+                                == DocumentVersionFetch.tenant_id
+                            )
+                            & (
+                                DocumentVersion.id
+                                == DocumentVersionFetch.document_version_id
                             ),
                         )
                         .where(
@@ -471,6 +492,11 @@ class SqlShadowSnapshotReader:
                         row.run_id,
                         row.fetched_at,
                         row.document_version_id,
+                        row.url_hash,
+                        row.content_hash,
+                        row.media_type,
+                        row.document_content_hash,
+                        row.document_media_type,
                     )
                     for row in source_lineage_rows
                 }
@@ -480,6 +506,11 @@ class SqlShadowSnapshotReader:
                         item.source_run_id,
                         item.source_fetched_at,
                         item.source_document_version_id,
+                        fetch_record_by_id[item.id].url_hash,
+                        fetch_record_by_id[item.id].content_hash,
+                        fetch_record_by_id[item.id].media_type,
+                        fetch_record_by_id[item.id].content_hash,
+                        fetch_record_by_id[item.id].media_type,
                     )
                     not in valid_source_lineage
                     for item in cached_fetches

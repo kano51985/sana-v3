@@ -675,6 +675,132 @@ async def test_collector_is_fenced_atomic_idempotent_and_rls_scoped() -> None:
         snapshot = await reader.read(lease)
         assert len(snapshot.fetches) == 1
         assert snapshot.fetches[0].decision == "LIVE"
+
+        source_fetch_artifact_id = uuid4()
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("SELECT set_config('app.tenant_id', :tenant, true)"),
+                {"tenant": str(tenant_id)},
+            )
+            current_fetch = (
+                await connection.execute(
+                    select(
+                        FetchArtifact.id,
+                        FetchArtifact.url,
+                        FetchArtifact.url_hash,
+                        FetchArtifact.content_hash,
+                        FetchArtifact.media_type,
+                        FetchArtifact.response_bytes,
+                        DocumentVersionFetch.document_version_id,
+                    )
+                    .join(
+                        DocumentVersionFetch,
+                        (
+                            DocumentVersionFetch.tenant_id
+                            == FetchArtifact.tenant_id
+                        )
+                        & (
+                            DocumentVersionFetch.run_id
+                            == FetchArtifact.run_id
+                        )
+                        & (
+                            DocumentVersionFetch.fetch_artifact_id
+                            == FetchArtifact.id
+                        ),
+                    )
+                    .where(
+                        FetchArtifact.tenant_id == tenant_id,
+                        FetchArtifact.run_id == lease.search_run_id,
+                    )
+                )
+            ).one()
+            source_fetched_at = NOW - timedelta(hours=1)
+            await connection.execute(
+                insert(FetchArtifact).values(
+                    id=source_fetch_artifact_id,
+                    tenant_id=tenant_id,
+                    run_id=lease.search_run_id,
+                    search_hit_id=None,
+                    url=current_fetch.url,
+                    url_hash=current_fetch.url_hash,
+                    attempt_no=2,
+                    fetcher="http",
+                    status="SUCCEEDED",
+                    http_status=200,
+                    media_type=current_fetch.media_type,
+                    content_hash=current_fetch.content_hash,
+                    storage_uri="artifact://source-fetch",
+                    response_bytes=current_fetch.response_bytes,
+                    fetched_at=source_fetched_at,
+                    fetch_metadata={"redirects": []},
+                )
+            )
+            await connection.execute(
+                insert(DocumentVersionFetch).values(
+                    id=uuid4(),
+                    tenant_id=tenant_id,
+                    run_id=lease.search_run_id,
+                    document_version_id=current_fetch.document_version_id,
+                    fetch_artifact_id=source_fetch_artifact_id,
+                    created_at=source_fetched_at,
+                )
+            )
+            await connection.execute(
+                update(FetchArtifact)
+                .where(FetchArtifact.id == current_fetch.id)
+                .values(
+                    fetcher="document-cache",
+                    fetched_at=source_fetched_at,
+                    fetch_metadata={
+                        "redirects": [],
+                        "policy_version": "document-reuse-v1",
+                        "strictest_freshness": "STABLE",
+                        "source_fetch_artifact_id": str(
+                            source_fetch_artifact_id
+                        ),
+                        "source_run_id": str(lease.search_run_id),
+                        "source_document_version_id": str(
+                            current_fetch.document_version_id
+                        ),
+                        "source_fetched_at": source_fetched_at.isoformat(),
+                        "reused_at": NOW.isoformat(),
+                        "reuse_age_seconds": 3600,
+                        "decision": "CACHE_FRESH",
+                    },
+                )
+            )
+
+        snapshot = await reader.read(lease)
+        assert {item.decision for item in snapshot.fetches} == {
+            "LIVE",
+            "CACHE_FRESH",
+        }
+
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("SELECT set_config('app.tenant_id', :tenant, true)"),
+                {"tenant": str(tenant_id)},
+            )
+            await connection.execute(
+                update(FetchArtifact)
+                .where(FetchArtifact.id == source_fetch_artifact_id)
+                .values(content_hash="6" * 64)
+            )
+        with pytest.raises(InvariantViolation) as invalid_cache_lineage:
+            await reader.read(lease)
+        assert invalid_cache_lineage.value.code == "source_fetch_lineage_invalid"
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("SELECT set_config('app.tenant_id', :tenant, true)"),
+                {"tenant": str(tenant_id)},
+            )
+            await connection.execute(
+                update(FetchArtifact)
+                .where(FetchArtifact.id == source_fetch_artifact_id)
+                .values(content_hash=current_fetch.content_hash)
+            )
+
+        snapshot = await reader.read(lease)
         case = next(item for item in manifest.cases if item.id == lease.case_id)
         outcome = collect_run_snapshot(
             snapshot,

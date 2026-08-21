@@ -123,7 +123,7 @@ async def test_review_projection_and_submission_are_exact_owner_only_and_immutab
         harness_commit_sha="b" * 40,
         harness_source_clean=True,
         harness_fileset_hash="b" * 64,
-        collector_schema_version="shadow-collector-v2",
+        collector_schema_version="shadow-collector-v3",
         environment_identity_hash=snapshot_hash(environment),
         environment_snapshot=environment,
     )
@@ -396,7 +396,7 @@ async def test_review_projection_and_submission_are_exact_owner_only_and_immutab
                     source_terminal_at=NOW + timedelta(seconds=2),
                     source_snapshot_digest="3" * 64,
                     collected_at=NOW + timedelta(seconds=3),
-                    collector_schema_version="shadow-collector-v2",
+                    collector_schema_version="shadow-collector-v3",
                     version=ShadowRunResultRecord.version + 1,
                     updated_at=NOW,
                 )
@@ -579,7 +579,7 @@ async def test_review_projection_and_submission_are_exact_owner_only_and_immutab
                         source_terminal_at=NOW + timedelta(seconds=2),
                         source_snapshot_digest=str(index) * 64,
                         collected_at=NOW + timedelta(seconds=3),
-                        collector_schema_version="shadow-collector-v2",
+                        collector_schema_version="shadow-collector-v3",
                         version=ShadowRunResultRecord.version + 1,
                         updated_at=NOW,
                     )
