@@ -1013,7 +1013,22 @@ async def test_registry_adapter_accepts_reviewed_fact_keys_not_just_description_
 
 
 @pytest.mark.asyncio
-async def test_dns_csv_rows_are_a_reviewed_deterministic_source() -> None:
+@pytest.mark.parametrize(
+    "url",
+    (
+        (
+            "https://www.iana.org/assignments/service-names-port-numbers/"
+            "service-names-port-numbers.csv"
+        ),
+        (
+            "https://www.iana.org/assignments/"
+            "service-names-port-numbers?search=53"
+        ),
+    ),
+)
+async def test_dns_registry_rows_are_a_reviewed_deterministic_source(
+    url: str,
+) -> None:
     text = (
         "domain,53,tcp,Domain Name Server,,,,,,,,\n"
         "domain,53,udp,Domain Name Server,,,,,,,,"
@@ -1027,10 +1042,7 @@ async def test_dns_csv_rows_are_a_reviewed_deterministic_source() -> None:
     item = reviewed_text_candidate(
         text,
         fact,
-        (
-            "https://www.iana.org/assignments/service-names-port-numbers/"
-            "service-names-port-numbers.csv"
-        ),
+        url,
     )
     item = replace(
         item,

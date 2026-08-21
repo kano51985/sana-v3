@@ -592,6 +592,10 @@ class ModelEvidenceVerifier:
         ).casefold()
         reviewed_sources = {
             (
+                "https://www.iana.org/assignments/"
+                "service-names-port-numbers"
+            ),
+            (
                 "https://www.iana.org/assignments/service-names-port-numbers/"
                 "service-names-port-numbers.xhtml"
             ),
